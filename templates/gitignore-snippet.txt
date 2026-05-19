@@ -1,0 +1,3 @@
+# Codex-Claude handoff protocol
+# Keep this local if it may contain project-specific private context.
+AI_HANDOFF.md
