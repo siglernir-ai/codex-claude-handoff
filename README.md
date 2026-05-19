@@ -22,9 +22,11 @@ templates/
 ```
 
 ### `AGENTS.md`
+
 Instructions for Codex.
 
 Use it for:
+
 - project context
 - architecture rules
 - Codex role
@@ -32,18 +34,22 @@ Use it for:
 - coordination flow
 
 ### `CLAUDE.md`
+
 Instructions for Claude Code.
 
 Use it for:
+
 - implementation behavior
 - scope discipline
 - required handoff updates
 - verification reporting
 
 ### `AI_HANDOFF.md`
+
 Dynamic handoff file between Codex and Claude Code.
 
 Use it for:
+
 - current state
 - who acts next
 - current task
@@ -52,31 +58,123 @@ Use it for:
 - risks and next step
 
 ### `gitignore-snippet.txt`
+
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
 
-## Recommended Manual Install
+## Manual Install - Step by Step
 
-From the target project root:
+Use these steps inside any project where you want Codex and Claude Code to coordinate through this protocol.
 
-```bash
-cp templates/AGENTS.md ./AGENTS.md
-cp templates/CLAUDE.md ./CLAUDE.md
-cp templates/AI_HANDOFF.md ./AI_HANDOFF.md
-cat templates/gitignore-snippet.txt >> .gitignore
+### 1. Copy the template files into your project root
+
+From this repository, copy:
+
+```text
+templates/AGENTS.md
+templates/CLAUDE.md
+templates/AI_HANDOFF.md
+templates/gitignore-snippet.txt
 ```
 
-Then edit:
+Into the root folder of your target project.
+
+Your target project should then look like this:
+
+```text
+your-project/
+  AGENTS.md
+  CLAUDE.md
+  AI_HANDOFF.md
+  package.json
+  app/
+  src/
+  ...
+```
+
+The exact project files may differ. The important point is that `AGENTS.md`, `CLAUDE.md`, and `AI_HANDOFF.md` sit at the project root.
+
+### 2. Add the handoff file to `.gitignore`
+
+Open your target project `.gitignore` file and add:
+
+```gitignore
+AI_HANDOFF.md
+```
+
+This keeps local task context out of Git.
+
+If your project does not have a `.gitignore` file yet, create one.
+
+### 3. Customize `AGENTS.md`
+
+Open:
 
 ```text
 AGENTS.md
 ```
 
-and replace the placeholder sections:
+Replace the placeholder sections with the real project context:
 
 - Project Overview
 - Tech Stack
 - Architecture Rules
 - Do Not Touch
+
+This file tells Codex how to understand and review the project.
+
+### 4. Review `CLAUDE.md`
+
+Open:
+
+```text
+CLAUDE.md
+```
+
+Usually you do not need to change much here.
+
+This file tells Claude Code how to behave:
+
+- implement only approved tasks
+- keep changes small
+- update `AI_HANDOFF.md` after implementation
+- report changed files and verification results
+
+### 5. Start the first handoff
+
+Open:
+
+```text
+AI_HANDOFF.md
+```
+
+Set the first task manually, or ask Codex to prepare it.
+
+Typical starting state:
+
+```md
+State: NEEDS_ANALYSIS
+Waiting For: Codex
+```
+
+After Codex prepares a Claude Code task, it should set:
+
+```md
+State: READY_FOR_IMPLEMENTATION
+Waiting For: Claude Code
+```
+
+### 6. Commit the stable protocol files
+
+Commit only the stable files:
+
+```bash
+git status
+git add AGENTS.md CLAUDE.md .gitignore
+git commit -m "Add Codex-Claude handoff protocol"
+git push
+```
+
+Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 
 ## Basic Workflow
 
