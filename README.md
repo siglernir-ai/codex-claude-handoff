@@ -98,12 +98,29 @@ The exact project files may differ. The important point is that `AGENTS.md`, `CL
 Open your target project `.gitignore` file and add:
 
 ```gitignore
+# Local AI handoff context
 AI_HANDOFF.md
 ```
 
 This keeps local task context out of Git.
 
 If your project does not have a `.gitignore` file yet, create one.
+
+On Windows PowerShell, you can create it safely with:
+
+```powershell
+Set-Content -Path .gitignore -Value "# Local AI handoff context`nAI_HANDOFF.md" -Encoding utf8
+```
+
+Then verify that `AI_HANDOFF.md` is ignored:
+
+```bash
+git status
+```
+
+Expected result: `AI_HANDOFF.md` should not appear in the list of files to commit.
+
+
 
 ### 3. Customize `AGENTS.md`
 
