@@ -60,6 +60,50 @@ Use it for:
 ### `gitignore-snippet.txt`
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+## Tested Workflow
+This protocol was tested in two stages.
+
+### Manual install test
+
+The template files were manually installed into a fresh test project.
+
+Verified behavior:
+
+- `AGENTS.md` was copied into the project root.
+- `CLAUDE.md` was copied into the project root.
+- `AI_HANDOFF.md` was copied into the project root.
+- `.gitignore` was configured to ignore `AI_HANDOFF.md`.
+- Git tracked only stable files.
+- `AI_HANDOFF.md` remained local.
+
+### End-to-end handoff test
+
+A fresh test project was used to validate the workflow.
+
+Verified behavior:
+
+- A task was written into `AI_HANDOFF.md`.
+- Claude Code implemented only the requested scope.
+- Claude Code updated `AI_HANDOFF.md`.
+- Codex reviewed only the file listed under `Changed Files`.
+- Codex requested a correction when the output was incomplete.
+- The correction was applied.
+- Codex approved the final result.
+- Only the intended changed file was committed.
+
+### Codex Skill test
+
+The Codex Skill was tested in a project with an active `AI_HANDOFF.md`.
+
+Verified behavior:
+
+- Codex read `AI_HANDOFF.md` first.
+- Codex identified `State`.
+- Codex identified `Waiting For`.
+- Codex recognized when it was Codex's turn.
+- Codex stated that it should review only files listed under `Changed Files`.
+- Codex did not modify files during the read-only test.
+
 ## Codex Skill
 
 This repository also includes a Codex Skill for the handoff protocol.
