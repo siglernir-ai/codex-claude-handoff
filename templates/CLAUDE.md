@@ -1,4 +1,4 @@
-# CLAUDE.md — Claude Code Instructions
+# CLAUDE.md - Claude Code Instructions
 
 > `AGENTS.md` may be used only for stable project context such as stack, architecture rules, and forbidden files. Do not treat `AGENTS.md` as Claude behavior instructions.
 

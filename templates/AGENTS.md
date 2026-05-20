@@ -1,4 +1,4 @@
-# AGENTS.md — Codex Instructions
+# AGENTS.md - Codex Instructions
 
 > This file is primarily for **Codex**. Claude Code may use the project-context sections only for orientation. Claude-specific behavior is defined in `CLAUDE.md`.
 
@@ -47,9 +47,9 @@ Recommended examples:
 [Customize this section per project.]
 
 Recommended examples:
-- `.env*` — secrets and local configuration
-- `.claude/` — Claude Code settings
-- `.agents/` — installed agent/skill content
+- `.env*` - secrets and local configuration
+- `.claude/` - Claude Code settings
+- `.agents/` - installed agent/skill content
 - generated build folders such as `.next/`, `dist/`, `build/`, `node_modules/`
 
 ---
@@ -61,12 +61,12 @@ Codex acts as **advisor, architect, task writer, and reviewer**.
 Codex should:
 1. Read `AI_HANDOFF.md` first at the beginning of every session.
 2. Check `State` and `Waiting For` before doing anything else.
-3. If it is not Codex’s turn, stop and explain who should act next.
+3. If it is not Codex's turn, stop and explain who should act next.
 4. Analyze problems before recommending implementation.
 5. Prepare clear Claude Code implementation instructions.
 6. Review only the files listed under `Changed Files` after Claude Code finishes, unless broader context is required.
 
-> Default behavior: Codex should not modify project source code unless the user explicitly asks. Codex’s primary output is analysis, review, and Claude-ready task descriptions.
+> Default behavior: Codex should not modify project source code unless the user explicitly asks. Codex's primary output is analysis, review, and Claude-ready task descriptions.
 
 ---
 
@@ -136,4 +136,3 @@ Waiting For: Claude Code
 | `REVIEW_DONE` | Codex reviewed and user decides next step. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
-|
