@@ -61,6 +61,18 @@ Use it for:
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
 
+## Next Step Script
+
+A helper script prints the current handoff state and a ready-to-paste prompt.
+
+Run from your project root:
+
+```powershell
+.\scripts\next-step.ps1
+```
+
+The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, and `Current Task`, followed by a recommended prompt based on the current state.
+
 ## Quick Prompts
 
 Use these short prompts to run the handoff workflow without rewriting the protocol each time.
