@@ -60,6 +60,85 @@ Use it for:
 ### `gitignore-snippet.txt`
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+## Install Script
+
+A PowerShell install script is available for Windows users.
+
+Use it when you want to install the handoff protocol files into another project without copying them manually.
+
+### Run the installer
+
+From this repository root:
+
+```powershell
+.\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
+```
+
+Example:
+
+```powershell
+.\scripts\install.ps1 -TargetPath "C:\Users\user\Desktop\projects\my-project"
+```
+
+If PowerShell blocks script execution, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
+```
+
+### What the installer does
+
+The installer copies these files into the target project:
+
+```text
+AGENTS.md
+CLAUDE.md
+AI_HANDOFF.md
+```
+
+It also creates or updates:
+
+```text
+.gitignore
+```
+
+and ensures this rule exists:
+
+```gitignore
+AI_HANDOFF.md
+```
+
+### Safety behavior
+
+The installer does not overwrite existing protocol files.
+
+If any of these files already exist in the target project, they are skipped:
+
+```text
+AGENTS.md
+CLAUDE.md
+AI_HANDOFF.md
+```
+
+This prevents accidental loss of project-specific instructions.
+
+### Verify after install
+
+In the target project, run:
+
+```powershell
+git status
+```
+
+Expected result:
+
+```text
+AGENTS.md
+CLAUDE.md
+.gitignore
+```
+
+`AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git.
 
 ## Manual Install - Step by Step
 
