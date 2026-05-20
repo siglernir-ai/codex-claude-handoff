@@ -20,6 +20,7 @@ templates/
   AI_HANDOFF.md
   gitignore-snippet.txt
 ```
+
 ### `AGENTS.md`
 
 Instructions for Codex.
@@ -59,6 +60,51 @@ Use it for:
 ### `gitignore-snippet.txt`
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+
+## Quick Prompts
+
+Use these short prompts to run the handoff workflow without rewriting the protocol each time.
+
+### Start a Codex review
+
+```text
+Use the codex-claude-handoff skill.
+
+Read AI_HANDOFF.md and review the files listed under Changed Files.
+Only review the requested scope.
+Update AI_HANDOFF.md with your review result.
+```
+
+### Ask Codex to prepare a Claude Code task
+
+```text
+Use the codex-claude-handoff skill.
+
+Prepare a focused Claude Code implementation task in AI_HANDOFF.md.
+Set State: READY_FOR_IMPLEMENTATION.
+Set Waiting For: Claude Code.
+Keep the scope limited to the requested files.
+```
+
+### Start a Claude Code implementation session
+
+```text
+Read CLAUDE.md and AI_HANDOFF.md.
+
+Implement only the current task in AI_HANDOFF.md.
+Keep changes limited to the requested scope.
+After finishing, update AI_HANDOFF.md with changed files, verification, risks, and next step.
+```
+
+### Ask Claude Code to update AI_HANDOFF.md after implementation
+
+```text
+Update AI_HANDOFF.md for the work you just completed.
+
+Set State: READY_FOR_REVIEW.
+Set Waiting For: Codex.
+List changed files, verification results, open issues, risks, and the next recommended step.
+```
 
 ## Tested Workflow
 
@@ -172,6 +218,7 @@ From this repository root:
 ```powershell
 .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
 ```
+
 Example:
 
 ```powershell
