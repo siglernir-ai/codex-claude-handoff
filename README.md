@@ -60,6 +60,46 @@ Use it for:
 ### `gitignore-snippet.txt`
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+## Codex Skill
+
+This repository also includes a Codex Skill for the handoff protocol.
+
+Skill path:
+
+```text
+.agents/skills/codex-claude-handoff/SKILL.md
+```
+
+The skill teaches Codex how to operate its side of the protocol.
+
+It defines the default role split:
+
+- Codex acts as advisor, architect, task writer, and reviewer.
+- Claude Code acts as the implementation agent.
+- The user remains the approval point.
+
+When active, Codex should:
+
+- Read `AI_HANDOFF.md` first.
+- Check `State`.
+- Check `Waiting For`.
+- Avoid acting if it is not Codex's turn.
+- Prepare focused tasks for Claude Code.
+- Review only files listed under `Changed Files` by default.
+- Update `AI_HANDOFF.md` when analysis or review is complete.
+
+The skill does not replace the template files.
+
+The project still needs:
+
+```text
+AGENTS.md
+CLAUDE.md
+AI_HANDOFF.md
+```
+
+Use the install script or manual install steps to place those files into the target project.
+
 ## Install Script
 
 A PowerShell install script is available for Windows users.
