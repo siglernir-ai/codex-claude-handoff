@@ -118,6 +118,22 @@ Set Waiting For: Codex.
 List changed files, verification results, open issues, risks, and the next recommended step.
 ```
 
+## Short Workflow Example
+
+A typical handoff cycle looks like this:
+
+1. **Codex prepares the task.** Codex reads `AI_HANDOFF.md`, analyzes the request, and writes a focused implementation task. It sets `State: READY_FOR_IMPLEMENTATION` and `Waiting For: Claude Code`.
+
+2. **Claude Code implements.** Claude Code reads `CLAUDE.md` and `AI_HANDOFF.md`, implements only the requested scope, and makes no unrelated changes.
+
+3. **Claude Code updates `AI_HANDOFF.md`.** After finishing, Claude Code records the changed files, verification results, and risks, then sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+
+4. **Codex reviews.** Codex reads `AI_HANDOFF.md` and reviews only the files listed under `Changed Files`. It sets `State: REVIEW_DONE` and `Waiting For: User`.
+
+5. **User approves, commits, and pushes.** The user reviews the result, commits the approved files, and pushes. `AI_HANDOFF.md` stays local and is not committed.
+
+`AI_HANDOFF.md` is local handoff state. Keep it in `.gitignore` and never commit it.
+
 ## Tested Workflow
 
 This protocol was tested in multiple stages.
