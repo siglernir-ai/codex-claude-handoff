@@ -20,7 +20,6 @@ templates/
   AI_HANDOFF.md
   gitignore-snippet.txt
 ```
-
 ### `AGENTS.md`
 
 Instructions for Codex.
@@ -60,8 +59,10 @@ Use it for:
 ### `gitignore-snippet.txt`
 
 Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+
 ## Tested Workflow
-This protocol was tested in two stages.
+
+This protocol was tested in multiple stages.
 
 ### Manual install test
 
@@ -104,6 +105,21 @@ Verified behavior:
 - Codex stated that it should review only files listed under `Changed Files`.
 - Codex did not modify files during the read-only test.
 
+### Package-level install test
+
+The full package was tested in a fresh project using `scripts/install.ps1`.
+
+Verified behavior:
+
+- The installer copied `AGENTS.md`, `CLAUDE.md`, and `AI_HANDOFF.md`.
+- The installer created `.gitignore`.
+- `AI_HANDOFF.md` was correctly ignored by Git.
+- Claude Code read the installed handoff files and created `PACKAGE_TEST.md`.
+- Codex reviewed the result and requested a correction.
+- Claude Code corrected the missing title.
+- Codex approved the final result.
+- Only the stable protocol files and the intended test output were committed.
+
 ## Codex Skill
 
 This repository also includes a Codex Skill for the handoff protocol.
@@ -141,7 +157,6 @@ AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
 ```
-
 Use the install script or manual install steps to place those files into the target project.
 
 ## Install Script
@@ -157,7 +172,6 @@ From this repository root:
 ```powershell
 .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
 ```
-
 Example:
 
 ```powershell
@@ -280,10 +294,7 @@ Then verify that `AI_HANDOFF.md` is ignored:
 ```bash
 git status
 ```
-
 Expected result: `AI_HANDOFF.md` should not appear in the list of files to commit.
-
-
 
 ### 3. Customize `AGENTS.md`
 
@@ -437,12 +448,16 @@ Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 
 ## Current Scope
 
-This repository intentionally starts simple:
+This repository currently includes:
 
 1. reusable templates
 2. manual install instructions
-3. optional install script later
-4. Codex skill later
-5. Claude Code skill later
+3. PowerShell install script
+4. Codex Skill
+5. tested manual, end-to-end, skill, and package-level workflows
 
-Avoid jumping directly to automation before the manual workflow is stable.
+Next possible steps:
+
+1. evaluate whether Claude Code needs a separate skill or whether `CLAUDE.md` is sufficient
+2. improve cross-platform installation
+3. add release/versioning once the workflow stabilizes
