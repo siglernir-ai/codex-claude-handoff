@@ -124,15 +124,15 @@ A typical handoff cycle looks like this:
 
 1. **Codex prepares the task.** Codex reads `AI_HANDOFF.md`, analyzes the request, and writes a focused implementation task. It sets `State: READY_FOR_IMPLEMENTATION` and `Waiting For: Claude Code`.
 
-2. **Claude Code implements.** Claude Code reads `CLAUDE.md` and `AI_HANDOFF.md`, implements only the requested scope, and makes no unrelated changes.
+2. **Claude Code implements the scoped task.** Claude Code reads `CLAUDE.md` and `AI_HANDOFF.md`, implements only the requested scope, and makes no unrelated changes.
 
-3. **Claude Code updates `AI_HANDOFF.md`.** After finishing, Claude Code records the changed files, verification results, and risks, then sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+3. **Claude Code updates `AI_HANDOFF.md` to `READY_FOR_REVIEW`.** After finishing, Claude Code records changed files, verification results, and risks, then sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
 
-4. **Codex reviews.** Codex reads `AI_HANDOFF.md` and reviews only the files listed under `Changed Files`. It sets `State: REVIEW_DONE` and `Waiting For: User`.
+4. **Codex reviews only `Changed Files`.** Codex reads `AI_HANDOFF.md` and reviews only the files listed under the `Changed Files` section. It sets `State: REVIEW_DONE` and `Waiting For: User`.
 
-5. **User approves, commits, and pushes.** The user reviews the result, commits the approved files, and pushes. `AI_HANDOFF.md` stays local and is not committed.
+5. **User commits only the real source changes.** The user reviews the result and commits the approved source files. `AI_HANDOFF.md` is not committed.
 
-`AI_HANDOFF.md` is local handoff state. Keep it in `.gitignore` and never commit it.
+`AI_HANDOFF.md` is a working coordination file — it tracks current task state between tools and sessions. It is not a source file and should stay out of version control. A `.gitignore` rule for it is included in `gitignore-snippet.txt` and applied automatically by the install script. The user remains the final approval point for all commits and pushes.
 
 ## Tested Workflow
 
