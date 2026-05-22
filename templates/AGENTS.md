@@ -125,11 +125,108 @@ Waiting For: Claude Code
 
 ---
 
+## Investigation Gate
+
+When the current task requires information that is not yet available:
+
+1. Codex sets `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`.
+2. Claude Code gathers evidence only — no source-file edits.
+3. Claude Code reports findings, unknowns, risks, and recommended next step in `AI_HANDOFF.md`.
+4. Claude Code sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+
+---
+
+## Planning Gate
+
+Risky tasks require a written plan before implementation.
+
+Risky-task examples:
+- Database migrations
+- RLS, Auth, or security changes
+- Deployment or infrastructure changes
+- Architecture changes or large refactors
+- Production AI routing or model-routing changes
+
+When a task is risky:
+
+1. Codex sets `State: PLAN_REQUIRED` and `Waiting For: Claude Code`.
+2. Claude Code writes a plan only — no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence.
+3. Claude Code sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
+4. Codex reviews the plan. If approved → `READY_FOR_IMPLEMENTATION`. If changes needed → `PLAN_REQUIRED`.
+5. Claude Code implements only after plan approval.
+
+---
+
+## Verification Gate
+
+After Claude Code implementation, Codex should verify using safe read-only commands where applicable:
+
+```bash
+git status
+git diff
+git diff -- <changed-file>
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd test
+```
+
+Codex must:
+- Compare Claude's reported `Changed Files` against actual `git diff` output.
+- Detect scope creep — edits to files not listed under `Changed Files`.
+- Detect unlisted changes — files modified but not reported.
+- Confirm verification results match Claude's claims before approving.
+
+---
+
+## Unsafe Command Rules
+
+Codex and Claude Code must not run the following without explicit user approval:
+
+- Deploy commands
+- Live database migrations
+- Database reset or destructive data operations
+- File deletion or permanent removal
+- Production configuration changes
+- Secret or environment variable changes
+
+If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
+
+---
+
+## Skill Fallback
+
+If the `codex-claude-handoff` skill is unavailable, Codex should:
+
+1. Read `.agents/skills/codex-claude-handoff/SKILL.md` if it exists in the project.
+2. Follow its contents as local protocol instructions.
+
+---
+
+## Claude Skill Awareness
+
+Codex may ask Claude whether relevant project-local or global Claude skills exist when:
+
+- Context is missing for a risky or unfamiliar task.
+- The user reports a skill change.
+- A memory or context skill might help recover prior decisions, constraints, or risks.
+
+When asked, Claude should:
+- Report only relevant skills.
+- Use memory/context skills to recover task-relevant prior decisions if available.
+- Not expose unrelated private memory.
+
+Codex should not ask for skill status every session — only when it adds value.
+
+---
+
 ## Allowed States
 
 | State | Meaning |
 |---|---|
 | `NEEDS_ANALYSIS` | Codex should analyze before Claude Code can start. |
+| `NEEDS_INVESTIGATION` | Investigation needed; Claude Code gathers evidence only, no source edits. |
+| `PLAN_REQUIRED` | Risky task; Claude Code writes a plan only before implementation. |
+| `PLAN_READY_FOR_REVIEW` | Plan written; Codex reviews before approving implementation. |
 | `READY_FOR_IMPLEMENTATION` | Task is defined and Claude Code should implement. |
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |

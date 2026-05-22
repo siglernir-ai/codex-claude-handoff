@@ -134,6 +134,61 @@ A typical handoff cycle looks like this:
 
 `AI_HANDOFF.md` is a working coordination file — it tracks current task state between tools and sessions. It is not a source file and should stay out of version control. A `.gitignore` rule for it is included in `gitignore-snippet.txt` and applied automatically by the install script. The user remains the final approval point for all commits and pushes.
 
+## Protocol Gates
+
+Three optional gates can be inserted before or after implementation depending on task risk.
+
+### Investigation Gate
+
+Use when information is missing before a task can be scoped.
+
+Codex sets `State: NEEDS_INVESTIGATION`. Claude Code gathers evidence only — no source-file edits. Claude Code reports findings and sets `State: READY_FOR_REVIEW`.
+
+### Planning Gate
+
+Use for risky tasks: DB migrations, RLS/Auth, security, deployment, architecture changes, large refactors, production AI routing.
+
+Codex sets `State: PLAN_REQUIRED`. Claude Code writes a plan only — no source-file edits. Claude Code sets `State: PLAN_READY_FOR_REVIEW`. Codex reviews and either approves (`READY_FOR_IMPLEMENTATION`) or requests changes (`PLAN_REQUIRED`).
+
+### Verification Gate
+
+After every Claude Code implementation, Codex should verify using safe read-only commands (`git status`, `git diff`, typecheck, lint, tests where available). Codex must compare actual changes against `Changed Files` and detect scope creep or unlisted edits before approving.
+
+### Unsafe Command Rules
+
+Codex and Claude Code must not run the following without explicit user approval:
+
+- Deploy commands
+- Live database migrations
+- Database reset or destructive data operations
+- File deletion or permanent removal
+- Production configuration changes
+- Secret or environment variable changes
+
+If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
+
+### Skill Fallback
+
+If the `codex-claude-handoff` skill is unavailable, Codex should read `.agents/skills/codex-claude-handoff/SKILL.md` and follow it as local protocol instructions.
+
+### Claude Skill Awareness
+
+Codex may ask Claude whether relevant project-local or global Claude skills exist when context is missing for a risky task, the user reports a skill change, or a memory/context skill might help recover prior decisions, constraints, or risks.
+
+When asked, Claude should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. Claude must not expose unrelated private memory. Codex should not ask every session — only when it adds value.
+
+### v0.3.0 Out of Scope
+
+The following are explicitly out of scope for this protocol version:
+
+- Full automation between Codex and Claude Code
+- File watcher or event-driven orchestration
+- Orchestration CLI
+- Full shared memory layer
+- `AI_SKILLS.md` registry
+- Automatic model switching
+- Token-budget system
+
 ## Tested Workflow
 
 This protocol was tested in multiple stages.
@@ -514,6 +569,9 @@ Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 | State | Meaning |
 |---|---|
 | `NEEDS_ANALYSIS` | Codex should analyze before Claude Code can start. |
+| `NEEDS_INVESTIGATION` | Investigation needed; Claude Code gathers evidence only, no source edits. |
+| `PLAN_REQUIRED` | Risky task; Claude Code writes a plan only before implementation. |
+| `PLAN_READY_FOR_REVIEW` | Plan written; Codex reviews before approving implementation. |
 | `READY_FOR_IMPLEMENTATION` | Task is defined and Claude Code should implement. |
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
@@ -530,6 +588,7 @@ This repository currently includes:
 3. PowerShell install script
 4. Codex Skill
 5. tested manual, end-to-end, skill, and package-level workflows
+6. protocol gates: Investigation Gate, Planning Gate, Verification Gate, unsafe command rules, skill fallback, Claude skill awareness
 
 Next possible steps:
 

@@ -63,6 +63,35 @@ elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code"
     Write-Host "Keep changes limited to the requested scope."
     Write-Host "After finishing, update AI_HANDOFF.md with changed files, verification, risks, and next step."
 }
+elseif ($State -eq "NEEDS_INVESTIGATION" -and $WaitingFor -eq "Claude Code") {
+    Write-Host "=== Recommended Prompt for Claude Code ==="
+    Write-Host ""
+    Write-Host "Read CLAUDE.md and AI_HANDOFF.md."
+    Write-Host ""
+    Write-Host "Run an investigation only — do not modify any source files."
+    Write-Host "Gather evidence from existing files, logs, config, and tests."
+    Write-Host "Report findings, unknowns, risks, and recommended next step in AI_HANDOFF.md."
+    Write-Host "Set State: READY_FOR_REVIEW and Waiting For: Codex when done."
+}
+elseif ($State -eq "PLAN_REQUIRED" -and $WaitingFor -eq "Claude Code") {
+    Write-Host "=== Recommended Prompt for Claude Code ==="
+    Write-Host ""
+    Write-Host "Read CLAUDE.md and AI_HANDOFF.md."
+    Write-Host ""
+    Write-Host "Write a plan only — do not modify any source files."
+    Write-Host "Include: what changes and why, files affected, risks and mitigations, implementation sequence."
+    Write-Host "Update AI_HANDOFF.md with the plan."
+    Write-Host "Set State: PLAN_READY_FOR_REVIEW and Waiting For: Codex when done."
+}
+elseif ($State -eq "PLAN_READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
+    Write-Host "=== Recommended Prompt for Codex ==="
+    Write-Host ""
+    Write-Host "Use the codex-claude-handoff skill."
+    Write-Host ""
+    Write-Host "Read AI_HANDOFF.md and review the plan written by Claude Code."
+    Write-Host "If approved: set State: READY_FOR_IMPLEMENTATION and Waiting For: Claude Code."
+    Write-Host "If changes needed: set State: PLAN_REQUIRED and describe what to fix in Next Recommended Step."
+}
 elseif ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
     Write-Host "=== Next Step: User Action Required ==="
     Write-Host ""

@@ -39,6 +39,29 @@ Before significant work:
 - Do not edit `AI_HANDOFF.md` until the implementation result is clear.
 - Do not make speculative improvements.
 - Do not modify secrets or local environment files.
+- Do not run deploys, live migrations, database resets or destructive data operations, file deletions, production configuration changes, or secret/env changes without explicit user approval. If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
+
+---
+
+## Investigation Mode
+
+When `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`:
+
+- Do **not** modify any project or source files.
+- Gather evidence from existing files, logs, config, and tests.
+- Report findings, unknowns, risks, and a recommended next step in `AI_HANDOFF.md`.
+- Set `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+
+---
+
+## Planning Mode
+
+When `State: PLAN_REQUIRED` and `Waiting For: Claude Code`:
+
+- Do **not** modify any project or source files.
+- Write a plan only. Include: what will change and why, files affected, risks and mitigations, step-by-step implementation sequence.
+- Set `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
+- Implement only after the plan is approved and `State` returns to `READY_FOR_IMPLEMENTATION`.
 
 ---
 
@@ -100,6 +123,9 @@ and explain the blocker under `Open Issues`.
 | State | Meaning |
 |---|---|
 | `NEEDS_ANALYSIS` | Codex should analyze before Claude Code can start. |
+| `NEEDS_INVESTIGATION` | Investigation needed; Claude Code gathers evidence only, no source edits. |
+| `PLAN_REQUIRED` | Risky task; Claude Code writes a plan only before implementation. |
+| `PLAN_READY_FOR_REVIEW` | Plan written; Codex reviews before approving implementation. |
 | `READY_FOR_IMPLEMENTATION` | Task is defined and Claude Code should implement. |
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |

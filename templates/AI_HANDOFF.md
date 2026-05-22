@@ -36,3 +36,5 @@
 
 ## Next Recommended Step
 - User: ask Codex to analyze the next task, or set `State: NEEDS_ANALYSIS` / `Waiting For: Codex` with a specific task.
+- For risky tasks (migrations, auth, architecture changes), Codex may set `State: PLAN_REQUIRED` to require a plan before implementation.
+- For tasks with missing information, Codex may set `State: NEEDS_INVESTIGATION` to gather evidence first.
