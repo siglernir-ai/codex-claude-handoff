@@ -146,9 +146,13 @@ Codex sets `State: NEEDS_INVESTIGATION`. Claude Code gathers evidence only — n
 
 ### Planning Gate
 
-Use for risky tasks: DB migrations, RLS/Auth, security, deployment, architecture changes, large refactors, production AI routing.
+Use for risky tasks (DB migrations, RLS/Auth, security, deployment, architecture changes, large refactors, production AI routing) or any time the goal is to exercise or enforce the Planning Gate before implementation.
 
-Codex sets `State: PLAN_REQUIRED`. Claude Code writes a plan only — no source-file edits. Claude Code sets `State: PLAN_READY_FOR_REVIEW`. Codex reviews and either approves (`READY_FOR_IMPLEMENTATION`) or requests changes (`PLAN_REQUIRED`).
+**Codex must not write the implementation plan itself.** Codex's role is to: classify the task as risky or plan-required; set `State: PLAN_REQUIRED` and `Waiting For: Claude Code`; write clear plan-only instructions under `Next Recommended Step`.
+
+Claude Code writes a plan only — no source-file edits — and sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
+
+Codex reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), request changes (`PLAN_REQUIRED`), or require user approval (`WAITING_FOR_USER`).
 
 ### Verification Gate
 

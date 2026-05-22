@@ -132,6 +132,8 @@ Risky-task examples:
 - Architecture changes or large refactors
 - Production AI routing or model-routing changes
 
+When Codex identifies a risky task, Codex must not write the implementation plan itself. Codex's role is to classify the task as risky, set State to PLAN_REQUIRED and Waiting For to Claude Code, and write clear plan-only instructions for Claude Code under Next Recommended Step.
+
 When State is PLAN_REQUIRED and Waiting For is Claude Code:
 
 Claude Code must write a plan only — no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence. Set State to PLAN_READY_FOR_REVIEW and Waiting For to Codex.
@@ -143,6 +145,8 @@ Codex reviews the plan.
 If approved: set State to READY_FOR_IMPLEMENTATION and Waiting For to Claude Code.
 
 If changes are needed: set State to PLAN_REQUIRED and Waiting For to Claude Code. Describe what to change in Next Recommended Step.
+
+If user approval is required: set State to WAITING_FOR_USER and document the required action under Open Issues.
 
 Claude Code implements only after plan approval.
 
