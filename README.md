@@ -253,6 +253,24 @@ Verified behavior:
 - Codex approved the final result.
 - Only the stable protocol files and the intended test output were committed.
 
+### v0.3.1 validation — Planning Gate and Verification Gate
+
+The v0.3.1 protocol gates were validated in a real project.
+
+Verified behavior:
+
+- Codex classified the task as risky and set `State: PLAN_REQUIRED` / `Waiting For: Claude Code`.
+- Claude Code wrote a plan only and did not modify source files.
+- Claude Code set `State: PLAN_READY_FOR_REVIEW` / `Waiting For: Codex`.
+- Codex reviewed and approved the plan.
+- Claude Code implemented the approved scope.
+- Codex ran the Verification Gate using `git diff` and `npm.cmd run lint`.
+- Codex caught two real issues: the timeout timer was not cleared after a successful AI response, and lint was reported inaccurately.
+- Claude Code fixed the timeout cleanup and corrected the verification report.
+- Codex approved.
+- User committed and pushed: `9d037ed Improve AI chat production error handling`.
+- Final gym status was clean.
+
 ## Codex Skill
 
 This repository also includes a Codex Skill for the handoff protocol.
