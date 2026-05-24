@@ -643,3 +643,8 @@ Next possible steps:
 1. evaluate whether Claude Code needs a separate skill or whether `CLAUDE.md` is sufficient
 2. improve cross-platform installation
 3. add release/versioning once the workflow stabilizes
+
+### v0.4.0 validation
+
+v0.4.0 was validated in the real `gym` project with a small AI chat wording task.
+The workflow confirmed that `next-step.ps1` can guide the user through Codex -> Claude Code -> Codex -> User using short ready-to-paste prompts.
