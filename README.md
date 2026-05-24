@@ -77,6 +77,20 @@ The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, 
 
 Use these short prompts to run the handoff workflow without rewriting the protocol each time.
 
+### Short form
+
+For Codex:
+
+```text
+Use the codex-claude-handoff skill. Read AI_HANDOFF.md and continue from the current state.
+```
+
+For Claude Code:
+
+```text
+Read CLAUDE.md and AI_HANDOFF.md. Continue the protocol from the current state.
+```
+
 ### Start a Codex review
 
 ```text
@@ -117,6 +131,18 @@ Set State: READY_FOR_REVIEW.
 Set Waiting For: Codex.
 List changed files, verification results, open issues, risks, and the next recommended step.
 ```
+
+## Daily Workflow
+
+Run this from the project root:
+
+```powershell
+.\scripts\next-step.ps1
+```
+
+The script prints the current state and a ready-to-paste prompt.
+Paste the prompt into Codex or Claude Code.
+The tool acts, updates `AI_HANDOFF.md`, and the cycle continues.
 
 ## Short Workflow Example
 
