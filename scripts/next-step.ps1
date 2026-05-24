@@ -49,6 +49,7 @@ if ($State -eq "READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
     Write-Host "=== Recommended Prompt for Codex ==="
     Write-Host ""
     Write-Host "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and review Changed Files."
+    Write-Host "Run git status and git diff before approving. Check Changed Files match."
     Write-Host "Current task: $CurrentTask"
 }
 elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code") {

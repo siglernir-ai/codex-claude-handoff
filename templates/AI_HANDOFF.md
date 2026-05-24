@@ -22,10 +22,11 @@
 - None yet
 
 ## Verification
-- Build: not run
-- Lint: not run
-- Tests: not run
-- Manual Check: protocol files installed
+- Commands Run: [list commands, or "none - documentation change"]
+- Build: [result or not run]
+- Lint: [result or not run]
+- Tests: [result or not run]
+- Manual Check: [expected vs actual, or not applicable]
 
 ## Open Issues
 - Define the first task for Codex or Claude Code.

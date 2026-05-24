@@ -92,10 +92,11 @@ After every significant implementation, update `AI_HANDOFF.md` with all fields b
 - path/to/file
 
 ## Verification
+- Commands Run: [list commands, or "none - documentation change"]
 - Build: [result or not run]
 - Lint: [result or not run]
 - Tests: [result or not run]
-- Manual Check: [result or not applicable]
+- Manual Check: [expected vs actual, or not applicable]
 
 ## Open Issues
 - None / [issue]
@@ -106,6 +107,8 @@ After every significant implementation, update `AI_HANDOFF.md` with all fields b
 ## Next Recommended Step
 - Codex: review the changed files listed above and confirm whether the implementation matches scope.
 ```
+
+Verification guidance: list every command you ran and summarize its output (e.g. "git diff: 2 files changed, 15 insertions"). For documentation-only changes write "none - documentation change". Manual Check should state what you expected and what you observed, not just a pass/fail label.
 
 If blocked, use:
 

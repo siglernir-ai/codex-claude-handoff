@@ -184,6 +184,13 @@ Codex reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), request 
 
 After every Claude Code implementation, Codex should verify using safe read-only commands (`git status`, `git diff`, typecheck, lint, tests where available). Codex must compare actual changes against `Changed Files` and detect scope creep or unlisted edits before approving.
 
+Good verification evidence includes:
+- **Commands Run:** list each command and a short result summary (e.g. "git diff: 3 files changed, 28 insertions, 4 deletions")
+- **Skipped commands:** state why (e.g. "lint: not run - documentation change only")
+- **Manual Check:** state expected vs actual, not just "looks good"
+
+Vague entries like "not run" or "not applicable" without explanation are not sufficient evidence for Codex to approve.
+
 ### Unsafe Command Rules
 
 Codex and Claude Code must not run the following without explicit user approval:

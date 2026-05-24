@@ -161,11 +161,14 @@ After Claude Code implementation, Codex should verify using safe read-only comma
 - npm.cmd run lint (if available)
 - npm.cmd test (if available)
 
-Codex must:
-- Compare Claude's reported Changed Files against actual git diff output.
-- Detect scope creep — edits to files not listed under Changed Files.
-- Detect unlisted changes — files modified but not reported.
-- Confirm verification results match Claude's claims before approving.
+Codex review checklist:
+- Run git status and confirm the file list matches AI_HANDOFF.md Changed Files exactly.
+- Run git diff -- <each changed file> and confirm the diff matches Claude Code's description.
+- Check for unlisted edits: files modified but not in Changed Files.
+- Check for scope creep: edits outside the approved task scope.
+- Check verification claims: if Claude Code says lint passed, confirm it; if "not run", confirm it is acceptable for this change type.
+- Flag missing or vague evidence: "not run" without explanation, or "manual check: looks good" without specifics.
+- Record which commands were run and what they showed in AI_HANDOFF.md before approving.
 
 ## Unsafe Command Rules
 
