@@ -61,13 +61,13 @@ elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code"
 elseif ($State -eq "NEEDS_INVESTIGATION" -and $WaitingFor -eq "Claude Code") {
     Write-Host "=== Recommended Prompt for Claude Code ==="
     Write-Host ""
-    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Investigate only — do not modify source files."
+    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Investigate only - do not modify source files."
     Write-Host "Current task: $CurrentTask"
 }
 elseif ($State -eq "PLAN_REQUIRED" -and $WaitingFor -eq "Claude Code") {
     Write-Host "=== Recommended Prompt for Claude Code ==="
     Write-Host ""
-    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Write a plan only — do not modify source files."
+    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Write a plan only - do not modify source files."
     Write-Host "Current task: $CurrentTask"
 }
 elseif ($State -eq "PLAN_READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
