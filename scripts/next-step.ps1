@@ -176,6 +176,12 @@ elseif ($State -eq "WAITING_FOR_USER") {
     Write-Host "Action: Review AI_HANDOFF.md and decide the next step or provide approval."
     Write-Host "Commit: Blocked - waiting for user decision."
 }
+elseif ($ExpectedWaiting.ContainsKey($State)) {
+    Write-Host "=== Next Action ==="
+    Write-Host "Actor:  User"
+    Write-Host "Action: Resolve handoff mismatch. $State normally expects $($ExpectedWaiting[$State])."
+    Write-Host "Commit: Blocked - handoff state is inconsistent."
+}
 else {
     $knownStates = @("NEEDS_ANALYSIS", "NEEDS_INVESTIGATION", "PLAN_REQUIRED", "PLAN_READY_FOR_REVIEW",
         "READY_FOR_IMPLEMENTATION", "IMPLEMENTED", "READY_FOR_REVIEW", "REVIEW_DONE",
