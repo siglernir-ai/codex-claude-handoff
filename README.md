@@ -156,9 +156,20 @@ Run this from the project root:
 .\scripts\next-step.ps1
 ```
 
-The script prints the current state and a ready-to-paste prompt.
-Paste the prompt into Codex or Claude Code.
-The tool acts, updates `AI_HANDOFF.md`, and the cycle continues.
+The script reads `AI_HANDOFF.md` and prints a three-block turn dashboard:
+
+- **Handoff Status** - current State, Waiting For, and Current Task.
+- **Next Action** - the actor who should act next, the action required, and whether a commit is allowed.
+- **Prompt** - a ready-to-paste prompt, printed only when the next actor is Codex or Claude Code.
+
+Paste the Prompt into Codex or Claude Code. The tool acts, updates `AI_HANDOFF.md`, and the cycle continues.
+
+The `Commit:` line in Next Action is the commit signal:
+
+- `Commit: ALLOWED` means Codex has approved. Commit only the files listed under Changed Files.
+- `Commit: Blocked - ...` means a review or decision is still pending. Do not commit.
+
+Do not commit `AI_HANDOFF.md`.
 
 ## Short Workflow Example
 
