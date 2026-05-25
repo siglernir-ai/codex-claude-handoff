@@ -47,6 +47,42 @@ Write-Host "Waiting For:  $WaitingFor"
 Write-Host "Current Task: $CurrentTask"
 Write-Host ""
 
+$ExpectedWaiting = @{
+    "NEEDS_ANALYSIS"           = "Codex"
+    "NEEDS_INVESTIGATION"      = "Claude Code"
+    "PLAN_REQUIRED"            = "Claude Code"
+    "PLAN_READY_FOR_REVIEW"    = "Codex"
+    "READY_FOR_IMPLEMENTATION" = "Claude Code"
+    "READY_FOR_REVIEW"         = "Codex"
+    "REVIEW_DONE"              = "User"
+    "BLOCKED"                  = "User"
+    "WAITING_FOR_USER"         = "User"
+}
+
+if ($ExpectedWaiting.ContainsKey($State) -and $WaitingFor -ne $ExpectedWaiting[$State]) {
+    Write-Host "WARNING: State $State normally expects Waiting For: $($ExpectedWaiting[$State]) but found: $WaitingFor."
+    Write-Host ""
+}
+
+if ($State -eq "READY_FOR_REVIEW") {
+    $ChangedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
+    $changedFiles = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $ChangedFilesLines) {
+        $entry = $line.Trim()
+        if ($entry -eq "" -or $entry -eq "None yet" -or $entry -eq "- None yet") { continue }
+        $entry = $entry -replace '^-\s+', ''
+        $entry = $entry -replace '`', ''
+        $entry = $entry.Trim()
+        if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
+        if ($entry -ne "") { $changedFiles.Add($entry) }
+    }
+    $nonHandoffFiles = $changedFiles | Where-Object { $_ -ne "AI_HANDOFF.md" }
+    if ($changedFiles.Count -gt 0 -and $nonHandoffFiles.Count -eq 0) {
+        Write-Host "WARNING: Changed Files lists only AI_HANDOFF.md. No tracked source file is listed for review."
+        Write-Host ""
+    }
+}
+
 $PromptText = ""
 
 if ($State -eq "NEEDS_ANALYSIS" -and $WaitingFor -eq "Codex") {
@@ -141,6 +177,13 @@ elseif ($State -eq "WAITING_FOR_USER") {
     Write-Host "Commit: Blocked - waiting for user decision."
 }
 else {
+    $knownStates = @("NEEDS_ANALYSIS", "NEEDS_INVESTIGATION", "PLAN_REQUIRED", "PLAN_READY_FOR_REVIEW",
+        "READY_FOR_IMPLEMENTATION", "IMPLEMENTED", "READY_FOR_REVIEW", "REVIEW_DONE",
+        "BLOCKED", "WAITING_FOR_USER")
+    if ($knownStates -notcontains $State) {
+        Write-Host "WARNING: Unrecognized state: $State."
+        Write-Host ""
+    }
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  User"
     Write-Host "Action: Inspect AI_HANDOFF.md and decide the next step."
