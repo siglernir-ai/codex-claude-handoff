@@ -320,6 +320,22 @@ Verified behavior:
 - User committed and pushed: `9d037ed Improve AI chat production error handling`.
 - Final gym status was clean.
 
+### v0.6.0 validation - Codex-Led Operating Mode
+
+The v0.6.0 Codex-Led Operating Mode was validated successfully in the real gym project.
+
+Verified behavior:
+
+- The gym project was updated to v0.6.0 without overwriting project-specific `AGENTS.md` context.
+- The user gave Codex a natural AI chat improvement request without specifying a State or Gate.
+- Codex classified the task as `NEEDS_INVESTIGATION`.
+- Claude Code performed a read-only investigation without modifying source files.
+- Codex reviewed the findings and narrowed the work to a safe UI-only implementation.
+- Claude Code implemented the approved two-file change in `app/chat/chat-interface.tsx` and `app/my-plan/chat-system.tsx`.
+- Codex reviewed and approved.
+- User committed and pushed: `0ca1576 Improve AI chat error state UX`.
+- Final gym status was clean.
+
 ## Codex Skill
 
 This repository also includes a Codex Skill for the handoff protocol.
