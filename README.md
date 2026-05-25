@@ -132,6 +132,22 @@ Set Waiting For: Codex.
 List changed files, verification results, open issues, risks, and the next recommended step.
 ```
 
+## Natural Request Mode
+
+You do not need to know the protocol states. Paste your request into Codex and it
+will classify the task, choose the appropriate gate, set `AI_HANDOFF.md`, and give
+Claude Code a focused instruction.
+
+Example:
+
+```text
+Add better error handling to the AI chat component.
+```
+
+Codex classifies this, selects a gate if needed, and updates `AI_HANDOFF.md`.
+You still approve all commits, pushes, deploys, DB work, migrations, secrets, and
+production changes.
+
 ## Daily Workflow
 
 Run this from the project root:

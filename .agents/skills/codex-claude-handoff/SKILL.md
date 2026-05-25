@@ -110,6 +110,63 @@ If blocked:
 - Set Waiting For to User.
 - Explain the blocker under Open Issues.
 
+## User Natural Request Mode
+
+When the user provides a natural request rather than a protocol state:
+
+1. Read the request. Do not ask the user to reformat it as a protocol state.
+2. Classify the task using the task classification rules below.
+3. Select the appropriate handoff path and set AI_HANDOFF.md accordingly.
+4. Write a focused task description for Claude Code under Next Recommended Step.
+5. Ask for clarification only when the task cannot be safely classified even with the safest available gate.
+
+The user is not responsible for operating the protocol. Codex is.
+
+## Task Classification Rules
+
+Classify based on task risk and clarity. When uncertain, choose the safer path.
+
+| Task type | Handoff path | State to set |
+|---|---|---|
+| Simple, clear, non-risky task | Implementation handoff | READY_FOR_IMPLEMENTATION |
+| Unclear scope or missing information | Investigation Gate | NEEDS_INVESTIGATION |
+| Risky implementation (see risk areas below) | Planning Gate | PLAN_REQUIRED |
+| Requires explicit user decision | User Decision | WAITING_FOR_USER |
+| Claude Code has finished work | Review handoff | READY_FOR_REVIEW |
+
+Risk areas that normally trigger Planning Gate:
+- Database changes (Supabase migrations, schema changes)
+- Auth, RLS, or security changes
+- Deployment or infrastructure changes
+- AI routing or Hermes changes
+- Architecture changes or large refactors
+
+When in doubt between two paths, choose the safer one. A Planning Gate on a simple task costs one extra review cycle. A missing Planning Gate on a risky task can cause production incidents.
+
+## Clarification Rule
+
+Ask a clarification question only when:
+- The task cannot be safely classified even after applying the safest gate.
+- Two valid interpretations exist with very different risk profiles and neither is clearly safer.
+
+Do not ask for clarification when:
+- The task is understandable but scope is uncertain (use NEEDS_INVESTIGATION).
+- The task is understandable but risky (use PLAN_REQUIRED).
+- A reasonable assumption can be made without requiring a user decision.
+
+## Manual Approval Boundaries
+
+The following actions must never be automated or triggered without explicit user approval:
+
+- git commit
+- git push
+- Deploy commands
+- Database work (queries, migrations, schema changes, or destructive data operations)
+- Secret or environment variable changes
+- Production configuration changes
+
+If any are required, set State to WAITING_FOR_USER and document the required action under Open Issues.
+
 ## Investigation Gate
 
 When State is NEEDS_INVESTIGATION and Waiting For is Claude Code:

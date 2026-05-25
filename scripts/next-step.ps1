@@ -94,6 +94,13 @@ elseif ($State -eq "BLOCKED") {
     }
     Write-Host "Review AI_HANDOFF.md and resolve the blocking issue before continuing."
 }
+elseif ($State -eq "NEEDS_ANALYSIS" -and $WaitingFor -eq "Codex") {
+    Write-Host "=== Recommended Prompt for Codex ==="
+    Write-Host ""
+    Write-Host "Use the codex-claude-handoff skill. Read AI_HANDOFF.md."
+    Write-Host "Classify the task and set the correct state."
+    Write-Host "Current task: $CurrentTask"
+}
 else {
     Write-Host "=== Next Step ==="
     Write-Host ""
