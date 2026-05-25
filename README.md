@@ -71,7 +71,7 @@ Run from your project root:
 .\scripts\next-step.ps1
 ```
 
-The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, and `Current Task`, followed by a recommended prompt based on the current state.
+The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, and `Current Task`, followed by a recommended prompt based on the current state. Add `-CopyPrompt` to also copy the prompt to the clipboard.
 
 ## Quick Prompts
 

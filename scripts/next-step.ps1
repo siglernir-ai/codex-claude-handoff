@@ -1,3 +1,5 @@
+param([switch]$CopyPrompt)
+
 $HandoffFile = Join-Path (Get-Location) "AI_HANDOFF.md"
 
 if (-not (Test-Path $HandoffFile)) {
@@ -45,16 +47,17 @@ Write-Host "Waiting For:  $WaitingFor"
 Write-Host "Current Task: $CurrentTask"
 Write-Host ""
 
+$PromptText = ""
+
 if ($State -eq "NEEDS_ANALYSIS" -and $WaitingFor -eq "Codex") {
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  Codex"
     Write-Host "Action: Classify the task and set the correct State and Waiting For."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md.`nClassify the task and set the correct state.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Use the codex-claude-handoff skill. Read AI_HANDOFF.md."
-    Write-Host "Classify the task and set the correct state."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "NEEDS_INVESTIGATION" -and $WaitingFor -eq "Claude Code") {
     Write-Host "=== Next Action ==="
@@ -62,10 +65,9 @@ elseif ($State -eq "NEEDS_INVESTIGATION" -and $WaitingFor -eq "Claude Code") {
     Write-Host "Action: Investigate only. Do not modify source files."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
+    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Investigate only - do not modify source files.`nReport findings in AI_HANDOFF.md. Set State: READY_FOR_REVIEW.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Investigate only - do not modify source files."
-    Write-Host "Report findings in AI_HANDOFF.md. Set State: READY_FOR_REVIEW."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "PLAN_REQUIRED" -and $WaitingFor -eq "Claude Code") {
     Write-Host "=== Next Action ==="
@@ -73,10 +75,9 @@ elseif ($State -eq "PLAN_REQUIRED" -and $WaitingFor -eq "Claude Code") {
     Write-Host "Action: Write a plan only. Do not modify source files."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
+    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Write a plan only - do not modify source files.`nSet State: PLAN_READY_FOR_REVIEW when done.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Write a plan only - do not modify source files."
-    Write-Host "Set State: PLAN_READY_FOR_REVIEW when done."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "PLAN_READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
     Write-Host "=== Next Action ==="
@@ -84,10 +85,9 @@ elseif ($State -eq "PLAN_READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
     Write-Host "Action: Review the plan. Approve or request changes before implementation begins."
     Write-Host "Commit: Blocked - plan not yet approved."
     Write-Host ""
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md. Review the plan.`nSet State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Use the codex-claude-handoff skill. Read AI_HANDOFF.md. Review the plan."
-    Write-Host "Set State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code") {
     Write-Host "=== Next Action ==="
@@ -95,9 +95,9 @@ elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code"
     Write-Host "Action: Implement the approved scope. Do not modify unrelated files."
     Write-Host "Commit: Blocked - waiting for Codex review after implementation."
     Write-Host ""
+    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Continue the protocol from the current state.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Read CLAUDE.md and AI_HANDOFF.md. Continue the protocol from the current state."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "IMPLEMENTED") {
     Write-Host "=== Next Action ==="
@@ -111,10 +111,9 @@ elseif ($State -eq "READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
     Write-Host "Action: Review Changed Files. Run git status and git diff before approving."
     Write-Host "Commit: Blocked - waiting for Codex approval."
     Write-Host ""
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and review Changed Files.`nRun git status and git diff before approving. Check Changed Files match.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
-    Write-Host "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and review Changed Files."
-    Write-Host "Run git status and git diff before approving. Check Changed Files match."
-    Write-Host "Current task: $CurrentTask"
+    Write-Host $PromptText
 }
 elseif ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
     Write-Host "=== Next Action ==="
@@ -146,6 +145,19 @@ else {
     Write-Host "Actor:  User"
     Write-Host "Action: Inspect AI_HANDOFF.md and decide the next step."
     Write-Host "Commit: Blocked - state is unknown."
+}
+
+if ($CopyPrompt) {
+    if ($PromptText -ne "") {
+        try {
+            Set-Clipboard -Value $PromptText
+            Write-Host "Prompt copied to clipboard."
+        } catch {
+            Write-Host "Could not copy to clipboard: $_"
+        }
+    } else {
+        Write-Host "No prompt to copy."
+    }
 }
 
 Write-Host ""
