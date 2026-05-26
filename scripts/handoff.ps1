@@ -203,7 +203,7 @@ function Invoke-Start {
         }
     }
 
-    $codexPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request and update AI_HANDOFF.md."
+    $codexPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Codex Decision Router.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 
     Write-Host ""
     Write-Host "=== Codex Entry Prompt ==="
