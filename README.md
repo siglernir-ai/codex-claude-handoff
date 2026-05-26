@@ -176,6 +176,8 @@ Codex classifies this, selects a gate if needed, and updates `AI_HANDOFF.md`.
 You still approve all commits, pushes, deploys, DB work, migrations, secrets, and
 production changes.
 
+Codex uses a six-path decision router for natural requests: advisory (answer directly, no handoff), investigation, planning, implementation, user decision, and review. Advisory-first means Codex answers questions and advisory requests directly without creating a Claude Code task — only explicit action requests ("add", "fix", "implement") trigger a handoff. Risky topics phrased as questions stay advisory or route to a user decision, not automatic Claude Code tasks.
+
 ## Daily Workflow
 
 Run this from the project root:

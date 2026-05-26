@@ -115,33 +115,58 @@ If blocked:
 When the user provides a natural request rather than a protocol state:
 
 1. Read the request. Do not ask the user to reformat it as a protocol state.
-2. Classify the task using the task classification rules below.
-3. Select the appropriate handoff path and set AI_HANDOFF.md accordingly.
-4. Write a focused task description for Claude Code under Next Recommended Step.
+2. Route the request using the Codex Decision Router below.
+3. For advisory requests: answer directly. Do not update AI_HANDOFF.md.
+4. For action requests: select the appropriate path, update AI_HANDOFF.md, and write a focused task description for Claude Code under Next Recommended Step.
 5. Ask for clarification only when the task cannot be safely classified even with the safest available gate.
 
 The user is not responsible for operating the protocol. Codex is.
 
-## Task Classification Rules
+## Codex Decision Router
 
-Classify based on task risk and clarity. When uncertain, choose the safer path.
+Codex acts as the primary decision layer for natural user requests. Route every request to one of six paths.
 
-| Task type | Handoff path | State to set |
+| # | Path | When to use | What Codex does | AI_HANDOFF.md update? |
+|---|---|---|---|---|
+| 1 | Advisory only | Advice, assessment, explanation, comparison, recommendation, status — even if the topic could later become a code change | Answer the user directly; may inspect files read-only if needed | No (unless the user later explicitly approves or asks for action) |
+| 2 | Needs investigation | User asks Codex to inspect the codebase to understand feasibility, root cause, or what would be needed for a change | Set NEEDS_INVESTIGATION / Waiting For: Claude Code | Yes |
+| 3 | Needs planning | User explicitly asks to implement or prepare work in a risky area: DB, auth/RLS, security, AI routing, architecture, large refactor, deployment | Set PLAN_REQUIRED / Waiting For: Claude Code | Yes |
+| 4 | Ready for implementation | User explicitly asks for a simple, clear, non-risky change with well-defined scope | Set READY_FOR_IMPLEMENTATION / Waiting For: Claude Code | Yes |
+| 5 | Needs user decision | Business or product tradeoff Codex cannot resolve; approval required for a risky action; user must choose between options with meaningfully different implications | Set WAITING_FOR_USER or answer with a focused decision question | Yes (or no if answered inline) |
+| 6 | Ready for review | AI_HANDOFF.md already says State: READY_FOR_REVIEW and it is Codex's turn | Review Changed Files; set REVIEW_DONE, READY_FOR_IMPLEMENTATION, or BLOCKED | Yes |
+
+### Advisory-First Rule
+
+Codex answers the user directly (path 1) whenever:
+- The user asks for advice, assessment, explanation, comparison, recommendation, or status.
+- The topic could eventually lead to a code change, but the user has not yet asked for action.
+- Codex can provide a useful answer without needing Claude Code to investigate or implement.
+
+Codex must not update AI_HANDOFF.md or involve Claude Code unless the user explicitly:
+- Asks for action: "add", "fix", "implement", "build", "change", "remove".
+- Approves action after an advisory exchange.
+- Asks Codex to inspect the codebase: "check what would be needed", "look at", "find out why".
+- Or the current handoff state already requires a Codex review.
+
+If the user asks about a risky topic as a question, Codex may answer advisory and explain risks, or ask the user for a decision. It must not automatically create a Claude Code task.
+
+### Routing Examples
+
+| User message | Path | Codex action |
 |---|---|---|
-| Simple, clear, non-risky task | Implementation handoff | READY_FOR_IMPLEMENTATION |
-| Unclear scope or missing information | Investigation Gate | NEEDS_INVESTIGATION |
-| Risky implementation (see risk areas below) | Planning Gate | PLAN_REQUIRED |
-| Requires explicit user decision | User Decision | WAITING_FOR_USER |
-| Claude Code has finished work | Review handoff | READY_FOR_REVIEW |
+| "What does this component do?" | 1 — Advisory | Answer directly; may read files read-only |
+| "Should we add streaming to the AI chat?" | 1 — Advisory or 5 — User decision | Answer with assessment and risks; or ask user to decide |
+| "Add streaming to the AI chat" | 3 — Planning | Set PLAN_REQUIRED |
+| "Check what would be needed to add streaming" | 2 — Investigation | Set NEEDS_INVESTIGATION |
+| "Fix the typo in the login button" | 4 — Implementation | Set READY_FOR_IMPLEMENTATION |
 
-Risk areas that normally trigger Planning Gate:
-- Database changes (Supabase migrations, schema changes)
-- Auth, RLS, or security changes
-- Deployment or infrastructure changes
-- AI routing or Hermes changes
-- Architecture changes or large refactors
+### Tiebreaker Rule
 
-When in doubt between two paths, choose the safer one. A Planning Gate on a simple task costs one extra review cycle. A missing Planning Gate on a risky task can cause production incidents.
+When in doubt between two action paths, choose the safer one. A Planning Gate on a simple task costs one extra review cycle. A missing Planning Gate on a risky task can cause production incidents. Advisory is not a tiebreaker escape — if the user has explicitly asked for action, use an action path.
+
+### AI_HANDOFF.md Update Rule
+
+Advisory responses (path 1) must not update AI_HANDOFF.md. If the user approves an action after an advisory response, Codex must then select the correct action path and update AI_HANDOFF.md before involving Claude Code.
 
 ## Clarification Rule
 
