@@ -101,6 +101,67 @@ You can combine both flags:
 
 This writes `NEXT_TURN.md` and also copies the tool prompt to your clipboard. `-PrepareFile` prints the short paste to the terminal; `-CopyPrompt` preserves its existing behavior of copying the protocol prompt (`$PromptText`) to the clipboard.
 
+## Handoff Operator
+
+A higher-level helper script with four named commands for the daily workflow.
+
+Run from your project root:
+
+```powershell
+.\scripts\handoff.ps1 <command>
+```
+
+### `status`
+
+Print the current state, waiting party, task, and commit status in plain English.
+
+```powershell
+.\scripts\handoff.ps1 status
+```
+
+Example output:
+
+```
+State:        REVIEW_DONE
+Waiting For:  User
+Task:         v0.9.1 - Encoding-safe handoff instructions
+Commit:       ALLOWED — Codex approved. Commit only the files listed under Changed Files.
+```
+
+### `next`
+
+Generate or refresh `NEXT_TURN.md` and print exactly which tool to open and what to paste.
+
+```powershell
+.\scripts\handoff.ps1 next
+.\scripts\handoff.ps1 next -Clip   # also copies the paste instruction to clipboard
+```
+
+### `start "<natural user request>"`
+
+Save your request to the local ignored file `USER_REQUEST.md` and print a ready-made Codex entry prompt.
+
+```powershell
+.\scripts\handoff.ps1 start "Add better error handling to the AI chat component"
+.\scripts\handoff.ps1 start "Add better error handling to the AI chat component" -Clip
+```
+
+Codex remains the decision router. The prompt tells Codex to read `USER_REQUEST.md`, `AI_HANDOFF.md`, and local protocol instructions before routing.
+
+`USER_REQUEST.md` is ephemeral and local — it is never committed. The install script adds it to `.gitignore` automatically.
+
+### `commit-check`
+
+Show whether a commit is allowed and which files to commit. Never runs git commands automatically.
+
+```powershell
+.\scripts\handoff.ps1 commit-check
+```
+
+When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed files and prints suggested `git add`, `git commit`, and `git push` commands as text only. You run them yourself after confirming the list.
+
+---
+
 ## Quick Prompts
 
 Use these short prompts to run the handoff workflow without rewriting the protocol each time.

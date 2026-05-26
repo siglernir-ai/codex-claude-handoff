@@ -52,8 +52,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md and NEXT_TURN.md rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -68,6 +68,11 @@ else {
     if (-not ($GitignoreContent -match "(?m)^NEXT_TURN\.md$")) {
         Add-Content -Path $GitignorePath -Value "NEXT_TURN.md"
         $addedRules.Add("NEXT_TURN.md")
+    }
+
+    if (-not ($GitignoreContent -match "(?m)^USER_REQUEST\.md$")) {
+        Add-Content -Path $GitignorePath -Value "USER_REQUEST.md"
+        $addedRules.Add("USER_REQUEST.md")
     }
 
     if ($addedRules.Count -gt 0) {
