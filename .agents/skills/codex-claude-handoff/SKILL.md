@@ -312,6 +312,17 @@ Keep the handoff tight:
 - No source-code edits by Codex unless explicitly requested by the user.
 - Keep AI_HANDOFF.md clear enough that Claude Code can act without extra context.
 
+## Encoding-Safe Handoff Rule
+
+When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any language with encoding-sensitive characters), both Codex and Claude Code must follow these rules:
+
+- **Never copy UI text from handoff files.** `AI_HANDOFF.md` and `NEXT_TURN.md` may contain garbled or corrupted characters if the author's terminal encoding was unstable. Do not use that text as a search string, a match pattern, or text to insert.
+- **Write semantic English descriptions in handoff files.** Describe what the text means rather than copying the literal characters. Example: write "the Hebrew button label that means 'Save'" rather than attempting to copy the Hebrew word into the handoff file.
+- **Always inspect the source file directly.** Before editing, searching for, or reviewing any UI string, open the actual source file (component, translation file, string resource) and read the text from there.
+- **Point to the exact location.** When writing handoff instructions that involve UI text, reference the file path, component name, line number, or a nearby code comment — not the raw text itself.
+- **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
+- **The source of truth for UI text is the source file, not the handoff.** This rule does not change what text belongs in the product; Hebrew labels stay Hebrew in source. It only changes how agents refer to that text in handoff files.
+
 ## Git Discipline
 
 AI_HANDOFF.md is usually local and ignored by Git.
