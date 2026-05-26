@@ -48,22 +48,32 @@ foreach ($FileName in $RequiredTemplates) {
     }
 }
 
-# Ensure .gitignore exists and ignores AI_HANDOFF.md
+# Ensure .gitignore exists and ignores AI_HANDOFF.md and NEXT_TURN.md
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md rule"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md and NEXT_TURN.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
 
-    if ($GitignoreContent -match "(?m)^AI_HANDOFF\.md$") {
-        Write-Host ".gitignore already contains AI_HANDOFF.md"
-    }
-    else {
+    $addedRules = [System.Collections.Generic.List[string]]::new()
+
+    if (-not ($GitignoreContent -match "(?m)^AI_HANDOFF\.md$")) {
         Add-Content -Path $GitignorePath -Value "`n# Local AI handoff context`nAI_HANDOFF.md"
-        Write-Host "Added AI_HANDOFF.md to .gitignore"
+        $addedRules.Add("AI_HANDOFF.md")
+    }
+
+    if (-not ($GitignoreContent -match "(?m)^NEXT_TURN\.md$")) {
+        Add-Content -Path $GitignorePath -Value "NEXT_TURN.md"
+        $addedRules.Add("NEXT_TURN.md")
+    }
+
+    if ($addedRules.Count -gt 0) {
+        Write-Host "Added to .gitignore: $($addedRules -join ', ')"
+    } else {
+        Write-Host ".gitignore already contains AI_HANDOFF.md and NEXT_TURN.md"
     }
 }
 

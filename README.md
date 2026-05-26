@@ -73,6 +73,34 @@ Run from your project root:
 
 The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, and `Current Task`, followed by a recommended prompt based on the current state. Add `-CopyPrompt` to also copy the prompt to the clipboard. The script also prints a warning when the handoff looks inconsistent.
 
+### PrepareFile Mode
+
+Add `-PrepareFile` to write `NEXT_TURN.md` to the project root:
+
+```powershell
+.\scripts\next-step.ps1 -PrepareFile
+```
+
+`NEXT_TURN.md` is an entry brief derived from the current `AI_HANDOFF.md` state. It surfaces the actor, action, and `Next Recommended Step` so the target tool can orient before reading the full handoff file.
+
+With `NEXT_TURN.md` written, paste this into the target tool:
+
+```text
+Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state.
+```
+
+`NEXT_TURN.md` does not replace `AI_HANDOFF.md`. The target tool must still read `AI_HANDOFF.md` before acting. `AI_HANDOFF.md` remains the source of truth.
+
+`NEXT_TURN.md` is ephemeral and local — it is always re-generated and must never be committed. The install script adds it to `.gitignore` automatically.
+
+You can combine both flags:
+
+```powershell
+.\scripts\next-step.ps1 -PrepareFile -CopyPrompt
+```
+
+This writes `NEXT_TURN.md` and also copies the tool prompt to your clipboard. `-PrepareFile` prints the short paste to the terminal; `-CopyPrompt` preserves its existing behavior of copying the protocol prompt (`$PromptText`) to the clipboard.
+
 ## Quick Prompts
 
 Use these short prompts to run the handoff workflow without rewriting the protocol each time.
