@@ -3,8 +3,11 @@ param(
     [string]$Command,
     [Parameter(Position = 1)]
     [string]$Request,
-    [switch]$Clip
+    [switch]$Clip,
+    [switch]$CopyPrompt  # backward-compatible alias for -Clip
 )
+
+if ($CopyPrompt) { $Clip = $true }
 
 $HandoffFile = Join-Path (Get-Location) "AI_HANDOFF.md"
 
@@ -268,6 +271,37 @@ function Invoke-CommitCheck {
     Write-Host ""
 }
 
+function Invoke-Menu {
+    Write-Host ""
+    Write-Host "State:  $State"
+    Write-Host "Actor:  $WaitingFor"
+    Write-Host "Task:   $CurrentTask"
+    Write-Host ""
+    Write-Host "1. Start new request"
+    Write-Host "2. Continue next turn"
+    Write-Host "3. Show status"
+    Write-Host "4. Check commit"
+    Write-Host "5. Exit"
+    Write-Host ""
+    $choice = Read-Host "Select"
+
+    switch ($choice.Trim()) {
+        "1" {
+            $userRequest = Read-Host "Enter your request"
+            Invoke-Start -Request $userRequest
+        }
+        "2" { Invoke-Next }
+        "3" { Invoke-Status }
+        "4" { Invoke-CommitCheck }
+        "5" { }
+        default {
+            Write-Host ""
+            Write-Host "Invalid selection: $choice"
+            Write-Host ""
+        }
+    }
+}
+
 # --- Dispatch ---
 
 switch ($Command) {
@@ -276,14 +310,18 @@ switch ($Command) {
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
     default {
-        Write-Host ""
-        Write-Host "Usage: handoff.ps1 <command> [options]"
-        Write-Host ""
-        Write-Host "Commands:"
-        Write-Host "  status                    Show current handoff state and commit status."
-        Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
-        Write-Host '  start "<request>" [-Clip]  Save request and print a Codex entry prompt.'
-        Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
-        Write-Host ""
+        if ([string]::IsNullOrWhiteSpace($Command)) {
+            Invoke-Menu
+        } else {
+            Write-Host ""
+            Write-Host "Usage: handoff.ps1 <command> [options]"
+            Write-Host ""
+            Write-Host "Commands:"
+            Write-Host "  status                    Show current handoff state and commit status."
+            Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
+            Write-Host '  start "<request>" [-Clip]  Save request and print a Codex entry prompt.'
+            Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
+            Write-Host ""
+        }
     }
 }
