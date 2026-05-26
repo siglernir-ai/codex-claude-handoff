@@ -123,6 +123,8 @@ function Invoke-Status {
 }
 
 function Invoke-Next {
+    param([bool]$MenuMode = $false)
+
     $entry = $ActionMap[$State]
     if (-not $entry) {
         Write-Host "Unrecognized state: $State. Inspect AI_HANDOFF.md manually."
@@ -169,10 +171,14 @@ function Invoke-Next {
     Write-Host "Paste: $pasteInstruction"
     Write-Host ""
 
-    if ($Clip) {
+    if ($Clip -or $MenuMode) {
         try {
             Set-Clipboard -Value $pasteInstruction
-            Write-Host "Copied to clipboard. Paste with Ctrl+V."
+            if ($MenuMode) {
+                Write-Host "Copied to clipboard. Open $actor and press Ctrl+V."
+            } else {
+                Write-Host "Copied to clipboard. Paste with Ctrl+V."
+            }
         } catch {
             Write-Host "Could not copy to clipboard: $_"
             Write-Host "Copy the Paste line manually."
@@ -296,7 +302,7 @@ function Invoke-Menu {
             $userRequest = Read-Host "Enter your request"
             Invoke-Start -Request $userRequest
         }
-        "2" { Invoke-Next }
+        "2" { Invoke-Next -MenuMode $true }
         "3" { Invoke-Status }
         "4" { Invoke-CommitCheck }
         "5" { }
