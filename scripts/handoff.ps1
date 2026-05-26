@@ -172,11 +172,15 @@ function Invoke-Next {
     if ($Clip) {
         try {
             Set-Clipboard -Value $pasteInstruction
-            Write-Host "Paste instruction copied to clipboard."
+            Write-Host "Copied to clipboard. Paste with Ctrl+V."
         } catch {
             Write-Host "Could not copy to clipboard: $_"
+            Write-Host "Copy the Paste line manually."
         }
+    } else {
+        Write-Host "Copy the Paste line manually."
     }
+    Write-Host ""
 }
 
 function Invoke-Start {
@@ -276,6 +280,8 @@ function Invoke-Menu {
     Write-Host "State:  $State"
     Write-Host "Actor:  $WaitingFor"
     Write-Host "Task:   $CurrentTask"
+    Write-Host ""
+    Write-Host "This tool does not run Codex or Claude automatically. It only prepares the next instruction."
     Write-Host ""
     Write-Host "1. Start new request"
     Write-Host "2. Continue next turn"
