@@ -190,10 +190,15 @@ function Invoke-Start {
     Write-Host "USER_REQUEST.md written."
 
     # Safety fallback: warn if not gitignored (pre-v0.10.0 installs)
+    # Line-by-line check to avoid false positives from CRLF line endings on Windows.
     $gitignorePath = Join-Path (Get-Location) ".gitignore"
     if (Test-Path $gitignorePath) {
-        $gi = Get-Content -Path $gitignorePath -Raw
-        if (-not ($gi -match "(?m)^USER_REQUEST\.md$")) {
+        $giLines = Get-Content -Path $gitignorePath
+        $isIgnored = $false
+        foreach ($giLine in $giLines) {
+            if ($giLine.Trim() -eq "USER_REQUEST.md") { $isIgnored = $true; break }
+        }
+        if (-not $isIgnored) {
             Write-Host "WARNING: USER_REQUEST.md is not in .gitignore. Add it to avoid committing user requests."
         }
     }

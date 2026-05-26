@@ -299,6 +299,23 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 
 ---
 
+## Handoff Operator
+
+`scripts/handoff.ps1` is the user-facing helper for the daily workflow. It provides four commands:
+
+| Command | What it does |
+|---|---|
+| `status` | Print State, Waiting For, Current Task, and commit status in plain English. |
+| `next [-Clip]` | Generate or refresh `NEXT_TURN.md` and print which tool to open and what to paste. |
+| `start "<request>" [-Clip]` | Save a natural user request to `USER_REQUEST.md` and print a Codex entry prompt. |
+| `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
+
+`handoff.ps1` does not update `AI_HANDOFF.md` directly, does not trigger Codex or Claude Code automatically, does not commit, does not push, and does not deploy. Codex remains the decision router.
+
+`USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
+
+---
+
 ## Skill Fallback
 
 If the `codex-claude-handoff` skill is unavailable, Codex should:

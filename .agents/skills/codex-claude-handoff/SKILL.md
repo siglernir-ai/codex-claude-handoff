@@ -323,6 +323,21 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 - **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
 - **The source of truth for UI text is the source file, not the handoff.** This rule does not change what text belongs in the product; Hebrew labels stay Hebrew in source. It only changes how agents refer to that text in handoff files.
 
+## Handoff Operator
+
+`scripts/handoff.ps1` is the user-facing helper introduced in v0.10.0. It provides four commands for the daily workflow:
+
+| Command | What it does |
+|---|---|
+| `status` | Print State, Waiting For, Current Task, and commit status in plain English. Reads AI_HANDOFF.md. Writes nothing. |
+| `next [-Clip]` | Generate or refresh NEXT_TURN.md. Print which tool to open (Codex, Claude Code, or User) and the paste instruction. With `-Clip`, copy the paste instruction to clipboard. |
+| `start "<request>" [-Clip]` | Save the user's natural request to USER_REQUEST.md. Print a ready-made Codex entry prompt. With `-Clip`, copy the prompt to clipboard. |
+| `commit-check` | If State is REVIEW_DONE and Waiting For is User, list the changed files and print suggested git commands as text. Never run git commands automatically. |
+
+Codex remains the decision router. `handoff.ps1` does not update AI_HANDOFF.md directly, does not trigger Codex or Claude Code automatically, does not commit, does not push, and does not deploy.
+
+`USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
+
 ## Git Discipline
 
 AI_HANDOFF.md is usually local and ignored by Git.
