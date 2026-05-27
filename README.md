@@ -162,7 +162,7 @@ When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed
 
 ### `run-next [-BudgetUsd N]`
 
-Run one Claude Code assisted turn automatically. Requires `npx` and a network connection on first use.
+Run one Claude Code turn automatically. Requires `npx`; a network connection is needed only if the package is not cached.
 
 ```powershell
 .\scripts\handoff.ps1 run-next
