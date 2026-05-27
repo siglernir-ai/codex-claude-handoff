@@ -4,7 +4,8 @@ param(
     [Parameter(Position = 1)]
     [string]$Request,
     [switch]$Clip,
-    [switch]$CopyPrompt  # backward-compatible alias for -Clip
+    [switch]$CopyPrompt,  # backward-compatible alias for -Clip
+    [decimal]$BudgetUsd = 2
 )
 
 if ($CopyPrompt) { $Clip = $true }
@@ -123,7 +124,7 @@ function Invoke-Status {
 }
 
 function Invoke-Next {
-    param([bool]$MenuMode = $false)
+    param([bool]$MenuMode = $false, [bool]$Silent = $false)
 
     $entry = $ActionMap[$State]
     if (-not $entry) {
@@ -165,26 +166,28 @@ function Invoke-Next {
 
     $pasteInstruction = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
 
-    Write-Host ""
-    Write-Host "NEXT_TURN.md written."
-    Write-Host "Open:  $actor"
-    Write-Host "Paste: $pasteInstruction"
-    Write-Host ""
+    if (-not $Silent) {
+        Write-Host ""
+        Write-Host "NEXT_TURN.md written."
+        Write-Host "Open:  $actor"
+        Write-Host "Paste: $pasteInstruction"
+        Write-Host ""
 
-    if ($Clip -or $MenuMode) {
-        try {
-            Set-Clipboard -Value $pasteInstruction
-            if ($MenuMode) {
-                Write-Host "Copied to clipboard. Open $actor and press Ctrl+V."
-            } else {
-                Write-Host "Copied to clipboard. Paste with Ctrl+V."
+        if ($Clip -or $MenuMode) {
+            try {
+                Set-Clipboard -Value $pasteInstruction
+                if ($MenuMode) {
+                    Write-Host "Copied to clipboard. Open $actor and press Ctrl+V."
+                } else {
+                    Write-Host "Copied to clipboard. Paste with Ctrl+V."
+                }
+            } catch {
+                Write-Host "Could not copy to clipboard: $_"
+                Write-Host "Copy the Paste line manually."
             }
-        } catch {
-            Write-Host "Could not copy to clipboard: $_"
+        } else {
             Write-Host "Copy the Paste line manually."
         }
-    } else {
-        Write-Host "Copy the Paste line manually."
     }
     Write-Host ""
 }
@@ -357,7 +360,7 @@ function Invoke-Menu {
     Write-Host "Actor:  $WaitingFor"
     Write-Host "Task:   $CurrentTask"
     Write-Host ""
-    Write-Host "This tool does not run Codex or Claude automatically. It only prepares the next instruction."
+    Write-Host "Menu options prepare the next handoff instruction. Use 'run-next' for an assisted Claude Code turn."
     Write-Host ""
     Write-Host "1. Start new request"
     Write-Host "2. Continue next turn"
@@ -384,6 +387,117 @@ function Invoke-Menu {
     }
 }
 
+function Invoke-RunNext {
+    $eligibleStates = @("READY_FOR_IMPLEMENTATION")
+
+    # Dual eligibility check — actor first, then state
+    if ($WaitingFor -ne "Claude Code") {
+        Write-Host ""
+        Write-Host "run-next: blocked."
+        Write-Host "State:       $State"
+        Write-Host "Waiting For: $WaitingFor"
+        if ($WaitingFor -eq "Codex") {
+            Write-Host "Reason:      This turn is for Codex. run-next cannot automate Codex turns."
+            Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into ChatGPT."
+        } else {
+            Write-Host "Reason:      This turn requires user action."
+            Write-Host "Next step:   See AI_HANDOFF.md for details."
+        }
+        Write-Host ""
+        exit 1
+    }
+
+    if ($eligibleStates -notcontains $State) {
+        Write-Host ""
+        Write-Host "run-next: blocked."
+        Write-Host "State:       $State"
+        Write-Host "Waiting For: $WaitingFor"
+        if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
+            Write-Host "Reason:      run-next does not automate investigation or planning turns in this version."
+            Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
+        } else {
+            Write-Host "Reason:      State '$State' is not eligible for run-next in this version."
+        }
+        Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into Claude Code."
+        Write-Host ""
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "Preparing assisted Claude Code turn..."
+    Write-Host ""
+    Write-Host "State:        $State"
+    Write-Host "Actor:        Claude Code"
+    Write-Host "Permission:   acceptEdits  (Bash explicitly disallowed)"
+    Write-Host "Budget limit: `$$BudgetUsd"
+    Write-Host ""
+    Write-Host "Note: Tests and lint cannot run during this turn (Bash is blocked). Run them manually after."
+    Write-Host ""
+
+    # Refresh NEXT_TURN.md (silent — suppress manual paste/copy guidance)
+    Write-Host "Refreshing NEXT_TURN.md..."
+    try {
+        Invoke-Next -Silent $true
+    } catch {
+        Write-Host "Failed to refresh NEXT_TURN.md: $_"
+        Write-Host "Aborting."
+        exit 4
+    }
+    $ntPath = Join-Path (Get-Location) "NEXT_TURN.md"
+    if (-not (Test-Path $ntPath)) {
+        Write-Host "NEXT_TURN.md was not created. Aborting."
+        exit 4
+    }
+
+    # Preflight: confirm Claude Code is available
+    Write-Host "Checking Claude Code availability..."
+    $null = npx --yes @anthropic-ai/claude-code --version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
+        exit 3
+    }
+
+    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+
+    Write-Host ""
+    Write-Host "Command: npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence"
+    Write-Host ""
+    Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
+    Write-Host "         This tool does not commit, push, or deploy automatically."
+    Write-Host ""
+    $confirm = Read-Host 'Type "yes" to proceed, or press Enter to cancel'
+    if ($confirm.Trim() -ne "yes") {
+        Write-Host "Cancelled."
+        exit 2
+    }
+
+    Write-Host ""
+    Write-Host "Running Claude Code assisted turn..."
+    Write-Host ""
+
+    npx --yes @anthropic-ai/claude-code -p $prompt `
+        --permission-mode acceptEdits `
+        --disallowed-tools "Bash" `
+        --max-budget-usd $BudgetUsd `
+        --no-session-persistence `
+        --output-format text
+
+    $claudeExit = $LASTEXITCODE
+
+    Write-Host ""
+    if ($claudeExit -eq 0) {
+        Write-Host "Claude Code turn complete (exit 0)."
+        Write-Host "Tests and lint were not run - execute them manually before committing."
+        Write-Host "Check AI_HANDOFF.md for updated state."
+        Write-Host "Run 'handoff.ps1 status' to see the new state."
+    } else {
+        Write-Host "Claude Code exited with error (code: $claudeExit)."
+        Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+        exit 5
+    }
+    Write-Host ""
+}
+
 # --- Dispatch ---
 
 switch ($Command) {
@@ -391,6 +505,7 @@ switch ($Command) {
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
+    "run-next"     { Invoke-RunNext }
     default {
         if ([string]::IsNullOrWhiteSpace($Command)) {
             Invoke-Menu
@@ -403,6 +518,7 @@ switch ($Command) {
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Codex entry prompt.'
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
+            Write-Host "  run-next [-BudgetUsd N]   Run one Claude Code assisted turn (READY_FOR_IMPLEMENTATION only)."
             Write-Host ""
         }
     }

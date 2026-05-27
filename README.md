@@ -160,6 +160,52 @@ Show whether a commit is allowed and which files to commit. Never runs git comma
 
 When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed files and prints suggested `git add`, `git commit`, and `git push` commands as text only. You run them yourself after confirming the list.
 
+### `run-next [-BudgetUsd N]`
+
+Run one Claude Code assisted turn automatically. Requires `npx` and a network connection on first use.
+
+```powershell
+.\scripts\handoff.ps1 run-next
+.\scripts\handoff.ps1 run-next -BudgetUsd 5   # raise the budget cap
+```
+
+**Eligible state:** `run-next` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Claude Code`. All other states are blocked with a message and exit code 1.
+
+**Blocked states and manual workflow:**
+
+| State | Waiting For | What to do instead |
+|---|---|---|
+| READY_FOR_IMPLEMENTATION | Claude Code | Eligible — run-next proceeds |
+| NEEDS_INVESTIGATION | Claude Code | Blocked — run `next` and paste manually |
+| PLAN_REQUIRED | Claude Code | Blocked — run `next` and paste manually |
+| Any | Codex | Blocked — open ChatGPT and paste the prompt |
+| Any | User | Blocked — see AI_HANDOFF.md |
+
+Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
+
+**What run-next does:**
+1. Checks eligibility (state + actor).
+2. Refreshes `NEXT_TURN.md` (intentional local handoff-file write).
+3. Checks that Claude Code is available via `npx --yes @anthropic-ai/claude-code`.
+4. Prints the command it is about to run.
+5. Requires you to type exactly `yes` before proceeding.
+6. Runs one Claude Code turn with these constraints:
+   - `--permission-mode acceptEdits` — file edits auto-accepted in non-interactive mode
+   - `--disallowed-tools "Bash"` — shell execution explicitly blocked
+   - `--max-budget-usd N` — hard spending cap (default: $2)
+   - `--no-session-persistence` — session not saved or resumed
+7. Prints the result and exits.
+
+**Bash is blocked during the assisted turn.** Claude Code cannot run tests, typecheck, or lint. Run these manually after the turn completes.
+
+**No automatic commit, push, or deploy.** `run-next` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
+
+**No Codex automation.** Codex has no local CLI. Codex turns always remain manual.
+
+**npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `run-next` exits with code 3.
+
+**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error.
+
 ---
 
 ## Quick Prompts
@@ -338,7 +384,7 @@ The following are explicitly out of scope for this protocol version:
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Orchestration CLI
+- Full orchestration CLI (`run-next` is a limited single-turn MVP for `READY_FOR_IMPLEMENTATION` only; full orchestration remains out of scope)
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching
