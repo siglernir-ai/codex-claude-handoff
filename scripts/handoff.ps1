@@ -132,7 +132,9 @@ function Invoke-Next {
         return
     }
 
-    $actor      = $entry.Actor
+    # Use $WaitingFor as the actor (source of truth from AI_HANDOFF.md)
+    # Fall back to ActionMap entry only when WaitingFor is unparsed
+    $actor      = if ($WaitingFor -ne "(unknown)") { $WaitingFor } else { $entry.Actor }
     $actionLine = $entry.Action
     $afterLine  = $entry.After
     $nextStep   = Get-SectionContent -Lines $Lines -Heading "Next Recommended Step"
