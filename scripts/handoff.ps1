@@ -290,6 +290,14 @@ function Invoke-CommitCheck {
             # git unavailable — skip mismatch check
         }
 
+        # Clean tree: no tracked source changes to commit
+        if ($actualTracked.Count -eq 0) {
+            Write-Host "Commit: No tracked changes to commit."
+            Write-Host "Working tree is clean."
+            Write-Host ""
+            return
+        }
+
         # Compare sets to detect mismatch
         $mismatch = $false
         if ($actualTracked.Count -gt 0) {
