@@ -237,6 +237,7 @@ function Invoke-CommitCheck {
     Write-Host ""
 
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+        # Parse handoff Changed Files (exclude AI_HANDOFF.md)
         $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
         $commitFiles = [System.Collections.Generic.List[string]]::new()
         foreach ($line in $changedFilesLines) {
@@ -248,18 +249,87 @@ function Invoke-CommitCheck {
             }
         }
 
+        # Also extract file guidance from Next Recommended Step (commit-scope lines).
+        # Track raw mentions (including AI_HANDOFF.md) so stale guidance is not silently dropped.
+        $nextStepLines   = Get-SectionLines -Lines $Lines -Heading "Next Recommended Step"
+        $nsRawMentioned  = [System.Collections.Generic.List[string]]::new()
+        foreach ($nsLine in $nextStepLines) {
+            if ($nsLine -imatch 'commit only|AI_HANDOFF\.md only') {
+                $tokens = [regex]::Matches($nsLine, '[\w./\\-]+\.\w+')
+                foreach ($token in $tokens) {
+                    $f = $token.Value.Trim()
+                    if ($f -ne "") { $nsRawMentioned.Add($f) }
+                }
+            }
+        }
+        # Merge real (non-handoff) NS files into commitFiles
+        foreach ($f in $nsRawMentioned) {
+            if ($f -ne "AI_HANDOFF.md" -and -not $commitFiles.Contains($f)) { $commitFiles.Add($f) }
+        }
+        # Stale NS indicator: NS has commit-scope guidance but mentions only AI_HANDOFF.md
+        $nsHasStaleGuidance = ($nsRawMentioned.Count -gt 0) -and
+            (($nsRawMentioned | Where-Object { $_ -ne "AI_HANDOFF.md" }).Count -eq 0)
+
+        # Get actual tracked changed files from git status --short
+        $actualTracked = [System.Collections.Generic.List[string]]::new()
+        try {
+            $gitLines = & git status --short 2>$null
+            foreach ($gitLine in $gitLines) {
+                if ($gitLine.Length -lt 3) { continue }
+                if ($gitLine.Substring(0, 2) -eq "??") { continue }  # skip untracked
+                $filePart = $gitLine.Substring(3).Trim()
+                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
+                if ($filePart -ne "" -and $filePart -ne "AI_HANDOFF.md") {
+                    $actualTracked.Add($filePart)
+                }
+            }
+        } catch {
+            # git unavailable — skip mismatch check
+        }
+
+        # Compare sets to detect mismatch
+        $mismatch = $false
+        if ($actualTracked.Count -gt 0) {
+            $handoffSet = [System.Collections.Generic.HashSet[string]]::new(
+                [string[]]$commitFiles, [System.StringComparer]::OrdinalIgnoreCase)
+            $actualSet  = [System.Collections.Generic.HashSet[string]]::new(
+                [string[]]$actualTracked, [System.StringComparer]::OrdinalIgnoreCase)
+            $mismatch = -not $handoffSet.SetEquals($actualSet)
+            # Also warn if NS explicitly says commit only AI_HANDOFF.md while real files changed
+            if (-not $mismatch -and $nsHasStaleGuidance) { $mismatch = $true }
+        }
+
         Write-Host "Commit: ALLOWED - Codex approved."
         Write-Host ""
-        Write-Host "Files to commit:"
-        foreach ($f in $commitFiles) { Write-Host "  $f" }
-        Write-Host ""
-        $fileArgs = $commitFiles -join " "
-        Write-Host "Suggested commands (reference only - run these yourself):"
-        Write-Host "  git add $fileArgs"
-        Write-Host '  git commit -m "<your commit message>"'
-        Write-Host "  git push"
-        Write-Host ""
-        Write-Host "These commands are shown for reference only. Run them yourself after confirming the file list."
+
+        if ($mismatch) {
+            Write-Host "Handoff suggested files:"
+            if ($commitFiles.Count -eq 0 -and $nsHasStaleGuidance) {
+                Write-Host "  (none - Next Recommended Step references only AI_HANDOFF.md)"
+            } elseif ($commitFiles.Count -eq 0) {
+                Write-Host "  (none - handoff only lists AI_HANDOFF.md)"
+            } else {
+                foreach ($f in $commitFiles) { Write-Host "  $f" }
+            }
+            Write-Host ""
+            Write-Host "Actual changed tracked files:"
+            foreach ($f in $actualTracked) { Write-Host "  $f" }
+            Write-Host ""
+            Write-Host "WARNING:"
+            Write-Host "The handoff file list does not match git status."
+            Write-Host "Confirm the correct commit scope manually before committing."
+        } else {
+            Write-Host "Files to commit:"
+            foreach ($f in $commitFiles) { Write-Host "  $f" }
+            Write-Host ""
+            $fileArgs = $commitFiles -join " "
+            Write-Host "Suggested commands (reference only - run these yourself):"
+            Write-Host "  git add $fileArgs"
+            Write-Host '  git commit -m "<your commit message>"'
+            Write-Host "  git push"
+            Write-Host ""
+            Write-Host "These commands are shown for reference only. Run them yourself after confirming the file list."
+        }
     }
     else {
         Write-Host "Commit: Not yet allowed."
