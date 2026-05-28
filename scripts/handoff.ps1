@@ -376,7 +376,8 @@ function Invoke-Menu {
     Write-Host "2. Continue next turn"
     Write-Host "3. Show status"
     Write-Host "4. Check commit"
-    Write-Host "5. Exit"
+    Write-Host "5. Run next assisted Claude turn"
+    Write-Host "6. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -388,7 +389,8 @@ function Invoke-Menu {
         "2" { Invoke-Next -MenuMode $true }
         "3" { Invoke-Status }
         "4" { Invoke-CommitCheck }
-        "5" { }
+        "5" { Invoke-RunNext }
+        "6" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
