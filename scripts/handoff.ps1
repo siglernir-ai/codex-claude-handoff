@@ -433,6 +433,44 @@ function Invoke-RunNext {
         exit 1
     }
 
+    # Guard: block if tracked working tree changes exist
+    $trackedDirtyFiles = [System.Collections.Generic.List[string]]::new()
+    $gitCheckOk = $false
+    try {
+        $gitStatusLines = & git status --short 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $gitCheckOk = $true
+            foreach ($gitLine in $gitStatusLines) {
+                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
+                if ($gitLine.Substring(0, 2) -eq "??") { continue }  # skip untracked
+                $filePart = $gitLine.Substring(3).Trim()
+                if ($filePart -ne "") { $trackedDirtyFiles.Add($filePart) }
+            }
+        }
+    } catch { }
+
+    if (-not $gitCheckOk) {
+        Write-Host ""
+        Write-Host "run-next: blocked."
+        Write-Host "Could not determine Git working tree state."
+        Write-Host "Ensure you are in a Git repository and git is available, then try again."
+        Write-Host ""
+        exit 1
+    }
+
+    if ($trackedDirtyFiles.Count -gt 0) {
+        Write-Host ""
+        Write-Host "run-next: blocked."
+        Write-Host "Working tree is not clean."
+        Write-Host ""
+        Write-Host "Tracked changed files:"
+        foreach ($f in $trackedDirtyFiles) { Write-Host "  $f" }
+        Write-Host ""
+        Write-Host "Commit, stash, or revert existing changes before running run-next."
+        Write-Host ""
+        exit 1
+    }
+
     Write-Host ""
     Write-Host "Preparing assisted Claude Code turn..."
     Write-Host ""
