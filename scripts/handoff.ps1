@@ -498,8 +498,34 @@ function Invoke-RunNext {
     if ($claudeExit -eq 0) {
         Write-Host "Claude Code turn complete (exit 0)."
         Write-Host "Tests and lint were not run - execute them manually before committing."
-        Write-Host "Check AI_HANDOFF.md for updated state."
-        Write-Host "Run 'handoff.ps1 status' to see the new state."
+        Write-Host ""
+
+        # Re-read AI_HANDOFF.md to get post-Claude state (pre-run values are stale)
+        $script:Lines       = Get-Content -Path $HandoffFile
+        $freshStatusLines   = Get-SectionLines -Lines $script:Lines -Heading "Status"
+        $script:State       = "(unknown)"
+        $script:WaitingFor  = "(unknown)"
+        $script:CurrentTask = "(unknown)"
+        foreach ($line in $freshStatusLines) {
+            if ($line -match "^- State:\s*(.+)")        { $script:State       = $Matches[1].Trim() }
+            if ($line -match "^- Waiting For:\s*(.+)")  { $script:WaitingFor  = $Matches[1].Trim() }
+            if ($line -match "^- Current Task:\s*(.+)") { $script:CurrentTask = $Matches[1].Trim() }
+        }
+
+        # Refresh NEXT_TURN.md with the updated state
+        try { Invoke-Next -Silent $true } catch { Write-Host "Could not refresh NEXT_TURN.md: $_" }
+
+        if ($script:State -eq "READY_FOR_REVIEW" -and $script:WaitingFor -eq "Codex") {
+            $pasteInstruction = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+            try { Set-Clipboard -Value $pasteInstruction } catch { Write-Host "Could not copy to clipboard: $_" }
+            Write-Host "NEXT_TURN.md updated for Codex review."
+            Write-Host ""
+            Write-Host "Open Codex and press Ctrl+V."
+            Write-Host "Do not commit before Codex review."
+        } else {
+            Write-Host "State is now: $($script:State) (Waiting For: $($script:WaitingFor))"
+            Write-Host "Run 'handoff.ps1 next' to prepare the next turn."
+        }
     } else {
         Write-Host "Claude Code exited with error (code: $claudeExit)."
         Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
