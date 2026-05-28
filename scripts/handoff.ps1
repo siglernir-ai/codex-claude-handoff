@@ -171,24 +171,31 @@ function Invoke-Next {
     if (-not $Silent) {
         Write-Host ""
         Write-Host "NEXT_TURN.md written."
-        Write-Host "Open:  $actor"
-        Write-Host "Paste: $pasteInstruction"
-        Write-Host ""
 
-        if ($Clip -or $MenuMode) {
-            try {
-                Set-Clipboard -Value $pasteInstruction
-                if ($MenuMode) {
-                    Write-Host "Copied to clipboard. Open $actor and press Ctrl+V."
-                } else {
-                    Write-Host "Copied to clipboard. Paste with Ctrl+V."
+        if ($actor -eq "User") {
+            Write-Host "Next actor: User"
+            Write-Host "No tool handoff needed."
+            Write-Host "Review the status, start a new request, or run commit-check if you are about to commit."
+        } else {
+            Write-Host "Open:  $actor"
+            Write-Host "Paste: $pasteInstruction"
+            Write-Host ""
+
+            if ($Clip -or $MenuMode) {
+                try {
+                    Set-Clipboard -Value $pasteInstruction
+                    if ($MenuMode) {
+                        Write-Host "Copied to clipboard. Open $actor and press Ctrl+V."
+                    } else {
+                        Write-Host "Copied to clipboard. Paste with Ctrl+V."
+                    }
+                } catch {
+                    Write-Host "Could not copy to clipboard: $_"
+                    Write-Host "Copy the Paste line manually."
                 }
-            } catch {
-                Write-Host "Could not copy to clipboard: $_"
+            } else {
                 Write-Host "Copy the Paste line manually."
             }
-        } else {
-            Write-Host "Copy the Paste line manually."
         }
     }
     Write-Host ""
