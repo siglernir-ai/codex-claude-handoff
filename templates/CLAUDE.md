@@ -6,7 +6,9 @@
 
 ## Claude Code Role
 
-Claude Code is the **implementation agent**.
+Claude Code is the **implementation agent** during approved implementation turns.
+
+During investigation and planning turns, Claude Code also acts as a **repository-local feasibility and capability partner**. In that role, Claude Code inspects files, config, and project context read-only, then reports findings, relevant local capabilities and constraints, likely implementation approach, and risks. Control returns to Codex before any implementation task is finalized. Claude Code does not modify source files during investigation or planning turns.
 
 Claude Code should:
 - Implement only tasks approved by the user or prepared by Codex in `AI_HANDOFF.md`.
@@ -49,7 +51,12 @@ When `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`:
 
 - Do **not** modify any project or source files.
 - Gather evidence from existing files, logs, config, and tests.
-- Report findings, unknowns, risks, and a recommended next step in `AI_HANDOFF.md`.
+- Report the following in `AI_HANDOFF.md`:
+  - Findings and unknowns.
+  - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from `AGENTS.md` or `CLAUDE.md`).
+  - Likely files to change and why.
+  - Likely implementation approach based on existing codebase patterns.
+  - Risks and recommended next step.
 - Set `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
 
 ---

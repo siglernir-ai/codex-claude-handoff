@@ -12,8 +12,10 @@ Use this skill to operate the Codex side of the Codex-Claude handoff protocol.
 Default role split:
 
 - Codex acts as advisor, architect, task writer, and reviewer.
-- Claude Code acts as the implementation agent.
+- Claude Code acts as the implementation agent. During investigation and planning turns, Claude Code also acts as a repository-local feasibility and capability partner: it inspects the codebase read-only, reports available local capabilities, likely implementation approach, and risks, and helps Codex produce better task instructions before any implementation is finalized.
 - The user remains the approval point.
+
+This dual role is read-only during consultation. Claude Code does not modify source files during investigation or planning turns. Control returns to Codex before any implementation task is finalized.
 
 This is the recommended default. A project may override it explicitly in AGENTS.md, CLAUDE.md, or AI_HANDOFF.md, but the override must be documented clearly.
 
@@ -64,6 +66,14 @@ Codex may:
 - Update AI_HANDOFF.md when appropriate.
 
 Codex should not modify source code unless the user explicitly asks.
+
+Before finalizing task instructions, Codex should consider routing to `NEEDS_INVESTIGATION` when:
+- The task is unclear or implementation-uncertain and a read-only Claude Code pass would improve the task description.
+- The task affects multiple files, systems, architecture, or project conventions that Codex has not verified.
+- The task depends on scripts, tools, configs, skills, or local implementation constraints whose current state Codex has not confirmed.
+- A read-only Claude Code pass would improve correctness, feasibility, safety, or execution quality more than it adds overhead.
+
+This does not apply to simple, clear, low-risk tasks with well-understood scope. Advisory answers and small single-file changes do not need consultation.
 
 ## Preparing a Task for Claude Code
 
@@ -200,7 +210,12 @@ Claude Code must not modify any project or source files.
 
 Claude Code should:
 1. Gather evidence from existing files, logs, config, and tests.
-2. Report findings, unknowns, risks, and recommended next step.
+2. Report in AI_HANDOFF.md:
+   - Findings and unknowns.
+   - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from AGENTS.md or CLAUDE.md).
+   - Likely files to change and why.
+   - Likely implementation approach based on existing codebase patterns.
+   - Risks and recommended next step.
 3. Update AI_HANDOFF.md and set State to READY_FOR_REVIEW and Waiting For to Codex.
 
 ## Planning Gate
@@ -272,20 +287,28 @@ If this skill is unavailable in a future session, Codex should:
 1. Read .agents/skills/codex-claude-handoff/SKILL.md if it exists in the project.
 2. Follow its contents as local protocol instructions.
 
-## Claude Skill Awareness
+## Local Capability Awareness
 
-Codex may ask Claude whether relevant project-local or global Claude skills exist when:
+Codex may ask Claude about relevant local capabilities when:
 
 - Context is missing for a risky or unfamiliar task.
-- The user reports a skill change.
+- The task depends on scripts, tools, configs, or conventions whose current state Codex has not verified.
+- The user reports a skill, config, or tooling change.
 - A memory or context skill might help recover prior decisions, constraints, or risks.
 
+Local capabilities include:
+- Project-local and global Claude skills.
+- Available scripts and their behaviors (e.g. `scripts/handoff.ps1`, `scripts/next-step.ps1`).
+- Project configs, conventions, and tooling constraints.
+- Available verification commands (typecheck, lint, test).
+- Implementation constraints documented in `AGENTS.md`, `CLAUDE.md`, or repo structure.
+
 When asked, Claude should:
-- Report only relevant skills.
-- Use memory/context skills to recover task-relevant prior decisions if available.
+- Report only capabilities relevant to the current task.
+- Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-Codex should not ask for skill status every session — only when it adds value.
+Codex should not request capability status every session — only when it adds value for a risky, multi-file, or implementation-uncertain task.
 
 ## Allowed States
 

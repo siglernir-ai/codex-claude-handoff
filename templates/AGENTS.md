@@ -68,6 +68,14 @@ Codex should:
 
 > Default behavior: Codex should not modify project source code unless the user explicitly asks. Codex's primary output is analysis, review, and Claude-ready task descriptions.
 
+Before finalizing task instructions, Codex should consider routing to `NEEDS_INVESTIGATION` when:
+- The task is unclear or implementation-uncertain and a read-only Claude Code pass would improve the task description.
+- The task affects multiple files, systems, architecture, or project conventions that Codex has not verified.
+- The task depends on scripts, tools, configs, skills, or local implementation constraints whose current state Codex has not confirmed.
+- A read-only Claude Code pass would improve correctness, feasibility, safety, or execution quality more than it adds overhead.
+
+This does not apply to simple, clear, low-risk tasks with well-understood scope. Advisory answers and small single-file changes do not need consultation.
+
 ---
 
 ## Coordination Protocol
@@ -217,11 +225,16 @@ If any are required, set `State: WAITING_FOR_USER` and document the required act
 
 ## Investigation Gate
 
-When the current task requires information that is not yet available:
+When the current task requires information that is not yet available, or when Codex needs Claude Code to act as a repository-local feasibility and capability partner before finalizing task instructions:
 
 1. Codex sets `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`.
 2. Claude Code gathers evidence only — no source-file edits.
-3. Claude Code reports findings, unknowns, risks, and recommended next step in `AI_HANDOFF.md`.
+3. Claude Code reports in `AI_HANDOFF.md`:
+   - Findings and unknowns.
+   - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from `AGENTS.md` or `CLAUDE.md`).
+   - Likely files to change and why.
+   - Likely implementation approach based on existing codebase patterns.
+   - Risks and recommended next step.
 4. Claude Code sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
 
 ---
@@ -325,20 +338,28 @@ If the `codex-claude-handoff` skill is unavailable, Codex should:
 
 ---
 
-## Claude Skill Awareness
+## Local Capability Awareness
 
-Codex may ask Claude whether relevant project-local or global Claude skills exist when:
+Codex may ask Claude about relevant local capabilities when:
 
 - Context is missing for a risky or unfamiliar task.
-- The user reports a skill change.
+- The task depends on scripts, tools, configs, or conventions whose current state Codex has not verified.
+- The user reports a skill, config, or tooling change.
 - A memory or context skill might help recover prior decisions, constraints, or risks.
 
+Local capabilities include:
+- Project-local and global Claude skills.
+- Available scripts and their behaviors.
+- Project configs, conventions, and tooling constraints.
+- Available verification commands (typecheck, lint, test).
+- Implementation constraints documented in `AGENTS.md`, `CLAUDE.md`, or repo structure.
+
 When asked, Claude should:
-- Report only relevant skills.
-- Use memory/context skills to recover task-relevant prior decisions if available.
+- Report only capabilities relevant to the current task.
+- Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-Codex should not ask for skill status every session — only when it adds value.
+Codex should not request capability status every session — only when it adds value for a risky, multi-file, or implementation-uncertain task.
 
 ---
 
