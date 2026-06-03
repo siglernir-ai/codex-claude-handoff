@@ -484,23 +484,55 @@ Verified behavior:
 - User committed and pushed: `0ca1576 Improve AI chat error state UX`.
 - Final gym status was clean.
 
+## Shared Skill Architecture
+
+The protocol ships with a shared canonical skill folder that both Codex and Claude Code can discover via lightweight adapter stubs.
+
+### Layout
+
+```text
+.ai/skills/codex-claude-handoff/    ← shared source of truth
+  README.md       human-facing overview
+  SKILL.md        shared protocol index and role split (skill entrypoint)
+  CODEX.md        Codex-specific behavior, decision router, gates, states
+  CLAUDE.md       Claude Code-specific behavior, investigation mode, planning mode
+  VERSION         installed protocol version
+
+.agents/skills/codex-claude-handoff/SKILL.md   ← Codex discovery adapter
+.claude/skills/codex-claude-handoff/SKILL.md   ← Claude Code discovery adapter
+```
+
+The adapter files are small stubs. All protocol content lives in `.ai/skills/codex-claude-handoff/`.
+
+### File Roles
+
+| File | Role |
+|---|---|
+| `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth — protocol index and role split |
+| `.ai/skills/codex-claude-handoff/CODEX.md` | Codex-specific protocol |
+| `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code-specific protocol |
+| `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter — points to `.ai/` |
+| `.claude/skills/codex-claude-handoff/SKILL.md` | Claude Code-facing discovery adapter — points to `.ai/` |
+| Root `CLAUDE.md` | Claude Code **operational behavior** file (customized per project) — separate from the skill folder |
+| `AI_HANDOFF.md` | Execution state — dynamic, local, not committed |
+
+Root `CLAUDE.md` remains the Claude Code operational behavior file. It is not replaced by the skill folder.
+
+### Install
+
+The installer copies the canonical shared folder and both adapter stubs into target projects. Existing files are never overwritten.
+
 ## Codex Skill
 
-This repository also includes a Codex Skill for the handoff protocol.
+This repository includes a Codex Skill for the handoff protocol.
 
-Skill path:
+Codex adapter path:
 
 ```text
 .agents/skills/codex-claude-handoff/SKILL.md
 ```
 
-The skill teaches Codex how to operate its side of the protocol.
-
-It defines the default role split:
-
-- Codex acts as advisor, architect, task writer, and reviewer.
-- Claude Code acts as the implementation agent.
-- The user remains the approval point.
+This adapter points to the canonical shared protocol at `.ai/skills/codex-claude-handoff/`. When active, Codex reads `CODEX.md` for its full protocol and `SKILL.md` for the shared index.
 
 When active, Codex should:
 
@@ -553,10 +585,26 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\p
 
 The installer copies these files into the target project:
 
+**Root protocol files:**
 ```text
 AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
+```
+
+**Shared canonical skill architecture:**
+```text
+.ai/skills/codex-claude-handoff/VERSION
+.ai/skills/codex-claude-handoff/README.md
+.ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/CODEX.md
+.ai/skills/codex-claude-handoff/CLAUDE.md
+```
+
+**Tool-specific skill adapters:**
+```text
+.agents/skills/codex-claude-handoff/SKILL.md
+.claude/skills/codex-claude-handoff/SKILL.md
 ```
 
 It also creates or updates:
@@ -565,25 +613,39 @@ It also creates or updates:
 .gitignore
 ```
 
-and ensures this rule exists:
+and ensures these rules exist:
 
 ```gitignore
 AI_HANDOFF.md
+NEXT_TURN.md
+USER_REQUEST.md
 ```
 
 ### Safety behavior
 
-The installer does not overwrite existing protocol files.
+The installer does not overwrite existing protocol files or skill files.
 
 If any of these files already exist in the target project, they are skipped:
 
+**Root files:**
 ```text
 AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
 ```
 
-This prevents accidental loss of project-specific instructions.
+**Skill files:**
+```text
+.ai/skills/codex-claude-handoff/VERSION
+.ai/skills/codex-claude-handoff/README.md
+.ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/CODEX.md
+.ai/skills/codex-claude-handoff/CLAUDE.md
+.agents/skills/codex-claude-handoff/SKILL.md
+.claude/skills/codex-claude-handoff/SKILL.md
+```
+
+This prevents accidental loss of project-specific instructions or customized skill adapters.
 
 ### Verify after install
 
@@ -599,9 +661,16 @@ Expected result:
 AGENTS.md
 CLAUDE.md
 .gitignore
+.ai/skills/codex-claude-handoff/VERSION
+.ai/skills/codex-claude-handoff/README.md
+.ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/CODEX.md
+.ai/skills/codex-claude-handoff/CLAUDE.md
+.agents/skills/codex-claude-handoff/SKILL.md
+.claude/skills/codex-claude-handoff/SKILL.md
 ```
 
-`AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git.
+`AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md` and `USER_REQUEST.md`.
 
 ## Manual Install - Step by Step
 

@@ -57,20 +57,21 @@ if (-not (Test-Path $GitignorePath)) {
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
+    $lines = $GitignoreContent -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
 
     $addedRules = [System.Collections.Generic.List[string]]::new()
 
-    if (-not ($GitignoreContent -match "(?m)^AI_HANDOFF\.md$")) {
+    if ($lines -notcontains "AI_HANDOFF.md") {
         Add-Content -Path $GitignorePath -Value "`n# Local AI handoff context`nAI_HANDOFF.md"
         $addedRules.Add("AI_HANDOFF.md")
     }
 
-    if (-not ($GitignoreContent -match "(?m)^NEXT_TURN\.md$")) {
+    if ($lines -notcontains "NEXT_TURN.md") {
         Add-Content -Path $GitignorePath -Value "NEXT_TURN.md"
         $addedRules.Add("NEXT_TURN.md")
     }
 
-    if (-not ($GitignoreContent -match "(?m)^USER_REQUEST\.md$")) {
+    if ($lines -notcontains "USER_REQUEST.md") {
         Add-Content -Path $GitignorePath -Value "USER_REQUEST.md"
         $addedRules.Add("USER_REQUEST.md")
     }
@@ -78,7 +79,41 @@ else {
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md and NEXT_TURN.md"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md"
+    }
+}
+
+# Install shared canonical skill folder and adapter stubs
+$SkillFiles = @(
+    ".ai/skills/codex-claude-handoff/VERSION",
+    ".ai/skills/codex-claude-handoff/README.md",
+    ".ai/skills/codex-claude-handoff/SKILL.md",
+    ".ai/skills/codex-claude-handoff/CODEX.md",
+    ".ai/skills/codex-claude-handoff/CLAUDE.md",
+    ".agents/skills/codex-claude-handoff/SKILL.md",
+    ".claude/skills/codex-claude-handoff/SKILL.md"
+)
+
+foreach ($RelPath in $SkillFiles) {
+    $NormPath    = $RelPath -replace "/", [System.IO.Path]::DirectorySeparatorChar
+    $SourceFile  = Join-Path $TemplatesDir $NormPath
+    $TargetFile  = Join-Path $TargetPath $NormPath
+    $TargetDir   = Split-Path -Parent $TargetFile
+
+    if (-not (Test-Path $SourceFile)) {
+        Write-Host "Warning: Missing skill template: $RelPath"
+        continue
+    }
+
+    if (Test-Path $TargetFile) {
+        Write-Host "Skipped existing skill file: $RelPath"
+    }
+    else {
+        if (-not (Test-Path $TargetDir)) {
+            New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+        }
+        Copy-Item -Path $SourceFile -Destination $TargetFile
+        Write-Host "Copied skill: $RelPath"
     }
 }
 

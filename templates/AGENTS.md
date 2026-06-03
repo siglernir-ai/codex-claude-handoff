@@ -333,8 +333,10 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 
 If the `codex-claude-handoff` skill is unavailable, Codex should:
 
-1. Read `.agents/skills/codex-claude-handoff/SKILL.md` if it exists in the project.
-2. Follow its contents as local protocol instructions.
+1. Read `.agents/skills/codex-claude-handoff/SKILL.md` — it will point to the canonical shared folder.
+2. Read `.ai/skills/codex-claude-handoff/CODEX.md` for the full Codex-specific protocol.
+3. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role split.
+4. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
 
 ---
 
