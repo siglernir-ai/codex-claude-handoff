@@ -23,7 +23,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 
 | File | Contents |
 |---|---|
-| `SKILL.md` | This file — shared protocol index and role split |
+| `SKILL.md` | This file - shared protocol index and role split |
 | `CODEX.md` | Codex-specific behavior: decision router, gates, states, responsibilities, and rules |
 | `CLAUDE.md` | Claude Code-specific behavior: investigation mode, planning mode, implementation rules, and states |
 | `README.md` | Human-facing overview of this folder |
@@ -38,9 +38,9 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 
 When this protocol is active, expect these files in the project root:
 
-- `AGENTS.md` — Codex behavior, project context, architecture rules, and review rules
-- `CLAUDE.md` — Claude Code operational behavior
-- `AI_HANDOFF.md` — current state, who acts next, changed files, verification, risks, and next step
+- `AGENTS.md` - Codex behavior, project context, architecture rules, and review rules
+- `CLAUDE.md` - Claude Code operational behavior
+- `AI_HANDOFF.md` - current state, who acts next, changed files, verification, risks, and next step
 
 ## Encoding-Safe Handoff Rule
 
@@ -49,6 +49,6 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 - **Never copy UI text from handoff files.** `AI_HANDOFF.md` and `NEXT_TURN.md` may contain garbled or corrupted characters if the author's terminal encoding was unstable. Do not use that text as a search string, a match pattern, or text to insert.
 - **Write semantic English descriptions in handoff files.** Describe what the text means rather than copying the literal characters.
 - **Always inspect the source file directly.** Before editing, searching for, or reviewing any UI string, open the actual source file and read the text from there.
-- **Point to the exact location.** Reference the file path, component name, line number, or a nearby code comment — not the raw text itself.
+- **Point to the exact location.** Reference the file path, component name, line number, or a nearby code comment - not the raw text itself.
 - **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
 - **The source of truth for UI text is the source file, not the handoff.**

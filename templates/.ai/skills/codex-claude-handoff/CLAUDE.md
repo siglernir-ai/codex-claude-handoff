@@ -1,4 +1,4 @@
-# Codex-Claude Handoff — Claude Code Protocol
+# Codex-Claude Handoff - Claude Code Protocol
 
 Use this file for Claude Code-specific behavior in the Codex-Claude handoff protocol.
 
