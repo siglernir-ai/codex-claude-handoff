@@ -117,9 +117,41 @@ foreach ($RelPath in $SkillFiles) {
     }
 }
 
+# Install workflow scripts
+$WorkflowScripts = @(
+    "scripts/handoff.ps1",
+    "scripts/next-step.ps1"
+)
+
+foreach ($RelPath in $WorkflowScripts) {
+    $NormPath    = $RelPath -replace "/", [System.IO.Path]::DirectorySeparatorChar
+    $SourceFile  = Join-Path $TemplatesDir $NormPath
+    $TargetFile  = Join-Path $TargetPath $NormPath
+    $TargetDir   = Split-Path -Parent $TargetFile
+
+    if (-not (Test-Path $SourceFile)) {
+        Write-Host "Warning: Missing workflow script template: $RelPath"
+        continue
+    }
+
+    if (Test-Path $TargetFile) {
+        Write-Host "Skipped existing workflow script: $RelPath"
+    }
+    else {
+        if (-not (Test-Path $TargetDir)) {
+            New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+        }
+        Copy-Item -Path $SourceFile -Destination $TargetFile
+        Write-Host "Copied workflow script: $RelPath"
+    }
+}
+
 Write-Host ""
 Write-Host "Install complete."
 Write-Host "Next steps:"
 Write-Host "1. Open AGENTS.md and customize the project context."
 Write-Host "2. Review CLAUDE.md."
 Write-Host "3. Use AI_HANDOFF.md to start the first task."
+Write-Host "4. Run workflow commands from the target project root:"
+Write-Host "   - .\scripts\handoff.ps1 status"
+Write-Host "   - .\scripts\handoff.ps1 next"

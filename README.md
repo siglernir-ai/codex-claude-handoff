@@ -607,6 +607,12 @@ AI_HANDOFF.md
 .claude/skills/codex-claude-handoff/SKILL.md
 ```
 
+**Workflow scripts:**
+```text
+scripts/handoff.ps1
+scripts/next-step.ps1
+```
+
 It also creates or updates:
 
 ```text
@@ -645,7 +651,13 @@ AI_HANDOFF.md
 .claude/skills/codex-claude-handoff/SKILL.md
 ```
 
-This prevents accidental loss of project-specific instructions or customized skill adapters.
+**Workflow scripts:**
+```text
+scripts/handoff.ps1
+scripts/next-step.ps1
+```
+
+This prevents accidental loss of project-specific instructions, customized skill adapters, or customized workflow scripts.
 
 ### Verify after install
 
@@ -668,9 +680,20 @@ CLAUDE.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .agents/skills/codex-claude-handoff/SKILL.md
 .claude/skills/codex-claude-handoff/SKILL.md
+scripts/handoff.ps1
+scripts/next-step.ps1
 ```
 
 `AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md` and `USER_REQUEST.md`.
+
+Then verify the workflow scripts work:
+
+```powershell
+.\scripts\handoff.ps1 status
+.\scripts\handoff.ps1 next
+```
+
+Both commands should run successfully from the target project root.
 
 ## Manual Install - Step by Step
 
