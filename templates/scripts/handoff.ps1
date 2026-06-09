@@ -300,7 +300,7 @@ function Invoke-CommitCheck {
                 }
             }
         } catch {
-            # git unavailable — skip mismatch check
+            # git unavailable - skip mismatch check
         }
 
         # Clean tree: no tracked source changes to commit
@@ -414,7 +414,7 @@ function Invoke-Menu {
 function Invoke-RunNext {
     $eligibleStates = @("READY_FOR_IMPLEMENTATION")
 
-    # Dual eligibility check — actor first, then state
+    # Dual eligibility check - actor first, then state
     if ($WaitingFor -ne "Claude Code") {
         Write-Host ""
         Write-Host "run-next: blocked."
@@ -496,7 +496,7 @@ function Invoke-RunNext {
     Write-Host "Note: Tests and lint cannot run during this turn (Bash is blocked). Run them manually after."
     Write-Host ""
 
-    # Refresh NEXT_TURN.md (silent — suppress manual paste/copy guidance)
+    # Refresh NEXT_TURN.md (silent - suppress manual paste/copy guidance)
     Write-Host "Refreshing NEXT_TURN.md..."
     try {
         Invoke-Next -Silent $true

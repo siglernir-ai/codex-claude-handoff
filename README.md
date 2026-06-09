@@ -91,7 +91,7 @@ Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handof
 
 `NEXT_TURN.md` does not replace `AI_HANDOFF.md`. The target tool must still read `AI_HANDOFF.md` before acting. `AI_HANDOFF.md` remains the source of truth.
 
-`NEXT_TURN.md` is ephemeral and local — it is always re-generated and must never be committed. The install script adds it to `.gitignore` automatically.
+`NEXT_TURN.md` is ephemeral and local - it is always re-generated and must never be committed. The install script adds it to `.gitignore` automatically.
 
 You can combine both flags:
 
@@ -125,7 +125,7 @@ Example output:
 State:        REVIEW_DONE
 Waiting For:  User
 Task:         v0.9.1 - Encoding-safe handoff instructions
-Commit:       ALLOWED — Codex approved. Commit only the files listed under Changed Files.
+Commit:       ALLOWED - Codex approved. Commit only the files listed under Changed Files.
 ```
 
 ### `next`
@@ -148,7 +148,7 @@ Save your request to the local ignored file `USER_REQUEST.md` and print a ready-
 
 Codex remains the decision router. The prompt tells Codex to read `USER_REQUEST.md`, `AI_HANDOFF.md`, and local protocol instructions before routing.
 
-`USER_REQUEST.md` is ephemeral and local — it is never committed. The install script adds it to `.gitignore` automatically.
+`USER_REQUEST.md` is ephemeral and local - it is never committed. The install script adds it to `.gitignore` automatically.
 
 ### `commit-check`
 
@@ -175,11 +175,11 @@ Run one Claude Code turn automatically. Requires `npx`; a network connection is 
 
 | State | Waiting For | What to do instead |
 |---|---|---|
-| READY_FOR_IMPLEMENTATION | Claude Code | Eligible — run-next proceeds |
-| NEEDS_INVESTIGATION | Claude Code | Blocked — run `next` and paste manually |
-| PLAN_REQUIRED | Claude Code | Blocked — run `next` and paste manually |
-| Any | Codex | Blocked — open ChatGPT and paste the prompt |
-| Any | User | Blocked — see AI_HANDOFF.md |
+| READY_FOR_IMPLEMENTATION | Claude Code | Eligible - run-next proceeds |
+| NEEDS_INVESTIGATION | Claude Code | Blocked - run `next` and paste manually |
+| PLAN_REQUIRED | Claude Code | Blocked - run `next` and paste manually |
+| Any | Codex | Blocked - open ChatGPT and paste the prompt |
+| Any | User | Blocked - see AI_HANDOFF.md |
 
 Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
 
@@ -190,10 +190,10 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 4. Prints the command it is about to run.
 5. Requires you to type exactly `yes` before proceeding.
 6. Runs one Claude Code turn with these constraints:
-   - `--permission-mode acceptEdits` — file edits auto-accepted in non-interactive mode
-   - `--disallowed-tools "Bash"` — shell execution explicitly blocked
-   - `--max-budget-usd N` — hard spending cap (default: $2)
-   - `--no-session-persistence` — session not saved or resumed
+   - `--permission-mode acceptEdits` - file edits auto-accepted in non-interactive mode
+   - `--disallowed-tools "Bash"` - shell execution explicitly blocked
+   - `--max-budget-usd N` - hard spending cap (default: $2)
+   - `--no-session-persistence` - session not saved or resumed
 7. Prints the result and exits.
 
 **Bash is blocked during the assisted turn.** Claude Code cannot run tests, typecheck, or lint. Run these manually after the turn completes.
@@ -283,7 +283,7 @@ Codex classifies this, selects a gate if needed, and updates `AI_HANDOFF.md`.
 You still approve all commits, pushes, deploys, DB work, migrations, secrets, and
 production changes.
 
-Codex uses a six-path decision router for natural requests: advisory (answer directly, no handoff), investigation, planning, implementation, user decision, and review. Advisory-first means Codex answers questions and advisory requests directly without creating a Claude Code task — only explicit action requests ("add", "fix", "implement") trigger a handoff. Risky topics phrased as questions stay advisory or route to a user decision, not automatic Claude Code tasks.
+Codex uses a six-path decision router for natural requests: advisory (answer directly, no handoff), investigation, planning, implementation, user decision, and review. Advisory-first means Codex answers questions and advisory requests directly without creating a Claude Code task - only explicit action requests ("add", "fix", "implement") trigger a handoff. Risky topics phrased as questions stay advisory or route to a user decision, not automatic Claude Code tasks.
 
 ## Daily Workflow
 
@@ -322,7 +322,7 @@ A typical handoff cycle looks like this:
 
 5. **User commits only the real source changes.** The user reviews the result and commits the approved source files. `AI_HANDOFF.md` is not committed.
 
-`AI_HANDOFF.md` is a working coordination file — it tracks current task state between tools and sessions. It is not a source file and should stay out of version control. A `.gitignore` rule for it is included in `gitignore-snippet.txt` and applied automatically by the install script. The user remains the final approval point for all commits and pushes.
+`AI_HANDOFF.md` is a working coordination file - it tracks current task state between tools and sessions. It is not a source file and should stay out of version control. A `.gitignore` rule for it is included in `gitignore-snippet.txt` and applied automatically by the install script. The user remains the final approval point for all commits and pushes.
 
 ## Protocol Gates
 
@@ -332,7 +332,7 @@ Three optional gates can be inserted before or after implementation depending on
 
 Use when information is missing before a task can be scoped.
 
-Codex sets `State: NEEDS_INVESTIGATION`. Claude Code gathers evidence only — no source-file edits. Claude Code reports findings and sets `State: READY_FOR_REVIEW`.
+Codex sets `State: NEEDS_INVESTIGATION`. Claude Code gathers evidence only - no source-file edits. Claude Code reports findings and sets `State: READY_FOR_REVIEW`.
 
 ### Planning Gate
 
@@ -340,7 +340,7 @@ Use for risky tasks (DB migrations, RLS/Auth, security, deployment, architecture
 
 **Codex must not write the implementation plan itself.** Codex's role is to: classify the task as risky or plan-required; set `State: PLAN_REQUIRED` and `Waiting For: Claude Code`; write clear plan-only instructions under `Next Recommended Step`.
 
-Claude Code writes a plan only — no source-file edits — and sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
+Claude Code writes a plan only - no source-file edits - and sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
 
 Codex reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), request changes (`PLAN_REQUIRED`), or require user approval (`WAITING_FOR_USER`).
 
@@ -376,7 +376,7 @@ If the `codex-claude-handoff` skill is unavailable, Codex should read `.agents/s
 
 Codex may ask Claude whether relevant project-local or global Claude skills exist when context is missing for a risky task, the user reports a skill change, or a memory/context skill might help recover prior decisions, constraints, or risks.
 
-When asked, Claude should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. Claude must not expose unrelated private memory. Codex should not ask every session — only when it adds value.
+When asked, Claude should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. Claude must not expose unrelated private memory. Codex should not ask every session - only when it adds value.
 
 ### v0.3.0 Out of Scope
 
@@ -450,7 +450,7 @@ Verified behavior:
 - Codex approved the final result.
 - Only the stable protocol files and the intended test output were committed.
 
-### v0.3.1 validation — Planning Gate and Verification Gate
+### v0.3.1 validation - Planning Gate and Verification Gate
 
 The v0.3.1 protocol gates were validated in a real project.
 
@@ -491,7 +491,7 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
 ### Layout
 
 ```text
-.ai/skills/codex-claude-handoff/    ← shared source of truth
+.ai/skills/codex-claude-handoff/    <- shared source of truth
   README.md        human-facing overview
   SKILL.md         shared protocol index and role split (skill entrypoint)
   CODEX.md         Codex-specific behavior, decision router, gates, states
@@ -499,8 +499,8 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
   CAPABILITIES.md  agent capability profile (what each agent is good at)
   VERSION          installed protocol version
 
-.agents/skills/codex-claude-handoff/SKILL.md   ← Codex discovery adapter
-.claude/skills/codex-claude-handoff/SKILL.md   ← Claude Code discovery adapter
+.agents/skills/codex-claude-handoff/SKILL.md   <- Codex discovery adapter
+.claude/skills/codex-claude-handoff/SKILL.md   <- Claude Code discovery adapter
 ```
 
 The adapter files are small stubs. All protocol content lives in `.ai/skills/codex-claude-handoff/`.
@@ -509,13 +509,13 @@ The adapter files are small stubs. All protocol content lives in `.ai/skills/cod
 
 | File | Role |
 |---|---|
-| `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth — protocol index and role split |
+| `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth - protocol index and role split |
 | `.ai/skills/codex-claude-handoff/CODEX.md` | Codex-specific protocol |
 | `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code-specific protocol |
-| `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter — points to `.ai/` |
-| `.claude/skills/codex-claude-handoff/SKILL.md` | Claude Code-facing discovery adapter — points to `.ai/` |
-| Root `CLAUDE.md` | Claude Code **operational behavior** file (customized per project) — separate from the skill folder |
-| `AI_HANDOFF.md` | Execution state — dynamic, local, not committed |
+| `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter - points to `.ai/` |
+| `.claude/skills/codex-claude-handoff/SKILL.md` | Claude Code-facing discovery adapter - points to `.ai/` |
+| Root `CLAUDE.md` | Claude Code **operational behavior** file (customized per project) - separate from the skill folder |
+| `AI_HANDOFF.md` | Execution state - dynamic, local, not committed |
 
 Root `CLAUDE.md` remains the Claude Code operational behavior file. It is not replaced by the skill folder.
 

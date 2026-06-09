@@ -153,7 +153,7 @@ Codex acts as the primary decision layer for natural user requests. Route every 
 
 | # | Path | When to use | What Codex does | `AI_HANDOFF.md` update? |
 |---|---|---|---|---|
-| 1 | Advisory only | Advice, assessment, explanation, comparison, recommendation, status — even if the topic could later become a code change | Answer the user directly; may inspect files read-only if needed | No (unless the user later explicitly approves or asks for action) |
+| 1 | Advisory only | Advice, assessment, explanation, comparison, recommendation, status - even if the topic could later become a code change | Answer the user directly; may inspect files read-only if needed | No (unless the user later explicitly approves or asks for action) |
 | 2 | Needs investigation | User asks Codex to inspect the codebase to understand feasibility, root cause, or what would be needed for a change | Set `NEEDS_INVESTIGATION` / `Waiting For: Claude Code` | Yes |
 | 3 | Needs planning | User explicitly asks to implement or prepare work in a risky area: DB, auth/RLS, security, AI routing, architecture, large refactor, deployment | Set `PLAN_REQUIRED` / `Waiting For: Claude Code` | Yes |
 | 4 | Ready for implementation | User explicitly asks for a simple, clear, non-risky change with well-defined scope | Set `READY_FOR_IMPLEMENTATION` / `Waiting For: Claude Code` | Yes |
@@ -179,15 +179,15 @@ If the user asks about a risky topic as a question, Codex may answer advisory an
 
 | User message | Path | Codex action |
 |---|---|---|
-| "What does this component do?" | 1 — Advisory | Answer directly; may read files read-only |
-| "Should we add streaming to the AI chat?" | 1 — Advisory or 5 — User decision | Answer with assessment and risks; or ask user to decide |
-| "Add streaming to the AI chat" | 3 — Planning | Set `PLAN_REQUIRED` |
-| "Check what would be needed to add streaming" | 2 — Investigation | Set `NEEDS_INVESTIGATION` |
-| "Fix the typo in the login button" | 4 — Implementation | Set `READY_FOR_IMPLEMENTATION` |
+| "What does this component do?" | 1 - Advisory | Answer directly; may read files read-only |
+| "Should we add streaming to the AI chat?" | 1 - Advisory or 5 - User decision | Answer with assessment and risks; or ask user to decide |
+| "Add streaming to the AI chat" | 3 - Planning | Set `PLAN_REQUIRED` |
+| "Check what would be needed to add streaming" | 2 - Investigation | Set `NEEDS_INVESTIGATION` |
+| "Fix the typo in the login button" | 4 - Implementation | Set `READY_FOR_IMPLEMENTATION` |
 
 ### Tiebreaker Rule
 
-When in doubt between two action paths, choose the safer one. A Planning Gate on a simple task costs one extra review cycle. A missing Planning Gate on a risky task can cause production incidents. Advisory is not a tiebreaker escape — if the user has explicitly asked for action, use an action path.
+When in doubt between two action paths, choose the safer one. A Planning Gate on a simple task costs one extra review cycle. A missing Planning Gate on a risky task can cause production incidents. Advisory is not a tiebreaker escape - if the user has explicitly asked for action, use an action path.
 
 ### AI_HANDOFF.md Update Rule
 
@@ -228,7 +228,7 @@ If any are required, set `State: WAITING_FOR_USER` and document the required act
 When the current task requires information that is not yet available, or when Codex needs Claude Code to act as a repository-local feasibility and capability partner before finalizing task instructions:
 
 1. Codex sets `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`.
-2. Claude Code gathers evidence only — no source-file edits.
+2. Claude Code gathers evidence only - no source-file edits.
 3. Claude Code reports in `AI_HANDOFF.md`:
    - Findings and unknowns.
    - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from `AGENTS.md` or `CLAUDE.md`).
@@ -253,9 +253,9 @@ Risky-task examples:
 When a task is risky, **Codex must not write the implementation plan itself**. Codex's role in this gate is to classify the task as risky, hand off to Claude Code, and write clear plan-only instructions under `Next Recommended Step`.
 
 1. Codex sets `State: PLAN_REQUIRED` and `Waiting For: Claude Code`, and writes plan-only instructions for Claude Code.
-2. Claude Code writes a plan only — no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence.
+2. Claude Code writes a plan only - no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence.
 3. Claude Code sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
-4. Codex reviews the plan. If approved → `READY_FOR_IMPLEMENTATION`. If changes needed → `PLAN_REQUIRED`. If user approval required → `WAITING_FOR_USER`.
+4. Codex reviews the plan. If approved -> `READY_FOR_IMPLEMENTATION`. If changes needed -> `PLAN_REQUIRED`. If user approval required -> `WAITING_FOR_USER`.
 5. Claude Code implements only after plan approval.
 
 ---
@@ -306,7 +306,7 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 - **Never copy UI text from handoff files.** `AI_HANDOFF.md` and `NEXT_TURN.md` may contain garbled or corrupted characters if the author's terminal encoding was unstable. Do not use that text as a search string, a match pattern, or text to insert.
 - **Write semantic English descriptions in handoff files.** Describe what the text means rather than copying the literal characters. Example: write "the Hebrew button label that means 'Save'" rather than attempting to copy the Hebrew word into the handoff file.
 - **Always inspect the source file directly.** Before editing, searching for, or reviewing any UI string, open the actual source file (component, translation file, string resource) and read the text from there.
-- **Point to the exact location.** When writing handoff instructions that involve UI text, reference the file path, component name, line number, or a nearby code comment — not the raw text itself.
+- **Point to the exact location.** When writing handoff instructions that involve UI text, reference the file path, component name, line number, or a nearby code comment - not the raw text itself.
 - **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
 - **The source of truth for UI text is the source file, not the handoff.** This rule does not change what text belongs in the product; Hebrew labels stay Hebrew in source. It only changes how agents refer to that text in handoff files.
 
@@ -333,7 +333,7 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 
 If the `codex-claude-handoff` skill is unavailable, Codex should:
 
-1. Read `.agents/skills/codex-claude-handoff/SKILL.md` — it will point to the canonical shared folder.
+1. Read `.agents/skills/codex-claude-handoff/SKILL.md` - it will point to the canonical shared folder.
 2. Read `.ai/skills/codex-claude-handoff/CODEX.md` for the full Codex-specific protocol.
 3. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role split.
 4. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
@@ -361,7 +361,7 @@ When asked, Claude should:
 - Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-Codex should not request capability status every session — only when it adds value for a risky, multi-file, or implementation-uncertain task.
+Codex should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task.
 
 ---
 
