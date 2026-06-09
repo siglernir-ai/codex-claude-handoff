@@ -365,6 +365,16 @@ Codex should not request capability status every session - only when it adds val
 
 ---
 
+## Two-Way Dialogue
+
+Either side may hand a scoped question back without involving the user. Every dialogue turn is discrete - the other actor takes an explicit turn; there is no automatic loop; commit stays blocked while a dialogue state is active.
+
+- `QUESTION_FOR_CLAUDE` - Codex asks Claude a scoped question (repo reality, feasibility, verification). Set `Waiting For: Claude Code`; Claude answers read-only under `## Dialogue / Open Questions` in `AI_HANDOFF.md`.
+- `QUESTION_FOR_CODEX` - Claude asks Codex a scoped question. Codex answers, then returns the State to Claude's working state and `Waiting For: Claude Code`.
+- `RE_GATE_REQUESTED` - Claude found the task riskier/larger than scoped. Codex re-routes through the Decision Router (usually `PLAN_REQUIRED` or `NEEDS_INVESTIGATION`).
+
+---
+
 ## Allowed States
 
 | State | Meaning |
@@ -377,5 +387,8 @@ Codex should not request capability status every session - only when it adds val
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
 | `REVIEW_DONE` | Codex reviewed and user decides next step. |
+| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
+| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |

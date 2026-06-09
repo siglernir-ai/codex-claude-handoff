@@ -904,6 +904,16 @@ git push
 
 Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 
+## Two-Way Dialogue
+
+The protocol supports scoped, two-directional questions so Codex and Claude Code can resolve uncertainty without escalating to the user. Each exchange is a discrete turn - there is no automatic loop, and commit stays blocked while a dialogue state is active.
+
+- `QUESTION_FOR_CODEX` - Claude Code asks Codex a scoped question (ambiguous scope, a design choice Codex owns). Codex answers, then returns the working state.
+- `QUESTION_FOR_CLAUDE` - Codex asks Claude Code a scoped question (repo reality, feasibility, verification). Claude answers read-only.
+- `RE_GATE_REQUESTED` - Claude Code finds mid-implementation that the task is riskier or larger than scoped; Codex re-routes it through the Decision Router.
+
+Questions and answers are logged under a `## Dialogue / Open Questions` section in `AI_HANDOFF.md`.
+
 ## Allowed States
 
 | State | Meaning |
@@ -916,6 +926,9 @@ Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
 | `REVIEW_DONE` | Codex reviewed and user decides next step. |
+| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
+| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
 

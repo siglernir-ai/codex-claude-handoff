@@ -100,6 +100,21 @@ $ActionMap = @{
         Action = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
         After  = "No handoff update required. Commit only the files listed under Changed Files."
     }
+    "QUESTION_FOR_CODEX"       = @{
+        Actor  = "Codex"
+        Action = "Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
+        After  = "Set State back to Claude Code's working state and Waiting For: Claude Code. Update AI_HANDOFF.md."
+    }
+    "QUESTION_FOR_CLAUDE"      = @{
+        Actor  = "Claude Code"
+        Action = "Answer Codex's question read-only under Dialogue / Open Questions. No source edits."
+        After  = "Set State back to the value Codex specified and Waiting For: Codex. Update AI_HANDOFF.md."
+    }
+    "RE_GATE_REQUESTED"        = @{
+        Actor  = "Codex"
+        Action = "Re-route the task; Claude Code found it riskier/larger than scoped."
+        After  = "Re-classify through the Decision Router and set State/Waiting For accordingly. Update AI_HANDOFF.md."
+    }
     "BLOCKED"                  = @{
         Actor  = "User"
         Action = "Resolve the blocking issue documented under Open Issues in AI_HANDOFF.md."

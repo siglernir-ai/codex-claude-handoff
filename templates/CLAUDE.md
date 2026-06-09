@@ -142,6 +142,9 @@ and explain the blocker under `Open Issues`.
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
 | `REVIEW_DONE` | Codex reviewed and user decides next step. |
+| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
+| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
 

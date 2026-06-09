@@ -56,6 +56,16 @@ When `State: PLAN_REQUIRED` and `Waiting For: Claude Code`:
 - Set `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
 - Implement only after the plan is approved and `State` returns to `READY_FOR_IMPLEMENTATION`.
 
+## Two-Way Dialogue
+
+The handoff is a dialogue, not only a one-way push. Claude Code may hand a scoped question or concern back to Codex without escalating to the user. Every dialogue turn is discrete: the other actor must take an explicit turn. There is no automatic loop, and commit stays blocked while any dialogue state is active.
+
+- `QUESTION_FOR_CODEX` - You need a scoped clarification or decision from Codex before continuing (ambiguous scope, conflicting instructions, a design choice Codex owns). Write the question under `## Dialogue / Open Questions` in `AI_HANDOFF.md`, set `State: QUESTION_FOR_CODEX` and `Waiting For: Codex`. Do not modify source files while waiting. When Codex answers, it returns the State to your working state.
+- `RE_GATE_REQUESTED` - While implementing, you discover the task is riskier or larger than its approved scope (a hidden migration, auth/security impact, a multi-system change). Stop editing, record findings under `## Dialogue / Open Questions` (and `Open Issues` if needed), set `State: RE_GATE_REQUESTED` and `Waiting For: Codex`. Codex re-routes the task (planning, investigation, or a revised scope).
+- `QUESTION_FOR_CLAUDE` - When Codex asks you a scoped question (repo reality, feasibility, verification constraints), answer read-only under `## Dialogue / Open Questions`, then set `State` back to the value Codex specified and `Waiting For: Codex`. Do not modify source files to answer.
+
+Keep each question specific and answerable in one turn. Prefer a question over guessing when correctness depends on the answer; reserve `BLOCKED` (Waiting For: User) for blockers that genuinely need the user.
+
 ## After Implementation
 
 After every significant implementation, update `AI_HANDOFF.md` with all fields below:
@@ -122,6 +132,9 @@ and explain the blocker under `Open Issues`.
 | `IMPLEMENTED` | Claude Code finished and no review is required. |
 | `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
 | `REVIEW_DONE` | Codex reviewed and user decides next step. |
+| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
+| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
 

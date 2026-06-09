@@ -28,6 +28,10 @@
 - Tests: [result or not run]
 - Manual Check: [expected vs actual, or not applicable]
 
+## Dialogue / Open Questions
+- None
+- (When State is QUESTION_FOR_CODEX, QUESTION_FOR_CLAUDE, or RE_GATE_REQUESTED, log one scoped exchange per turn here. Format: "[Q <Asker> -> <Responder>] ..." then "[A <Responder>] ..." - works both directions: "[Q Claude Code -> Codex] ..." / "[A Codex] ..." for QUESTION_FOR_CODEX, and "[Q Codex -> Claude Code] ..." / "[A Claude Code] ..." for QUESTION_FOR_CLAUDE. Each exchange is a discrete turn; no auto-loop.)
+
 ## Open Issues
 - Define the first task for Codex or Claude Code.
 

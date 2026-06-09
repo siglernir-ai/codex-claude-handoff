@@ -273,6 +273,16 @@ Codex should consult Claude Code by default, before finalizing a task, whenever 
 
 In those cases, prefer a read-only `NEEDS_INVESTIGATION` pass first. This is not extra overhead: it is the cheapest way to make a task correct before implementation. Reserve direct-to-implementation for simple, clear, low-risk changes whose correctness does not depend on unverified repo state.
 
+## Two-Way Dialogue
+
+Consultation runs in both directions, and either side may hand a scoped question back without involving the user. Every dialogue turn is discrete - the other actor takes an explicit turn; there is no automatic loop; commit stays blocked while a dialogue state is active.
+
+- `QUESTION_FOR_CLAUDE` - When you need a scoped answer from Claude (what the repo actually does, feasibility, which checks exist) before finalizing a task, write the question under `## Dialogue / Open Questions` in `AI_HANDOFF.md`, set `State: QUESTION_FOR_CLAUDE` and `Waiting For: Claude Code`. Claude answers read-only and hands back.
+- `QUESTION_FOR_CODEX` - When Claude asks you a scoped question, answer under `## Dialogue / Open Questions`, then set the State back to Claude's working state (for example `READY_FOR_IMPLEMENTATION`) and `Waiting For: Claude Code`.
+- `RE_GATE_REQUESTED` - When Claude reports mid-implementation that the task is riskier or larger than scoped, treat it as a re-routing request: re-classify through the Decision Router (usually `PLAN_REQUIRED` or `NEEDS_INVESTIGATION`), or set a revised `READY_FOR_IMPLEMENTATION` scope. Do not simply push the same task back unchanged.
+
+Use this instead of forcing Claude to choose between guessing and `BLOCKED`. Keep each exchange to one focused question per turn.
+
 ## Local Capability Awareness
 
 Codex should consult Claude by default when correctness depends on current repo behavior, local implementation details, or verification constraints. Concretely, consult Claude when:
@@ -322,6 +332,9 @@ Use these states consistently:
 - IMPLEMENTED
 - READY_FOR_REVIEW
 - REVIEW_DONE
+- QUESTION_FOR_CODEX
+- QUESTION_FOR_CLAUDE
+- RE_GATE_REQUESTED
 - BLOCKED
 - WAITING_FOR_USER
 
