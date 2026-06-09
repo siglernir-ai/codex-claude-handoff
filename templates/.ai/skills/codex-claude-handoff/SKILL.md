@@ -26,6 +26,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `SKILL.md` | This file - shared protocol index and role split |
 | `CODEX.md` | Codex-specific behavior: decision router, gates, states, responsibilities, and rules |
 | `CLAUDE.md` | Claude Code-specific behavior: investigation mode, planning mode, implementation rules, and states |
+| `CAPABILITIES.md` | Agent capability profile: what each agent is good at and when to consult it |
 | `README.md` | Human-facing overview of this folder |
 | `VERSION` | Installed protocol version |
 

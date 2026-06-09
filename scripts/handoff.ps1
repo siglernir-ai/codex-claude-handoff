@@ -120,6 +120,10 @@ function Invoke-Status {
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
     Write-Host "Commit:       $CommitStatus"
+    $skillAdapter = Join-Path (Get-Location) ".agents/skills/codex-claude-handoff/SKILL.md"
+    if (Test-Path $skillAdapter) {
+        Write-Host "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; Codex adapter: .agents/skills/codex-claude-handoff/SKILL.md)"
+    }
     Write-Host ""
 }
 
@@ -228,7 +232,7 @@ function Invoke-Start {
         }
     }
 
-    $codexPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Codex Decision Router.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
+    $codexPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Codex Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Claude investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 
     Write-Host ""
     Write-Host "=== Codex Entry Prompt ==="

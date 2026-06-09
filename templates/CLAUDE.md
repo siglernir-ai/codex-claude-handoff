@@ -2,6 +2,8 @@
 
 > `AGENTS.md` may be used only for stable project context such as stack, architecture rules, and forbidden files. Do not treat `AGENTS.md` as Claude behavior instructions.
 
+> Skill location: when asked to find or identify the handoff skill, do not search only `.claude/skills/`. The Codex-facing adapter is at `.agents/skills/codex-claude-handoff/SKILL.md` and the canonical shared protocol is at `.ai/skills/codex-claude-handoff/`. Your behavior is driven by this `CLAUDE.md` and the current `AI_HANDOFF.md`.
+
 ---
 
 ## Claude Code Role

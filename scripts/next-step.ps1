@@ -99,7 +99,7 @@ if ($State -eq "NEEDS_ANALYSIS" -and $WaitingFor -eq "Codex") {
     Write-Host "Action: Classify the task and set the correct State and Waiting For."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md.`nClassify the task and set the correct state.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md.`nClassify the task and set the correct state.`nWhen correctness depends on current repo behavior, local details, or verification constraints, default to a read-only Claude investigation pass before finalizing.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Classify the task and set the correct State and Waiting For."
