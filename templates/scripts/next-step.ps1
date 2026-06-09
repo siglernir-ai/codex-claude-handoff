@@ -61,6 +61,9 @@ $ExpectedWaiting = @{
     "READY_FOR_IMPLEMENTATION" = "Claude Code"
     "READY_FOR_REVIEW"         = "Codex"
     "REVIEW_DONE"              = "User"
+    "QUESTION_FOR_CODEX"       = "Codex"
+    "QUESTION_FOR_CLAUDE"      = "Claude Code"
+    "RE_GATE_REQUESTED"        = "Codex"
     "BLOCKED"                  = "User"
     "WAITING_FOR_USER"         = "User"
 }
@@ -180,6 +183,42 @@ elseif ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
     Write-Host "Commit: ALLOWED - Codex approved. Commit only the files listed under Changed Files."
     $ActionLine = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
     $AfterLine = "No handoff update required. Commit only the files listed under Changed Files."
+}
+elseif ($State -eq "QUESTION_FOR_CODEX" -and $WaitingFor -eq "Codex") {
+    Write-Host "=== Next Action ==="
+    Write-Host "Actor:  Codex"
+    Write-Host "Action: Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
+    Write-Host "Commit: Blocked - dialogue in progress."
+    Write-Host ""
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and the Dialogue / Open Questions section.`nAnswer Claude Code's scoped question, then set State back to Claude Code's working state and Waiting For: Claude Code.`nCurrent task: $CurrentTask"
+    Write-Host "=== Prompt ==="
+    Write-Host $PromptText
+    $ActionLine = "Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
+    $AfterLine = "Set State back to Claude Code's working state and Waiting For: Claude Code. Update AI_HANDOFF.md."
+}
+elseif ($State -eq "QUESTION_FOR_CLAUDE" -and $WaitingFor -eq "Claude Code") {
+    Write-Host "=== Next Action ==="
+    Write-Host "Actor:  Claude Code"
+    Write-Host "Action: Answer Codex's question read-only under Dialogue / Open Questions. Do not modify source files."
+    Write-Host "Commit: Blocked - dialogue in progress."
+    Write-Host ""
+    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Answer Codex's scoped question under Dialogue / Open Questions - read-only, no source edits.`nThen set State back to the value Codex specified and Waiting For: Codex.`nCurrent task: $CurrentTask"
+    Write-Host "=== Prompt ==="
+    Write-Host $PromptText
+    $ActionLine = "Answer Codex's question read-only under Dialogue / Open Questions. Do not modify source files."
+    $AfterLine = "Set State back to the value Codex specified and Waiting For: Codex. Update AI_HANDOFF.md."
+}
+elseif ($State -eq "RE_GATE_REQUESTED" -and $WaitingFor -eq "Codex") {
+    Write-Host "=== Next Action ==="
+    Write-Host "Actor:  Codex"
+    Write-Host "Action: Re-route the task. Claude Code found it riskier/larger than scoped."
+    Write-Host "Commit: Blocked - task is being re-gated."
+    Write-Host ""
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md, the Dialogue / Open Questions section, and Open Issues.`nRe-route the task through the Decision Router (usually PLAN_REQUIRED or NEEDS_INVESTIGATION), or set a revised READY_FOR_IMPLEMENTATION scope.`nCurrent task: $CurrentTask"
+    Write-Host "=== Prompt ==="
+    Write-Host $PromptText
+    $ActionLine = "Re-route the task. Claude Code found it riskier/larger than scoped."
+    $AfterLine = "Re-classify through the Decision Router and set State/Waiting For accordingly. Update AI_HANDOFF.md."
 }
 elseif ($State -eq "BLOCKED") {
     Write-Host "=== Next Action ==="

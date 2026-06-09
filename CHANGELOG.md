@@ -3,6 +3,16 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.12.4 - Two-Way Dialogue States
+
+- Added two-way dialogue states so Codex and Claude Code can resolve scoped questions without escalating to the user: `QUESTION_FOR_CODEX`, `QUESTION_FOR_CLAUDE`, and `RE_GATE_REQUESTED` (Claude can flag mid-implementation that a task is riskier or larger than scoped).
+- Added a "Two-Way Dialogue" section to `CODEX.md`, `CLAUDE.md`, and `templates/AGENTS.md`, and added the three states to every Allowed States table.
+- Added a `Dialogue / Open Questions` section to the `AI_HANDOFF.md` template.
+- Wired the new states into `next-step.ps1` (ExpectedWaiting map + action branches) and `handoff.ps1` (ActionMap).
+- Preserved the no-auto-loop rule: every dialogue exchange is a discrete turn, and commit stays blocked while a dialogue state is active.
+- Repo-wide ASCII cleanup: converted the remaining em-dashes and layout arrows to ASCII so the repo is fully ASCII.
+- Bumped `VERSION` to 0.12.4.
+
 ## 0.12.3 - Capability Profile + Consultation Reflex
 
 - Added `CAPABILITIES.md` to the canonical shared skill folder: an agent capability profile
