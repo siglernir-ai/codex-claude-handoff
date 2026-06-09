@@ -261,9 +261,21 @@ If this skill is unavailable in a future session, Codex should:
 3. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role split.
 4. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
 
+## When Claude Adds Value
+
+Claude Code is the source of truth for what the repository actually does right now. Codex should treat Claude as a peer analyst for repo reality, not only as an executor. See `CAPABILITIES.md` for the full agent capability profile.
+
+Codex should consult Claude Code by default, before finalizing a task, whenever correctness depends on:
+
+- Current repository behavior (what the code does now, not what it should do).
+- Local implementation details (files, scripts, configs, conventions actually present).
+- Verification constraints (which checks exist and what they currently report).
+
+In those cases, prefer a read-only `NEEDS_INVESTIGATION` pass first. This is not extra overhead: it is the cheapest way to make a task correct before implementation. Reserve direct-to-implementation for simple, clear, low-risk changes whose correctness does not depend on unverified repo state.
+
 ## Local Capability Awareness
 
-Codex may ask Claude about relevant local capabilities when:
+Codex should consult Claude by default when correctness depends on current repo behavior, local implementation details, or verification constraints. Concretely, consult Claude when:
 
 - Context is missing for a risky or unfamiliar task.
 - The task depends on scripts, tools, configs, or conventions whose current state Codex has not verified.

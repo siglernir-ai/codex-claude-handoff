@@ -10,6 +10,7 @@ This folder is the canonical shared protocol source for the `codex-claude-handof
 | `SKILL.md` | Shared protocol index, role split, and tool pointers |
 | `CODEX.md` | Codex-specific protocol: decision router, gates, states, and rules |
 | `CLAUDE.md` | Claude Code-specific protocol: investigation mode, planning mode, implementation rules |
+| `CAPABILITIES.md` | Agent capability profile: what each agent is good at and when to consult it |
 | `VERSION` | Installed protocol version |
 
 ## Discovery

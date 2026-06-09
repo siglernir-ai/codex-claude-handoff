@@ -492,11 +492,12 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
 
 ```text
 .ai/skills/codex-claude-handoff/    ← shared source of truth
-  README.md       human-facing overview
-  SKILL.md        shared protocol index and role split (skill entrypoint)
-  CODEX.md        Codex-specific behavior, decision router, gates, states
-  CLAUDE.md       Claude Code-specific behavior, investigation mode, planning mode
-  VERSION         installed protocol version
+  README.md        human-facing overview
+  SKILL.md         shared protocol index and role split (skill entrypoint)
+  CODEX.md         Codex-specific behavior, decision router, gates, states
+  CLAUDE.md        Claude Code-specific behavior, investigation mode, planning mode
+  CAPABILITIES.md  agent capability profile (what each agent is good at)
+  VERSION          installed protocol version
 
 .agents/skills/codex-claude-handoff/SKILL.md   ← Codex discovery adapter
 .claude/skills/codex-claude-handoff/SKILL.md   ← Claude Code discovery adapter
@@ -521,6 +522,15 @@ Root `CLAUDE.md` remains the Claude Code operational behavior file. It is not re
 ### Install
 
 The installer copies the canonical shared folder and both adapter stubs into target projects. Existing files are never overwritten.
+
+### Skill Location Distinction
+
+Codex and Claude Code discover the protocol through different channels:
+
+- **Codex** reads `.agents/skills/codex-claude-handoff/SKILL.md` (its skill-discovery location), which points to the canonical `.ai/skills/codex-claude-handoff/` folder.
+- **Claude Code** is driven by `CLAUDE.md` and the current `AI_HANDOFF.md`. Its own skill-discovery location is `.claude/skills/`, where an adapter stub also points to `.ai/`.
+
+Because of this, when asked to "find the handoff skill", Claude Code should not search only `.claude/skills/`. If the protocol is installed, also check `.agents/skills/codex-claude-handoff/SKILL.md` and the canonical `.ai/skills/codex-claude-handoff/` folder.
 
 ## Codex Skill
 
@@ -599,6 +609,7 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
+.ai/skills/codex-claude-handoff/CAPABILITIES.md
 ```
 
 **Tool-specific skill adapters:**
@@ -647,6 +658,7 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
+.ai/skills/codex-claude-handoff/CAPABILITIES.md
 .agents/skills/codex-claude-handoff/SKILL.md
 .claude/skills/codex-claude-handoff/SKILL.md
 ```
@@ -678,6 +690,7 @@ CLAUDE.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
+.ai/skills/codex-claude-handoff/CAPABILITIES.md
 .agents/skills/codex-claude-handoff/SKILL.md
 .claude/skills/codex-claude-handoff/SKILL.md
 scripts/handoff.ps1

@@ -90,6 +90,7 @@ $SkillFiles = @(
     ".ai/skills/codex-claude-handoff/SKILL.md",
     ".ai/skills/codex-claude-handoff/CODEX.md",
     ".ai/skills/codex-claude-handoff/CLAUDE.md",
+    ".ai/skills/codex-claude-handoff/CAPABILITIES.md",
     ".agents/skills/codex-claude-handoff/SKILL.md",
     ".claude/skills/codex-claude-handoff/SKILL.md"
 )
