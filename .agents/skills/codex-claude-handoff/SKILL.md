@@ -11,6 +11,7 @@ The canonical shared protocol is at:
 
   .ai/skills/codex-claude-handoff/
 
-Read the following files for full protocol instructions:
-- `.ai/skills/codex-claude-handoff/SKILL.md` - shared protocol index and role split
-- `.ai/skills/codex-claude-handoff/CODEX.md` - Codex-specific behavior, decision router, gates, and states
+Read the following for full protocol instructions:
+- `.ai/skills/codex-claude-handoff/SKILL.md` - shared protocol index and role model
+- `.ai/roles/ROLE_ASSIGNMENT.md` - which role(s) you currently hold (default: Codex = Master + Reviewer)
+- `.ai/skills/codex-claude-handoff/CODEX.md` - Codex entry pointer; it resolves your role and sends you to `MASTER.md` (Master/Reviewer) or `IMPLEMENTER.md` (Implementer)

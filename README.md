@@ -6,10 +6,14 @@ The goal is to avoid copy-pasting long context between tools.
 
 ## Concept
 
-- **Codex** acts as advisor, architect, task writer, and reviewer.
-- **Claude Code** acts as the implementation agent.
-- Both tools coordinate through a shared file: `AI_HANDOFF.md`.
+The protocol is organized around three roles, bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`:
+
+- **Master** acts as advisor, architect, task writer, and decision router.
+- **Implementer** acts as the implementation agent (and a read-only repo-local partner during investigation/planning).
+- **Reviewer** independently reviews implementation against approved scope.
 - The user remains the approval point.
+
+Default binding: Master = Codex, Reviewer = Codex, Implementer = Claude Code. Roles can be reassigned with user approval without rewriting the protocol. All roles coordinate through a shared file: `AI_HANDOFF.md`.
 
 ## Files
 
@@ -23,19 +27,19 @@ templates/
 
 ### `AGENTS.md`
 
-Instructions for Codex.
+Project context plus the Master + Reviewer protocol. Read by the tool that follows the `AGENTS.md` convention (by default Codex), which resolves its role via `.ai/roles/ROLE_ASSIGNMENT.md`.
 
 Use it for:
 
 - project context
 - architecture rules
-- Codex role
+- Master + Reviewer role behavior
 - review rules
 - coordination flow
 
 ### `CLAUDE.md`
 
-Instructions for Claude Code.
+Operational entry file for Claude Code. Resolves its role via `.ai/roles/ROLE_ASSIGNMENT.md` (default: Implementer).
 
 Use it for:
 
@@ -125,7 +129,8 @@ Example output:
 State:        REVIEW_DONE
 Waiting For:  User
 Task:         v0.9.1 - Encoding-safe handoff instructions
-Commit:       ALLOWED - Codex approved. Commit only the files listed under Changed Files.
+Commit:       ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files.
+Roles:        Master=Codex, Reviewer=Codex, Implementer=Claude Code
 ```
 
 ### `next`
@@ -139,14 +144,14 @@ Generate or refresh `NEXT_TURN.md` and print exactly which tool to open and what
 
 ### `start "<natural user request>"`
 
-Save your request to the local ignored file `USER_REQUEST.md` and print a ready-made Codex entry prompt.
+Save your request to the local ignored file `USER_REQUEST.md` and print a ready-made Master entry prompt.
 
 ```powershell
 .\scripts\handoff.ps1 start "Add better error handling to the AI chat component"
 .\scripts\handoff.ps1 start "Add better error handling to the AI chat component" -Clip
 ```
 
-Codex remains the decision router. The prompt tells Codex to read `USER_REQUEST.md`, `AI_HANDOFF.md`, and local protocol instructions before routing.
+The Master remains the decision router. The prompt tells the Master tool to read `USER_REQUEST.md`, `AI_HANDOFF.md`, and local protocol instructions before routing.
 
 `USER_REQUEST.md` is ephemeral and local - it is never committed. The install script adds it to `.gitignore` automatically.
 
@@ -169,16 +174,17 @@ Run one Claude Code turn automatically. Requires `npx`; a network connection is 
 .\scripts\handoff.ps1 run-next -BudgetUsd 5   # raise the budget cap
 ```
 
-**Eligible state:** `run-next` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Claude Code`. All other states are blocked with a message and exit code 1.
+**Eligible state:** `run-next` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
 | State | Waiting For | What to do instead |
 |---|---|---|
-| READY_FOR_IMPLEMENTATION | Claude Code | Eligible - run-next proceeds |
-| NEEDS_INVESTIGATION | Claude Code | Blocked - run `next` and paste manually |
-| PLAN_REQUIRED | Claude Code | Blocked - run `next` and paste manually |
-| Any | Codex | Blocked - open ChatGPT and paste the prompt |
+| READY_FOR_IMPLEMENTATION | Implementer (Claude Code) | Eligible - run-next proceeds |
+| NEEDS_INVESTIGATION | Implementer | Blocked - run `next` and paste manually |
+| PLAN_REQUIRED | Implementer | Blocked - run `next` and paste manually |
+| Any | Master | Blocked - open the Master tool and paste the prompt |
+| Any | Implementer (not Claude Code) | Blocked - that tool has no local CLI; paste manually |
 | Any | User | Blocked - see AI_HANDOFF.md |
 
 Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
@@ -200,7 +206,7 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 
 **No automatic commit, push, or deploy.** `run-next` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
 
-**No Codex automation.** Codex has no local CLI. Codex turns always remain manual.
+**No Master automation.** The default Master (Codex) has no local CLI, so Master turns always remain manual. `run-next` only automates an Implementer bound to Claude Code.
 
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `run-next` exits with code 3.
 
@@ -241,9 +247,9 @@ Update AI_HANDOFF.md with your review result.
 ```text
 Use the codex-claude-handoff skill.
 
-Prepare a focused Claude Code implementation task in AI_HANDOFF.md.
+Prepare a focused Implementer task in AI_HANDOFF.md.
 Set State: READY_FOR_IMPLEMENTATION.
-Set Waiting For: Claude Code.
+Set Waiting For: Implementer.
 Keep the scope limited to the requested files.
 ```
 
@@ -263,15 +269,15 @@ After finishing, update AI_HANDOFF.md with changed files, verification, risks, a
 Update AI_HANDOFF.md for the work you just completed.
 
 Set State: READY_FOR_REVIEW.
-Set Waiting For: Codex.
+Set Waiting For: Reviewer.
 List changed files, verification results, open issues, risks, and the next recommended step.
 ```
 
 ## Natural Request Mode
 
-You do not need to know the protocol states. Paste your request into Codex and it
-will classify the task, choose the appropriate gate, set `AI_HANDOFF.md`, and give
-Claude Code a focused instruction.
+You do not need to know the protocol states. Paste your request into the Master tool
+(Codex by default) and it will classify the task, choose the appropriate gate, set
+`AI_HANDOFF.md`, and give the Implementer a focused instruction.
 
 Example:
 
@@ -279,11 +285,11 @@ Example:
 Add better error handling to the AI chat component.
 ```
 
-Codex classifies this, selects a gate if needed, and updates `AI_HANDOFF.md`.
+The Master classifies this, selects a gate if needed, and updates `AI_HANDOFF.md`.
 You still approve all commits, pushes, deploys, DB work, migrations, secrets, and
 production changes.
 
-Codex uses a six-path decision router for natural requests: advisory (answer directly, no handoff), investigation, planning, implementation, user decision, and review. Advisory-first means Codex answers questions and advisory requests directly without creating a Claude Code task - only explicit action requests ("add", "fix", "implement") trigger a handoff. Risky topics phrased as questions stay advisory or route to a user decision, not automatic Claude Code tasks.
+The Master uses a six-path decision router for natural requests: advisory (answer directly, no handoff), investigation, planning, implementation, user decision, and review. Advisory-first means the Master answers questions and advisory requests directly without creating an Implementer task - only explicit action requests ("add", "fix", "implement") trigger a handoff. Risky topics phrased as questions stay advisory or route to a user decision, not automatic Implementer tasks.
 
 ## Daily Workflow
 
@@ -296,14 +302,14 @@ Run this from the project root:
 The script reads `AI_HANDOFF.md` and prints a three-block turn dashboard:
 
 - **Handoff Status** - current State, Waiting For, and Current Task.
-- **Next Action** - the actor who should act next, the action required, and whether a commit is allowed.
-- **Prompt** - a ready-to-paste prompt, printed only when the next actor is Codex or Claude Code.
+- **Next Action** - the role/tool that should act next, the action required, and whether a commit is allowed.
+- **Prompt** - a ready-to-paste prompt, printed only when the next role is the Master or the Implementer.
 
-Paste the Prompt into Codex or Claude Code. The tool acts, updates `AI_HANDOFF.md`, and the cycle continues.
+The script resolves the next role to the bound tool. Paste the Prompt into that tool. The tool acts, updates `AI_HANDOFF.md`, and the cycle continues.
 
 The `Commit:` line in Next Action is the commit signal:
 
-- `Commit: ALLOWED` means Codex has approved. Commit only the files listed under Changed Files.
+- `Commit: ALLOWED` means the Reviewer has approved. Commit only the files listed under Changed Files.
 - `Commit: Blocked - ...` means a review or decision is still pending. Do not commit.
 
 Do not commit `AI_HANDOFF.md`.
@@ -312,13 +318,13 @@ Do not commit `AI_HANDOFF.md`.
 
 A typical handoff cycle looks like this:
 
-1. **Codex prepares the task.** Codex reads `AI_HANDOFF.md`, analyzes the request, and writes a focused implementation task. It sets `State: READY_FOR_IMPLEMENTATION` and `Waiting For: Claude Code`.
+1. **The Master prepares the task.** The Master reads `AI_HANDOFF.md`, analyzes the request, and writes a focused implementation task. It sets `State: READY_FOR_IMPLEMENTATION` and `Waiting For: Implementer`.
 
-2. **Claude Code implements the scoped task.** Claude Code reads `CLAUDE.md` and `AI_HANDOFF.md`, implements only the requested scope, and makes no unrelated changes.
+2. **The Implementer implements the scoped task.** The Implementer reads `CLAUDE.md` and `AI_HANDOFF.md`, implements only the requested scope, and makes no unrelated changes.
 
-3. **Claude Code updates `AI_HANDOFF.md` to `READY_FOR_REVIEW`.** After finishing, Claude Code records changed files, verification results, and risks, then sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+3. **The Implementer updates `AI_HANDOFF.md` to `READY_FOR_REVIEW`.** After finishing, the Implementer records changed files, verification results, and risks, then sets `State: READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 
-4. **Codex reviews only `Changed Files`.** Codex reads `AI_HANDOFF.md` and reviews only the files listed under the `Changed Files` section. It sets `State: REVIEW_DONE` and `Waiting For: User`.
+4. **The Reviewer reviews only `Changed Files`.** The Reviewer reads `AI_HANDOFF.md` and reviews only the files listed under the `Changed Files` section. It sets `State: REVIEW_DONE` and `Waiting For: User`.
 
 5. **User commits only the real source changes.** The user reviews the result and commits the approved source files. `AI_HANDOFF.md` is not committed.
 
@@ -332,32 +338,32 @@ Three optional gates can be inserted before or after implementation depending on
 
 Use when information is missing before a task can be scoped.
 
-Codex sets `State: NEEDS_INVESTIGATION`. Claude Code gathers evidence only - no source-file edits. Claude Code reports findings and sets `State: READY_FOR_REVIEW`.
+The Master sets `State: NEEDS_INVESTIGATION`. The Implementer gathers evidence only - no source-file edits. The Implementer reports findings and sets `State: READY_FOR_REVIEW`.
 
 ### Planning Gate
 
 Use for risky tasks (DB migrations, RLS/Auth, security, deployment, architecture changes, large refactors, production AI routing) or any time the goal is to exercise or enforce the Planning Gate before implementation.
 
-**Codex must not write the implementation plan itself.** Codex's role is to: classify the task as risky or plan-required; set `State: PLAN_REQUIRED` and `Waiting For: Claude Code`; write clear plan-only instructions under `Next Recommended Step`.
+**The Master must not write the implementation plan itself.** The Master's role is to: classify the task as risky or plan-required; set `State: PLAN_REQUIRED` and `Waiting For: Implementer`; write clear plan-only instructions under `Next Recommended Step`.
 
-Claude Code writes a plan only - no source-file edits - and sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
+The Implementer writes a plan only - no source-file edits - and sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 
-Codex reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), request changes (`PLAN_REQUIRED`), or require user approval (`WAITING_FOR_USER`).
+The Reviewer reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), request changes (`PLAN_REQUIRED`), or require user approval (`WAITING_FOR_USER`).
 
 ### Verification Gate
 
-After every Claude Code implementation, Codex should verify using safe read-only commands (`git status`, `git diff`, typecheck, lint, tests where available). Codex must compare actual changes against `Changed Files` and detect scope creep or unlisted edits before approving.
+After every Implementer implementation, the Reviewer should verify using safe read-only commands (`git status`, `git diff`, typecheck, lint, tests where available). The Reviewer must compare actual changes against `Changed Files` and detect scope creep or unlisted edits before approving.
 
 Good verification evidence includes:
 - **Commands Run:** list each command and a short result summary (e.g. "git diff: 3 files changed, 28 insertions, 4 deletions")
 - **Skipped commands:** state why (e.g. "lint: not run - documentation change only")
 - **Manual Check:** state expected vs actual, not just "looks good"
 
-Vague entries like "not run" or "not applicable" without explanation are not sufficient evidence for Codex to approve.
+Vague entries like "not run" or "not applicable" without explanation are not sufficient evidence for the Reviewer to approve.
 
 ### Unsafe Command Rules
 
-Codex and Claude Code must not run the following without explicit user approval:
+No role may run the following without explicit user approval:
 
 - Deploy commands
 - Live database migrations
@@ -370,13 +376,13 @@ If any are required, set `State: WAITING_FOR_USER` and document the required act
 
 ### Skill Fallback
 
-If the `codex-claude-handoff` skill is unavailable, Codex should read `.agents/skills/codex-claude-handoff/SKILL.md` and follow it as local protocol instructions.
+If the `codex-claude-handoff` skill is unavailable, the Master should read `.agents/skills/codex-claude-handoff/SKILL.md` and follow it as local protocol instructions, then confirm the current role binding in `.ai/roles/ROLE_ASSIGNMENT.md`.
 
 ### Claude Skill Awareness
 
-Codex may ask Claude whether relevant project-local or global Claude skills exist when context is missing for a risky task, the user reports a skill change, or a memory/context skill might help recover prior decisions, constraints, or risks.
+The Master may ask the Implementer whether relevant project-local or global Claude skills exist when context is missing for a risky task, the user reports a skill change, or a memory/context skill might help recover prior decisions, constraints, or risks.
 
-When asked, Claude should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. Claude must not expose unrelated private memory. Codex should not ask every session - only when it adds value.
+When asked, the Implementer should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. The Implementer must not expose unrelated private memory. The Master should not ask every session - only when it adds value.
 
 ### v0.3.0 Out of Scope
 
@@ -491,12 +497,15 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
 ### Layout
 
 ```text
+.ai/roles/ROLE_ASSIGNMENT.md        <- role-to-tool binding
 .ai/skills/codex-claude-handoff/    <- shared source of truth
   README.md        human-facing overview
-  SKILL.md         shared protocol index and role split (skill entrypoint)
-  CODEX.md         Codex-specific behavior, decision router, gates, states
-  CLAUDE.md        Claude Code-specific behavior, investigation mode, planning mode
-  CAPABILITIES.md  agent capability profile (what each agent is good at)
+  SKILL.md         shared protocol index and role model (skill entrypoint)
+  MASTER.md        Master + Reviewer protocol: decision router, gates, states, review
+  IMPLEMENTER.md   Implementer protocol: investigation mode, planning mode, implementation
+  CODEX.md         Codex entry pointer (resolves role -> MASTER.md or IMPLEMENTER.md)
+  CLAUDE.md        Claude Code entry pointer (resolves role -> IMPLEMENTER.md or MASTER.md)
+  CAPABILITIES.md  agent capability profile (tool strengths + default role binding)
   VERSION          installed protocol version
 
 .agents/skills/codex-claude-handoff/SKILL.md   <- Codex discovery adapter
@@ -509,12 +518,15 @@ The adapter files are small stubs. All protocol content lives in `.ai/skills/cod
 
 | File | Role |
 |---|---|
-| `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth - protocol index and role split |
-| `.ai/skills/codex-claude-handoff/CODEX.md` | Codex-specific protocol |
-| `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code-specific protocol |
+| `.ai/roles/ROLE_ASSIGNMENT.md` | Role-to-tool binding (Master / Implementer / Reviewer) |
+| `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth - protocol index and role model |
+| `.ai/skills/codex-claude-handoff/MASTER.md` | Master + Reviewer role protocol |
+| `.ai/skills/codex-claude-handoff/IMPLEMENTER.md` | Implementer role protocol |
+| `.ai/skills/codex-claude-handoff/CODEX.md` | Codex entry pointer - resolves Codex's role |
+| `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role |
 | `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter - points to `.ai/` |
 | `.claude/skills/codex-claude-handoff/SKILL.md` | Claude Code-facing discovery adapter - points to `.ai/` |
-| Root `CLAUDE.md` | Claude Code **operational behavior** file (customized per project) - separate from the skill folder |
+| Root `CLAUDE.md` | Claude Code **operational entry** file (customized per project) - separate from the skill folder |
 | `AI_HANDOFF.md` | Execution state - dynamic, local, not committed |
 
 Root `CLAUDE.md` remains the Claude Code operational behavior file. It is not replaced by the skill folder.
@@ -542,7 +554,7 @@ Codex adapter path:
 .agents/skills/codex-claude-handoff/SKILL.md
 ```
 
-This adapter points to the canonical shared protocol at `.ai/skills/codex-claude-handoff/`. When active, Codex reads `CODEX.md` for its full protocol and `SKILL.md` for the shared index.
+This adapter points to the canonical shared protocol at `.ai/skills/codex-claude-handoff/`. When active, Codex reads `CODEX.md`, which resolves its current role via `.ai/roles/ROLE_ASSIGNMENT.md` and sends it to the matching role protocol (`MASTER.md` by default), plus `SKILL.md` for the shared index.
 
 When active, Codex should:
 
@@ -607,9 +619,12 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/VERSION
 .ai/skills/codex-claude-handoff/README.md
 .ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/MASTER.md
+.ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
+.ai/roles/ROLE_ASSIGNMENT.md
 ```
 
 **Tool-specific skill adapters:**
@@ -656,9 +671,12 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/VERSION
 .ai/skills/codex-claude-handoff/README.md
 .ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/MASTER.md
+.ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
+.ai/roles/ROLE_ASSIGNMENT.md
 .agents/skills/codex-claude-handoff/SKILL.md
 .claude/skills/codex-claude-handoff/SKILL.md
 ```
@@ -688,9 +706,12 @@ CLAUDE.md
 .ai/skills/codex-claude-handoff/VERSION
 .ai/skills/codex-claude-handoff/README.md
 .ai/skills/codex-claude-handoff/SKILL.md
+.ai/skills/codex-claude-handoff/MASTER.md
+.ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
+.ai/roles/ROLE_ASSIGNMENT.md
 .agents/skills/codex-claude-handoff/SKILL.md
 .claude/skills/codex-claude-handoff/SKILL.md
 scripts/handoff.ps1
@@ -808,20 +829,20 @@ Open:
 AI_HANDOFF.md
 ```
 
-Set the first task manually, or ask Codex to prepare it.
+Set the first task manually, or ask the Master to prepare it.
 
 Typical starting state:
 
 ```md
 State: NEEDS_ANALYSIS
-Waiting For: Codex
+Waiting For: Master
 ```
 
-After Codex prepares a Claude Code task, it should set:
+After the Master prepares an Implementer task, it should set:
 
 ```md
 State: READY_FOR_IMPLEMENTATION
-Waiting For: Claude Code
+Waiting For: Implementer
 ```
 
 ### 6. Commit the stable protocol files
@@ -839,25 +860,25 @@ Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 
 ## Basic Workflow
 
-### 1. User asks Codex to analyze a task
+### 1. User asks the Master to analyze a task
 
-Codex reads:
+The Master reads:
 
 ```text
 AI_HANDOFF.md
 AGENTS.md
 ```
 
-Then Codex prepares the task for Claude Code by setting:
+Then the Master prepares the task for the Implementer by setting:
 
 ```md
 State: READY_FOR_IMPLEMENTATION
-Waiting For: Claude Code
+Waiting For: Implementer
 ```
 
-### 2. Claude Code implements
+### 2. The Implementer implements
 
-Claude Code reads:
+The Implementer reads:
 
 ```text
 AI_HANDOFF.md
@@ -865,24 +886,24 @@ CLAUDE.md
 AGENTS.md
 ```
 
-Claude Code implements only the requested scope.
+The Implementer implements only the requested scope.
 
-After finishing, Claude Code updates `AI_HANDOFF.md` and sets:
+After finishing, the Implementer updates `AI_HANDOFF.md` and sets:
 
 ```md
 State: READY_FOR_REVIEW
-Waiting For: Codex
+Waiting For: Reviewer
 ```
 
-### 3. Codex reviews
+### 3. The Reviewer reviews
 
-Codex reviews only files listed under:
+The Reviewer reviews only files listed under:
 
 ```md
 ## Changed Files
 ```
 
-Then Codex sets:
+Then the Reviewer sets:
 
 ```md
 State: REVIEW_DONE
@@ -906,29 +927,29 @@ Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
 
 ## Two-Way Dialogue
 
-The protocol supports scoped, two-directional questions so Codex and Claude Code can resolve uncertainty without escalating to the user. Each exchange is a discrete turn - there is no automatic loop, and commit stays blocked while a dialogue state is active.
+The protocol supports scoped, two-directional questions so the Master and the Implementer can resolve uncertainty without escalating to the user. Each exchange is a discrete turn - there is no automatic loop, and commit stays blocked while a dialogue state is active.
 
-- `QUESTION_FOR_CODEX` - Claude Code asks Codex a scoped question (ambiguous scope, a design choice Codex owns). Codex answers, then returns the working state.
-- `QUESTION_FOR_CLAUDE` - Codex asks Claude Code a scoped question (repo reality, feasibility, verification). Claude answers read-only.
-- `RE_GATE_REQUESTED` - Claude Code finds mid-implementation that the task is riskier or larger than scoped; Codex re-routes it through the Decision Router.
+- `QUESTION_FOR_MASTER` - The Implementer asks the Master a scoped question (ambiguous scope, a design choice the Master owns). The Master answers, then returns the working state.
+- `QUESTION_FOR_IMPLEMENTER` - The Master asks the Implementer a scoped question (repo reality, feasibility, verification). The Implementer answers read-only.
+- `RE_GATE_REQUESTED` - The Implementer finds mid-implementation that the task is riskier or larger than scoped; the Master re-routes it through the Decision Router.
 
-Questions and answers are logged under a `## Dialogue / Open Questions` section in `AI_HANDOFF.md`.
+Questions and answers are logged under a `## Dialogue / Open Questions` section in `AI_HANDOFF.md`. The pre-v0.13.0 names `QUESTION_FOR_CODEX` and `QUESTION_FOR_CLAUDE` are still accepted by the workflow scripts as aliases.
 
 ## Allowed States
 
 | State | Meaning |
 |---|---|
-| `NEEDS_ANALYSIS` | Codex should analyze before Claude Code can start. |
-| `NEEDS_INVESTIGATION` | Investigation needed; Claude Code gathers evidence only, no source edits. |
-| `PLAN_REQUIRED` | Risky task; Claude Code writes a plan only before implementation. |
-| `PLAN_READY_FOR_REVIEW` | Plan written; Codex reviews before approving implementation. |
-| `READY_FOR_IMPLEMENTATION` | Task is defined and Claude Code should implement. |
-| `IMPLEMENTED` | Claude Code finished and no review is required. |
-| `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
-| `REVIEW_DONE` | Codex reviewed and user decides next step. |
-| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
-| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
-| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
+| `NEEDS_ANALYSIS` | The Master should analyze before the Implementer can start. |
+| `NEEDS_INVESTIGATION` | Investigation needed; the Implementer gathers evidence only, no source edits. |
+| `PLAN_REQUIRED` | Risky task; the Implementer writes a plan only before implementation. |
+| `PLAN_READY_FOR_REVIEW` | Plan written; the Reviewer reviews before approving implementation. |
+| `READY_FOR_IMPLEMENTATION` | Task is defined and the Implementer should implement. |
+| `IMPLEMENTED` | The Implementer finished and no review is required. |
+| `READY_FOR_REVIEW` | The Implementer finished and the Reviewer should review. |
+| `REVIEW_DONE` | The Reviewer reviewed and the user decides next step. |
+| `QUESTION_FOR_MASTER` | The Implementer asked the Master a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_IMPLEMENTER` | The Master asked the Implementer a scoped question; the Implementer answers read-only. |
+| `RE_GATE_REQUESTED` | The Implementer found the task riskier/larger than scoped; the Master re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
 

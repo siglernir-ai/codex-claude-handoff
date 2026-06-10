@@ -33,6 +33,30 @@ function Get-SectionContent {
     return ($sectionLines -join "`n").Trim()
 }
 
+# --- Role binding (State -> Role -> Tool) ---
+
+function Get-RoleBinding {
+    $binding = @{ Master = "Codex"; Reviewer = "Codex"; Implementer = "Claude Code" }
+    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (Test-Path $rolesFile) {
+        foreach ($line in (Get-Content -Path $rolesFile)) {
+            if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
+                $binding[$Matches[1]] = $Matches[2].Trim()
+            }
+        }
+    }
+    return $binding
+}
+
+function Resolve-Actor {
+    param([string]$Role, [hashtable]$Binding)
+    if ($Role -eq "User") { return "User" }
+    if ($Binding.ContainsKey($Role)) { return $Binding[$Role] }
+    return $Role
+}
+
+$Binding = Get-RoleBinding
+
 $StatusLines = Get-SectionLines -Lines $Lines -Heading "Status"
 $OpenIssuesLines = Get-SectionLines -Lines $Lines -Heading "Open Issues"
 
@@ -46,31 +70,49 @@ foreach ($line in $StatusLines) {
     if ($line -match "^- Current Task:\s*(.+)") { $CurrentTask = $Matches[1].Trim() }
 }
 
+# Backward-compatible state aliases (pre-v0.13.0 tool-named dialogue states)
+$StateAlias = @{
+    "QUESTION_FOR_CODEX"  = "QUESTION_FOR_MASTER"
+    "QUESTION_FOR_CLAUDE" = "QUESTION_FOR_IMPLEMENTER"
+}
+if ($StateAlias.ContainsKey($State)) { $State = $StateAlias[$State] }
+
 Write-Host ""
 Write-Host "=== Handoff Status ==="
 Write-Host "State:        $State"
 Write-Host "Waiting For:  $WaitingFor"
 Write-Host "Current Task: $CurrentTask"
+Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
 Write-Host ""
 
-$ExpectedWaiting = @{
-    "NEEDS_ANALYSIS"           = "Codex"
-    "NEEDS_INVESTIGATION"      = "Claude Code"
-    "PLAN_REQUIRED"            = "Claude Code"
-    "PLAN_READY_FOR_REVIEW"    = "Codex"
-    "READY_FOR_IMPLEMENTATION" = "Claude Code"
-    "READY_FOR_REVIEW"         = "Codex"
+# State -> expected Role
+$ExpectedRole = @{
+    "NEEDS_ANALYSIS"           = "Master"
+    "NEEDS_INVESTIGATION"      = "Implementer"
+    "PLAN_REQUIRED"            = "Implementer"
+    "PLAN_READY_FOR_REVIEW"    = "Reviewer"
+    "READY_FOR_IMPLEMENTATION" = "Implementer"
+    "READY_FOR_REVIEW"         = "Reviewer"
     "REVIEW_DONE"              = "User"
-    "QUESTION_FOR_CODEX"       = "Codex"
-    "QUESTION_FOR_CLAUDE"      = "Claude Code"
-    "RE_GATE_REQUESTED"        = "Codex"
+    "QUESTION_FOR_MASTER"      = "Master"
+    "QUESTION_FOR_IMPLEMENTER" = "Implementer"
+    "RE_GATE_REQUESTED"        = "Master"
     "BLOCKED"                  = "User"
     "WAITING_FOR_USER"         = "User"
 }
 
-if ($ExpectedWaiting.ContainsKey($State) -and $WaitingFor -ne $ExpectedWaiting[$State]) {
-    Write-Host "WARNING: State $State normally expects Waiting For: $($ExpectedWaiting[$State]) but found: $WaitingFor."
-    Write-Host ""
+$Mismatch = $false
+$expRole = ""
+$expTool = ""
+if ($ExpectedRole.ContainsKey($State)) {
+    $expRole = $ExpectedRole[$State]
+    $expTool = Resolve-Actor -Role $expRole -Binding $Binding
+    # Accept either the role name or the resolved tool name in Waiting For (tolerates old tool-named handoffs)
+    if ($WaitingFor -ne $expRole -and $WaitingFor -ne $expTool) {
+        $Mismatch = $true
+        Write-Host "WARNING: State $State normally expects Waiting For: $expRole ($expTool) but found: $WaitingFor."
+        Write-Host ""
+    }
 }
 
 if ($State -eq "READY_FOR_REVIEW") {
@@ -78,6 +120,8 @@ if ($State -eq "READY_FOR_REVIEW") {
     $changedFiles = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $ChangedFilesLines) {
         $entry = $line.Trim()
+        # Only markdown bullet lines ("- path") are files; skip headings/summary/notes.
+        if ($entry -notmatch '^-\s+') { continue }
         if ($entry -eq "" -or $entry -eq "None yet" -or $entry -eq "- None yet") { continue }
         $entry = $entry -replace '^-\s+', ''
         $entry = $entry -replace '`', ''
@@ -92,132 +136,144 @@ if ($State -eq "READY_FOR_REVIEW") {
     }
 }
 
+# Resolve the acting tool for the current state
+$ActorRole = if ($ExpectedRole.ContainsKey($State)) { $ExpectedRole[$State] } else { "User" }
+$ActorTool = Resolve-Actor -Role $ActorRole -Binding $Binding
+
 $PromptText = ""
 $ActionLine = ""
 $AfterLine = ""
 
-if ($State -eq "NEEDS_ANALYSIS" -and $WaitingFor -eq "Codex") {
+if ($Mismatch) {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Codex"
+    Write-Host "Actor:  User"
+    Write-Host "Action: Resolve handoff mismatch. State $State normally expects Waiting For: $expRole ($expTool), but found: $WaitingFor."
+    Write-Host "Commit: Blocked - handoff state is inconsistent."
+    $ActionLine = "Resolve handoff mismatch. State $State normally expects Waiting For: $expRole ($expTool)."
+    $AfterLine = "Correct Waiting For in AI_HANDOFF.md to match the expected role for this state."
+}
+elseif ($State -eq "NEEDS_ANALYSIS") {
+    Write-Host "=== Next Action ==="
+    Write-Host "Actor:  $ActorTool (Master)"
     Write-Host "Action: Classify the task and set the correct State and Waiting For."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md.`nClassify the task and set the correct state.`nWhen correctness depends on current repo behavior, local details, or verification constraints, default to a read-only Claude investigation pass before finalizing.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read .ai/roles/ROLE_ASSIGNMENT.md and AI_HANDOFF.md. You hold the Master role.`nClassify the task and set the correct state.`nWhen correctness depends on current repo behavior, local details, or verification constraints, default to a read-only Implementer investigation pass before finalizing.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Classify the task and set the correct State and Waiting For."
-    $AfterLine = "Set State to the appropriate gate and Waiting For to the correct actor. Update AI_HANDOFF.md."
+    $AfterLine = "Set State to the appropriate gate and Waiting For to the correct role. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "NEEDS_INVESTIGATION" -and $WaitingFor -eq "Claude Code") {
+elseif ($State -eq "NEEDS_INVESTIGATION") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Claude Code"
+    Write-Host "Actor:  $ActorTool (Implementer)"
     Write-Host "Action: Investigate only. Do not modify source files."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
-    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Investigate only - do not modify source files.`nReport findings in AI_HANDOFF.md. Set State: READY_FOR_REVIEW.`nCurrent task: $CurrentTask"
+    $PromptText = "Read .ai/roles/ROLE_ASSIGNMENT.md and AI_HANDOFF.md. You hold the Implementer role. Investigate only - do not modify source files.`nReport findings in AI_HANDOFF.md. Set State: READY_FOR_REVIEW.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Investigate only. Do not modify source files."
-    $AfterLine = "Set State: READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+    $AfterLine = "Set State: READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "PLAN_REQUIRED" -and $WaitingFor -eq "Claude Code") {
+elseif ($State -eq "PLAN_REQUIRED") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Claude Code"
+    Write-Host "Actor:  $ActorTool (Implementer)"
     Write-Host "Action: Write a plan only. Do not modify source files."
     Write-Host "Commit: Blocked - no approved implementation yet."
     Write-Host ""
-    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Write a plan only - do not modify source files.`nSet State: PLAN_READY_FOR_REVIEW when done.`nCurrent task: $CurrentTask"
+    $PromptText = "Read .ai/roles/ROLE_ASSIGNMENT.md and AI_HANDOFF.md. You hold the Implementer role. Write a plan only - do not modify source files.`nSet State: PLAN_READY_FOR_REVIEW when done.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Write a plan only. Do not modify source files."
-    $AfterLine = "Set State: PLAN_READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+    $AfterLine = "Set State: PLAN_READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "PLAN_READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
+elseif ($State -eq "PLAN_READY_FOR_REVIEW") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Codex"
+    Write-Host "Actor:  $ActorTool (Reviewer)"
     Write-Host "Action: Review the plan. Approve or request changes before implementation begins."
     Write-Host "Commit: Blocked - plan not yet approved."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md. Review the plan.`nSet State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md. You hold the Reviewer role. Review the plan.`nSet State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Review the plan. Approve or request changes before implementation begins."
     $AfterLine = "Set State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED. Set Waiting For accordingly. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "READY_FOR_IMPLEMENTATION" -and $WaitingFor -eq "Claude Code") {
+elseif ($State -eq "READY_FOR_IMPLEMENTATION") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Claude Code"
+    Write-Host "Actor:  $ActorTool (Implementer)"
     Write-Host "Action: Implement the approved scope. Do not modify unrelated files."
-    Write-Host "Commit: Blocked - waiting for Codex review after implementation."
+    Write-Host "Commit: Blocked - waiting for Reviewer review after implementation."
     Write-Host ""
-    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Continue the protocol from the current state.`nCurrent task: $CurrentTask"
+    $PromptText = "Read .ai/roles/ROLE_ASSIGNMENT.md and AI_HANDOFF.md. You hold the Implementer role. Continue the protocol from the current state.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Implement the approved scope. Do not modify unrelated files."
-    $AfterLine = "Set State: READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+    $AfterLine = "Set State: READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
 }
 elseif ($State -eq "IMPLEMENTED") {
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  User"
-    Write-Host "Action: Review the work. Commit if satisfied, or ask Codex to review first."
-    Write-Host "Commit: ALLOWED - no Codex review was required for this task."
-    $ActionLine = "Review the work. Commit if satisfied, or ask Codex to review first."
+    Write-Host "Action: Review the work. Commit if satisfied, or ask the Reviewer to review first."
+    Write-Host "Commit: ALLOWED - no Reviewer review was required for this task."
+    $ActionLine = "Review the work. Commit if satisfied, or ask the Reviewer to review first."
     $AfterLine = "No handoff update required. Commit only the files listed under Changed Files."
 }
-elseif ($State -eq "READY_FOR_REVIEW" -and $WaitingFor -eq "Codex") {
+elseif ($State -eq "READY_FOR_REVIEW") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Codex"
+    Write-Host "Actor:  $ActorTool (Reviewer)"
     Write-Host "Action: Review Changed Files. Run git status and git diff before approving."
-    Write-Host "Commit: Blocked - waiting for Codex approval."
+    Write-Host "Commit: Blocked - waiting for Reviewer approval."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and review Changed Files.`nRun git status and git diff before approving. Check Changed Files match.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and review Changed Files. You hold the Reviewer role.`nRun git status and git diff before approving. Check Changed Files match.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
     $ActionLine = "Review Changed Files. Run git status and git diff before approving."
     $AfterLine = "Set State: REVIEW_DONE and Waiting For: User, or READY_FOR_IMPLEMENTATION if changes are needed. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+elseif ($State -eq "REVIEW_DONE") {
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  User"
     Write-Host "Action: Commit and push approved changes. Do not commit AI_HANDOFF.md."
-    Write-Host "Commit: ALLOWED - Codex approved. Commit only the files listed under Changed Files."
+    Write-Host "Commit: ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files."
     $ActionLine = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
     $AfterLine = "No handoff update required. Commit only the files listed under Changed Files."
 }
-elseif ($State -eq "QUESTION_FOR_CODEX" -and $WaitingFor -eq "Codex") {
+elseif ($State -eq "QUESTION_FOR_MASTER") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Codex"
-    Write-Host "Action: Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
+    Write-Host "Actor:  $ActorTool (Master)"
+    Write-Host "Action: Answer the Implementer's question under Dialogue / Open Questions, then return the working state."
     Write-Host "Commit: Blocked - dialogue in progress."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and the Dialogue / Open Questions section.`nAnswer Claude Code's scoped question, then set State back to Claude Code's working state and Waiting For: Claude Code.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md and the Dialogue / Open Questions section. You hold the Master role.`nAnswer the Implementer's scoped question, then set State back to the Implementer's working state and Waiting For: Implementer.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
-    $ActionLine = "Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
-    $AfterLine = "Set State back to Claude Code's working state and Waiting For: Claude Code. Update AI_HANDOFF.md."
+    $ActionLine = "Answer the Implementer's question under Dialogue / Open Questions, then return the working state."
+    $AfterLine = "Set State back to the Implementer's working state and Waiting For: Implementer. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "QUESTION_FOR_CLAUDE" -and $WaitingFor -eq "Claude Code") {
+elseif ($State -eq "QUESTION_FOR_IMPLEMENTER") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Claude Code"
-    Write-Host "Action: Answer Codex's question read-only under Dialogue / Open Questions. Do not modify source files."
+    Write-Host "Actor:  $ActorTool (Implementer)"
+    Write-Host "Action: Answer the Master's question read-only under Dialogue / Open Questions. Do not modify source files."
     Write-Host "Commit: Blocked - dialogue in progress."
     Write-Host ""
-    $PromptText = "Read CLAUDE.md and AI_HANDOFF.md. Answer Codex's scoped question under Dialogue / Open Questions - read-only, no source edits.`nThen set State back to the value Codex specified and Waiting For: Codex.`nCurrent task: $CurrentTask"
+    $PromptText = "Read .ai/roles/ROLE_ASSIGNMENT.md and AI_HANDOFF.md. You hold the Implementer role. Answer the Master's scoped question under Dialogue / Open Questions - read-only, no source edits.`nThen set State back to the value the Master specified and Waiting For: Master.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
-    $ActionLine = "Answer Codex's question read-only under Dialogue / Open Questions. Do not modify source files."
-    $AfterLine = "Set State back to the value Codex specified and Waiting For: Codex. Update AI_HANDOFF.md."
+    $ActionLine = "Answer the Master's question read-only under Dialogue / Open Questions. Do not modify source files."
+    $AfterLine = "Set State back to the value the Master specified and Waiting For: Master. Update AI_HANDOFF.md."
 }
-elseif ($State -eq "RE_GATE_REQUESTED" -and $WaitingFor -eq "Codex") {
+elseif ($State -eq "RE_GATE_REQUESTED") {
     Write-Host "=== Next Action ==="
-    Write-Host "Actor:  Codex"
-    Write-Host "Action: Re-route the task. Claude Code found it riskier/larger than scoped."
+    Write-Host "Actor:  $ActorTool (Master)"
+    Write-Host "Action: Re-route the task. The Implementer found it riskier/larger than scoped."
     Write-Host "Commit: Blocked - task is being re-gated."
     Write-Host ""
-    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md, the Dialogue / Open Questions section, and Open Issues.`nRe-route the task through the Decision Router (usually PLAN_REQUIRED or NEEDS_INVESTIGATION), or set a revised READY_FOR_IMPLEMENTATION scope.`nCurrent task: $CurrentTask"
+    $PromptText = "Use the codex-claude-handoff skill. Read AI_HANDOFF.md, the Dialogue / Open Questions section, and Open Issues. You hold the Master role.`nRe-route the task through the Decision Router (usually PLAN_REQUIRED or NEEDS_INVESTIGATION), or set a revised READY_FOR_IMPLEMENTATION scope.`nCurrent task: $CurrentTask"
     Write-Host "=== Prompt ==="
     Write-Host $PromptText
-    $ActionLine = "Re-route the task. Claude Code found it riskier/larger than scoped."
+    $ActionLine = "Re-route the task. The Implementer found it riskier/larger than scoped."
     $AfterLine = "Re-classify through the Decision Router and set State/Waiting For accordingly. Update AI_HANDOFF.md."
 }
 elseif ($State -eq "BLOCKED") {
@@ -243,22 +299,9 @@ elseif ($State -eq "WAITING_FOR_USER") {
     $ActionLine = "Review AI_HANDOFF.md and decide the next step or provide approval."
     $AfterLine = "Update AI_HANDOFF.md with your decision and set State and Waiting For accordingly."
 }
-elseif ($ExpectedWaiting.ContainsKey($State)) {
-    Write-Host "=== Next Action ==="
-    Write-Host "Actor:  User"
-    Write-Host "Action: Resolve handoff mismatch. $State normally expects $($ExpectedWaiting[$State])."
-    Write-Host "Commit: Blocked - handoff state is inconsistent."
-    $ActionLine = "Resolve handoff mismatch. $State normally expects Waiting For: $($ExpectedWaiting[$State])."
-    $AfterLine = "Correct Waiting For in AI_HANDOFF.md to match the expected actor for this state."
-}
 else {
-    $knownStates = @("NEEDS_ANALYSIS", "NEEDS_INVESTIGATION", "PLAN_REQUIRED", "PLAN_READY_FOR_REVIEW",
-        "READY_FOR_IMPLEMENTATION", "IMPLEMENTED", "READY_FOR_REVIEW", "REVIEW_DONE",
-        "BLOCKED", "WAITING_FOR_USER")
-    if ($knownStates -notcontains $State) {
-        Write-Host "WARNING: Unrecognized state: $State."
-        Write-Host ""
-    }
+    Write-Host "WARNING: Unrecognized state: $State."
+    Write-Host ""
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  User"
     Write-Host "Action: Inspect AI_HANDOFF.md and decide the next step."
@@ -296,7 +339,7 @@ if ($PrepareFile) {
     $NtLines = [System.Collections.Generic.List[string]]::new()
     $NtLines.Add("# Next Turn Entry Brief")
     $NtLines.Add("Generated: $Timestamp")
-    $NtLines.Add("Actor: $WaitingFor")
+    $NtLines.Add("Actor: $ActorTool ($ActorRole)")
     $NtLines.Add("State: $State")
     $NtLines.Add("Current Task: $CurrentTask")
     $NtLines.Add("")
@@ -328,7 +371,7 @@ if ($PrepareFile) {
 
     Write-Host ""
     Write-Host "NEXT_TURN.md written."
-    Write-Host "Paste to $WaitingFor`: Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+    Write-Host "Paste to $ActorTool`: Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
     Write-Host ""
 }
 

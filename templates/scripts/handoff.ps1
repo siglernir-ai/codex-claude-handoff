@@ -40,6 +40,30 @@ function Get-SectionContent {
     return ((Get-SectionLines -Lines $Lines -Heading $Heading) -join "`n").Trim()
 }
 
+# --- Role binding (State -> Role -> Tool) ---
+
+function Get-RoleBinding {
+    $binding = @{ Master = "Codex"; Reviewer = "Codex"; Implementer = "Claude Code" }
+    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (Test-Path $rolesFile) {
+        foreach ($line in (Get-Content -Path $rolesFile)) {
+            if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
+                $binding[$Matches[1]] = $Matches[2].Trim()
+            }
+        }
+    }
+    return $binding
+}
+
+function Resolve-Actor {
+    param([string]$Role, [hashtable]$Binding)
+    if ($Role -eq "User") { return "User" }
+    if ($Binding.ContainsKey($Role)) { return $Binding[$Role] }
+    return $Role
+}
+
+$Binding = Get-RoleBinding
+
 $StatusLines = Get-SectionLines -Lines $Lines -Heading "Status"
 $State       = "(unknown)"
 $WaitingFor  = "(unknown)"
@@ -51,77 +75,84 @@ foreach ($line in $StatusLines) {
     if ($line -match "^- Current Task:\s*(.+)") { $CurrentTask = $Matches[1].Trim() }
 }
 
+# Backward-compatible state aliases (pre-v0.13.0 tool-named dialogue states)
+$StateAlias = @{
+    "QUESTION_FOR_CODEX"  = "QUESTION_FOR_MASTER"
+    "QUESTION_FOR_CLAUDE" = "QUESTION_FOR_IMPLEMENTER"
+}
+if ($StateAlias.ContainsKey($State)) { $State = $StateAlias[$State] }
+
 $CommitStatus = switch ($State) {
-    "REVIEW_DONE" { "ALLOWED - Codex approved. Commit only the files listed under Changed Files." }
-    "IMPLEMENTED" { "ALLOWED - no Codex review required. Review the work before committing." }
+    "REVIEW_DONE" { "ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files." }
+    "IMPLEMENTED" { "ALLOWED - no Reviewer review required. Review the work before committing." }
     default       { "Blocked - $State requires action before committing." }
 }
 
-# --- Action map for next command ---
+# --- Action map for next command (keyed by State; Actor is resolved from Role) ---
 
 $ActionMap = @{
     "NEEDS_ANALYSIS"           = @{
-        Actor  = "Codex"
+        Role   = "Master"
         Action = "Classify the task and set the correct State and Waiting For."
-        After  = "Set State to the appropriate gate and Waiting For to the correct actor. Update AI_HANDOFF.md."
+        After  = "Set State to the appropriate gate and Waiting For to the correct role. Update AI_HANDOFF.md."
     }
     "NEEDS_INVESTIGATION"      = @{
-        Actor  = "Claude Code"
+        Role   = "Implementer"
         Action = "Investigate only. Do not modify source files."
-        After  = "Set State: READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+        After  = "Set State: READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
     }
     "PLAN_REQUIRED"            = @{
-        Actor  = "Claude Code"
+        Role   = "Implementer"
         Action = "Write a plan only. Do not modify source files."
-        After  = "Set State: PLAN_READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+        After  = "Set State: PLAN_READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
     }
     "PLAN_READY_FOR_REVIEW"    = @{
-        Actor  = "Codex"
+        Role   = "Reviewer"
         Action = "Review the plan. Approve or request changes before implementation begins."
         After  = "Set State: READY_FOR_IMPLEMENTATION or PLAN_REQUIRED. Set Waiting For accordingly. Update AI_HANDOFF.md."
     }
     "READY_FOR_IMPLEMENTATION" = @{
-        Actor  = "Claude Code"
+        Role   = "Implementer"
         Action = "Implement the approved scope. Do not modify unrelated files."
-        After  = "Set State: READY_FOR_REVIEW and Waiting For: Codex. Update AI_HANDOFF.md."
+        After  = "Set State: READY_FOR_REVIEW and Waiting For: Reviewer. Update AI_HANDOFF.md."
     }
     "IMPLEMENTED"              = @{
-        Actor  = "User"
-        Action = "Review the work. Commit if satisfied, or ask Codex to review first."
+        Role   = "User"
+        Action = "Review the work. Commit if satisfied, or ask the Reviewer to review first."
         After  = "No handoff update required. Commit only the files listed under Changed Files."
     }
     "READY_FOR_REVIEW"         = @{
-        Actor  = "Codex"
+        Role   = "Reviewer"
         Action = "Review Changed Files. Run git status and git diff before approving."
         After  = "Set State: REVIEW_DONE and Waiting For: User, or READY_FOR_IMPLEMENTATION if changes are needed. Update AI_HANDOFF.md."
     }
     "REVIEW_DONE"              = @{
-        Actor  = "User"
+        Role   = "User"
         Action = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
         After  = "No handoff update required. Commit only the files listed under Changed Files."
     }
-    "QUESTION_FOR_CODEX"       = @{
-        Actor  = "Codex"
-        Action = "Answer Claude Code's question under Dialogue / Open Questions, then return the working state."
-        After  = "Set State back to Claude Code's working state and Waiting For: Claude Code. Update AI_HANDOFF.md."
+    "QUESTION_FOR_MASTER"      = @{
+        Role   = "Master"
+        Action = "Answer the Implementer's question under Dialogue / Open Questions, then return the working state."
+        After  = "Set State back to the Implementer's working state and Waiting For: Implementer. Update AI_HANDOFF.md."
     }
-    "QUESTION_FOR_CLAUDE"      = @{
-        Actor  = "Claude Code"
-        Action = "Answer Codex's question read-only under Dialogue / Open Questions. No source edits."
-        After  = "Set State back to the value Codex specified and Waiting For: Codex. Update AI_HANDOFF.md."
+    "QUESTION_FOR_IMPLEMENTER"  = @{
+        Role   = "Implementer"
+        Action = "Answer the Master's question read-only under Dialogue / Open Questions. No source edits."
+        After  = "Set State back to the value the Master specified and Waiting For: Master. Update AI_HANDOFF.md."
     }
     "RE_GATE_REQUESTED"        = @{
-        Actor  = "Codex"
-        Action = "Re-route the task; Claude Code found it riskier/larger than scoped."
+        Role   = "Master"
+        Action = "Re-route the task; the Implementer found it riskier/larger than scoped."
         After  = "Re-classify through the Decision Router and set State/Waiting For accordingly. Update AI_HANDOFF.md."
     }
     "BLOCKED"                  = @{
-        Actor  = "User"
+        Role   = "User"
         Action = "Resolve the blocking issue documented under Open Issues in AI_HANDOFF.md."
         After  = "Resolve the blocker, update AI_HANDOFF.md, and set State and Waiting For appropriately."
     }
     "WAITING_FOR_USER"         = @{
-        Actor  = "User"
+        Role   = "User"
         Action = "Review AI_HANDOFF.md and decide the next step or provide approval."
         After  = "Update AI_HANDOFF.md with your decision and set State and Waiting For accordingly."
     }
@@ -134,10 +165,11 @@ function Invoke-Status {
     Write-Host "State:        $State"
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
+    Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
     Write-Host "Commit:       $CommitStatus"
     $skillAdapter = Join-Path (Get-Location) ".agents/skills/codex-claude-handoff/SKILL.md"
     if (Test-Path $skillAdapter) {
-        Write-Host "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; Codex adapter: .agents/skills/codex-claude-handoff/SKILL.md)"
+        Write-Host "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
     }
     Write-Host ""
 }
@@ -151,11 +183,25 @@ function Invoke-Next {
         return
     }
 
-    # Use $WaitingFor as the actor (source of truth from AI_HANDOFF.md)
-    # Fall back to ActionMap entry only when WaitingFor is unparsed
-    $actor      = if ($WaitingFor -ne "(unknown)") { $WaitingFor } else { $entry.Actor }
-    $actionLine = $entry.Action
-    $afterLine  = $entry.After
+    # Resolve the acting tool from the state's role (authoritative, swap-correct)
+    $role    = $entry.Role
+    $expTool = Resolve-Actor -Role $role -Binding $Binding
+
+    # Turn-ownership / mismatch: Waiting For must be the expected role or the resolved tool.
+    # On mismatch, route to User instead of generating a normal prompt for the wrong actor.
+    $isMismatch = ($WaitingFor -ne "(unknown)") -and ($WaitingFor -ne $role) -and ($WaitingFor -ne $expTool)
+
+    if ($isMismatch) {
+        $actor      = "User"
+        $roleLabel  = "handoff mismatch"
+        $actionLine = "Resolve handoff mismatch. State $State normally expects Waiting For: $role ($expTool), but found: $WaitingFor."
+        $afterLine  = "Correct Waiting For in AI_HANDOFF.md to match the expected role for this state."
+    } else {
+        $actor      = $expTool
+        $roleLabel  = $role
+        $actionLine = $entry.Action
+        $afterLine  = $entry.After
+    }
     $nextStep   = Get-SectionContent -Lines $Lines -Heading "Next Recommended Step"
 
     $keyContext = ""
@@ -168,7 +214,7 @@ function Invoke-Next {
     $ntLines   = [System.Collections.Generic.List[string]]::new()
     $ntLines.Add("# Next Turn Entry Brief")
     $ntLines.Add("Generated: $timestamp")
-    $ntLines.Add("Actor: $actor")
+    $ntLines.Add("Actor: $actor ($roleLabel)")
     $ntLines.Add("State: $State")
     $ntLines.Add("Current Task: $CurrentTask")
     $ntLines.Add("")
@@ -191,12 +237,15 @@ function Invoke-Next {
         Write-Host ""
         Write-Host "NEXT_TURN.md written."
 
-        if ($actor -eq "User") {
+        if ($isMismatch) {
+            Write-Host "WARNING: State $State expects Waiting For: $role ($expTool), but found: $WaitingFor."
+            Write-Host "Next actor: User - resolve the handoff mismatch in AI_HANDOFF.md before continuing."
+        } elseif ($actor -eq "User") {
             Write-Host "Next actor: User"
             Write-Host "No tool handoff needed."
             Write-Host "Review the status, start a new request, or run commit-check if you are about to commit."
         } else {
-            Write-Host "Open:  $actor"
+            Write-Host "Open:  $actor  (role: $role)"
             Write-Host "Paste: $pasteInstruction"
             Write-Host ""
 
@@ -247,16 +296,17 @@ function Invoke-Start {
         }
     }
 
-    $codexPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Codex Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Claude investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
+    $masterTool = Resolve-Actor -Role "Master" -Binding $Binding
+    $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 
     Write-Host ""
-    Write-Host "=== Codex Entry Prompt ==="
-    Write-Host $codexPrompt
+    Write-Host "=== Master Entry Prompt (open: $masterTool) ==="
+    Write-Host $masterPrompt
     Write-Host ""
 
     if ($Clip) {
         try {
-            Set-Clipboard -Value $codexPrompt
+            Set-Clipboard -Value $masterPrompt
             Write-Host "Prompt copied to clipboard."
         } catch {
             Write-Host "Could not copy to clipboard: $_"
@@ -268,14 +318,18 @@ function Invoke-CommitCheck {
     Write-Host ""
 
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
-        # Parse handoff Changed Files (exclude AI_HANDOFF.md)
+        # Parse handoff Changed Files. Only markdown bullet lines ("- path") are files;
+        # skip group headings ("New (6):", "Modified (26):"), the "Total:" summary, and notes.
+        $localIgnored  = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md")
         $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
         $commitFiles = [System.Collections.Generic.List[string]]::new()
         foreach ($line in $changedFilesLines) {
-            $entry = $line.Trim() -replace '^-\s+', '' -replace '`', ''
+            $trimmed = $line.Trim()
+            if ($trimmed -notmatch '^-\s+') { continue }
+            $entry = $trimmed -replace '^-\s+', '' -replace '`', ''
             if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
             $entry = $entry.Trim()
-            if ($entry -ne "" -and $entry -ne "None yet" -and $entry -ne "AI_HANDOFF.md") {
+            if ($entry -ne "" -and $entry -ne "None yet" -and ($localIgnored -notcontains $entry)) {
                 $commitFiles.Add($entry)
             }
         }
@@ -301,16 +355,19 @@ function Invoke-CommitCheck {
         $nsHasStaleGuidance = ($nsRawMentioned.Count -gt 0) -and
             (($nsRawMentioned | Where-Object { $_ -ne "AI_HANDOFF.md" }).Count -eq 0)
 
-        # Get actual tracked changed files from git status --short
+        # Get actual changed files from git status --short (modified AND new/untracked),
+        # excluding local ignored handoff/request files.
         $actualTracked = [System.Collections.Generic.List[string]]::new()
         try {
-            $gitLines = & git status --short 2>$null
+            # --untracked-files=all expands untracked directories so new files under
+            # new directories (e.g. .ai/roles/ROLE_ASSIGNMENT.md) are listed individually
+            # rather than collapsed to the directory name.
+            $gitLines = & git status --short --untracked-files=all 2>$null
             foreach ($gitLine in $gitLines) {
                 if ($gitLine.Length -lt 3) { continue }
-                if ($gitLine.Substring(0, 2) -eq "??") { continue }  # skip untracked
                 $filePart = $gitLine.Substring(3).Trim()
                 if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
-                if ($filePart -ne "" -and $filePart -ne "AI_HANDOFF.md") {
+                if ($filePart -ne "" -and $localIgnored -notcontains $filePart) {
                     $actualTracked.Add($filePart)
                 }
             }
@@ -338,7 +395,7 @@ function Invoke-CommitCheck {
             if (-not $mismatch -and $nsHasStaleGuidance) { $mismatch = $true }
         }
 
-        Write-Host "Commit: ALLOWED - Codex approved."
+        Write-Host "Commit: ALLOWED - the Reviewer approved."
         Write-Host ""
 
         if ($mismatch) {
@@ -374,12 +431,12 @@ function Invoke-CommitCheck {
         Write-Host "Commit: Not yet allowed."
         Write-Host "State: $State - Waiting For: $WaitingFor"
         $reason = switch ($State) {
-            "READY_FOR_REVIEW"         { "Waiting for Codex to review." }
-            "PLAN_READY_FOR_REVIEW"    { "Waiting for Codex to review the plan." }
-            "READY_FOR_IMPLEMENTATION" { "Waiting for Claude Code to implement." }
-            "PLAN_REQUIRED"            { "Waiting for Claude Code to write a plan." }
-            "NEEDS_INVESTIGATION"      { "Waiting for Claude Code to investigate." }
-            "NEEDS_ANALYSIS"           { "Waiting for Codex to analyze." }
+            "READY_FOR_REVIEW"         { "Waiting for the Reviewer to review." }
+            "PLAN_READY_FOR_REVIEW"    { "Waiting for the Reviewer to review the plan." }
+            "READY_FOR_IMPLEMENTATION" { "Waiting for the Implementer to implement." }
+            "PLAN_REQUIRED"            { "Waiting for the Implementer to write a plan." }
+            "NEEDS_INVESTIGATION"      { "Waiting for the Implementer to investigate." }
+            "NEEDS_ANALYSIS"           { "Waiting for the Master to analyze." }
             "BLOCKED"                  { "Work is blocked. Resolve the issue in AI_HANDOFF.md." }
             "WAITING_FOR_USER"         { "User decision or approval required. See AI_HANDOFF.md." }
             default                    { "Inspect AI_HANDOFF.md for details." }
@@ -393,17 +450,18 @@ function Invoke-CommitCheck {
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
-    Write-Host "Actor:  $WaitingFor"
+    Write-Host "Waiting For: $WaitingFor"
     Write-Host "Task:   $CurrentTask"
+    Write-Host "Roles:  Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
     Write-Host ""
     Write-Host "Use this menu for local workflow actions."
-    Write-Host "For questions, planning, or decisions, continue chatting with Codex."
+    Write-Host "For questions, planning, or decisions, continue chatting with the Master."
     Write-Host ""
     Write-Host "1. Start new request              - begin a new task from natural language"
-    Write-Host "2. Continue next turn             - prepare prompt for Codex/Claude if needed"
+    Write-Host "2. Continue next turn             - prepare prompt for the Master/Implementer if needed"
     Write-Host "3. Show status                    - show current state and next actor"
     Write-Host "4. Check commit                   - verify whether commit is allowed"
-    Write-Host "5. Run next assisted Claude turn  - only when Waiting For: Claude Code"
+    Write-Host "5. Run next assisted turn         - only when the Implementer (Claude Code) should act"
     Write-Host "6. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
@@ -427,37 +485,55 @@ function Invoke-Menu {
 }
 
 function Invoke-RunNext {
-    $eligibleStates = @("READY_FOR_IMPLEMENTATION")
+    $implementerTool = $Binding.Implementer
 
-    # Dual eligibility check - actor first, then state
-    if ($WaitingFor -ne "Claude Code") {
+    # Only READY_FOR_IMPLEMENTATION is eligible
+    if ($State -ne "READY_FOR_IMPLEMENTATION") {
         Write-Host ""
         Write-Host "run-next: blocked."
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
-        if ($WaitingFor -eq "Codex") {
-            Write-Host "Reason:      This turn is for Codex. run-next cannot automate Codex turns."
-            Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into ChatGPT."
-        } else {
+        $entry = $ActionMap[$State]
+        $role  = if ($entry) { $entry.Role } else { "" }
+        if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
+            Write-Host "Reason:      run-next does not automate investigation or planning turns in this version."
+            Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
+            Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into the Implementer."
+        } elseif ($role -eq "Master" -or $role -eq "Reviewer") {
+            $t = Resolve-Actor -Role $role -Binding $Binding
+            Write-Host "Reason:      This turn is for the $role ($t). run-next cannot automate $role turns."
+            Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $t."
+        } elseif ($role -eq "User") {
             Write-Host "Reason:      This turn requires user action."
             Write-Host "Next step:   See AI_HANDOFF.md for details."
+        } else {
+            Write-Host "Reason:      State '$State' is not eligible for run-next in this version."
         }
         Write-Host ""
         exit 1
     }
 
-    if ($eligibleStates -notcontains $State) {
+    # Turn ownership: Waiting For must indicate the Implementer's turn (role name or resolved tool)
+    if ($WaitingFor -ne "Implementer" -and $WaitingFor -ne $implementerTool) {
         Write-Host ""
         Write-Host "run-next: blocked."
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
-        if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
-            Write-Host "Reason:      run-next does not automate investigation or planning turns in this version."
-            Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
-        } else {
-            Write-Host "Reason:      State '$State' is not eligible for run-next in this version."
-        }
-        Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into Claude Code."
+        Write-Host "Reason:      Turn ownership mismatch. State $State expects the Implementer's turn ($implementerTool), but Waiting For is '$WaitingFor'."
+        Write-Host "Next step:   Correct Waiting For in AI_HANDOFF.md to Implementer, or re-route via the Master."
+        Write-Host ""
+        exit 1
+    }
+
+    # READY_FOR_IMPLEMENTATION: run-next can only drive an Implementer bound to Claude Code
+    if ($implementerTool -ne "Claude Code") {
+        Write-Host ""
+        Write-Host "run-next: blocked."
+        Write-Host "State:       $State"
+        Write-Host "Implementer: $implementerTool"
+        Write-Host "Reason:      run-next can only automate an Implementer bound to Claude Code."
+        Write-Host "             $implementerTool has no local CLI, so this turn must be run manually."
+        Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $implementerTool."
         Write-Host ""
         exit 1
     }
@@ -501,10 +577,10 @@ function Invoke-RunNext {
     }
 
     Write-Host ""
-    Write-Host "Preparing assisted Claude Code turn..."
+    Write-Host "Preparing assisted Implementer turn..."
     Write-Host ""
     Write-Host "State:        $State"
-    Write-Host "Actor:        Claude Code"
+    Write-Host "Actor:        $implementerTool (Implementer)"
     Write-Host "Permission:   acceptEdits  (Bash explicitly disallowed)"
     Write-Host "Budget limit: `$$BudgetUsd"
     Write-Host ""
@@ -567,7 +643,7 @@ function Invoke-RunNext {
         Write-Host "Tests and lint were not run - execute them manually before committing."
         Write-Host ""
 
-        # Re-read AI_HANDOFF.md to get post-Claude state (pre-run values are stale)
+        # Re-read AI_HANDOFF.md to get post-turn state (pre-run values are stale)
         $script:Lines       = Get-Content -Path $HandoffFile
         $freshStatusLines   = Get-SectionLines -Lines $script:Lines -Heading "Status"
         $script:State       = "(unknown)"
@@ -578,17 +654,29 @@ function Invoke-RunNext {
             if ($line -match "^- Waiting For:\s*(.+)")  { $script:WaitingFor  = $Matches[1].Trim() }
             if ($line -match "^- Current Task:\s*(.+)") { $script:CurrentTask = $Matches[1].Trim() }
         }
+        if ($StateAlias.ContainsKey($script:State)) { $script:State = $StateAlias[$script:State] }
 
         # Refresh NEXT_TURN.md with the updated state
         try { Invoke-Next -Silent $true } catch { Write-Host "Could not refresh NEXT_TURN.md: $_" }
 
-        if ($script:State -eq "READY_FOR_REVIEW" -and $script:WaitingFor -eq "Codex") {
+        $reviewerTool = Resolve-Actor -Role "Reviewer" -Binding $Binding
+        $reviewerReady = ($script:State -eq "READY_FOR_REVIEW") -and
+            ($script:WaitingFor -eq "Reviewer" -or $script:WaitingFor -eq $reviewerTool)
+
+        if ($reviewerReady) {
             $pasteInstruction = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
             try { Set-Clipboard -Value $pasteInstruction } catch { Write-Host "Could not copy to clipboard: $_" }
-            Write-Host "NEXT_TURN.md updated for Codex review."
+            Write-Host "NEXT_TURN.md updated for Reviewer review."
             Write-Host ""
-            Write-Host "Open Codex and press Ctrl+V."
-            Write-Host "Do not commit before Codex review."
+            Write-Host "Open $reviewerTool and press Ctrl+V."
+            Write-Host "Do not commit before review."
+        } elseif ($script:State -eq "READY_FOR_REVIEW") {
+            Write-Host "Post-turn handoff mismatch detected."
+            Write-Host "State:       $($script:State)"
+            Write-Host "Waiting For: $($script:WaitingFor)"
+            Write-Host "Expected:    Reviewer ($reviewerTool)"
+            Write-Host "NEXT_TURN.md updated for User mismatch resolution."
+            Write-Host "Do not continue to a review turn or commit until AI_HANDOFF.md is corrected."
         } else {
             Write-Host "State is now: $($script:State) (Waiting For: $($script:WaitingFor))"
             Write-Host "Run 'handoff.ps1 next' to prepare the next turn."
@@ -617,11 +705,11 @@ switch ($Command) {
             Write-Host "Usage: handoff.ps1 <command> [options]"
             Write-Host ""
             Write-Host "Commands:"
-            Write-Host "  status                    Show current handoff state and commit status."
+            Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
-            Write-Host '  start "<request>" [-Clip]  Save request and print a Codex entry prompt.'
+            Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
-            Write-Host "  run-next [-BudgetUsd N]   Run one Claude Code assisted turn (READY_FOR_IMPLEMENTATION only)."
+            Write-Host "  run-next [-BudgetUsd N]   Run one assisted Implementer turn (READY_FOR_IMPLEMENTATION; Implementer must be Claude Code)."
             Write-Host ""
         }
     }

@@ -1,31 +1,26 @@
-# CLAUDE.md - Claude Code Instructions
+# Codex-Claude Handoff - Implementer Role Protocol
 
-> You are Claude Code. Your behavior in this protocol is determined by your assigned **role**,
-> not your name. Resolve your role in `.ai/roles/ROLE_ASSIGNMENT.md`. By default Claude Code
-> holds the **Implementer** role and follows this file (and `.ai/skills/codex-claude-handoff/IMPLEMENTER.md`).
-> If you have been reassigned to the **Master** and/or **Reviewer** role, follow
-> `.ai/skills/codex-claude-handoff/MASTER.md` (and `AGENTS.md`) instead.
+This file defines the behavior of the **Implementer** role. By default the Implementer
+is Claude Code (see `.ai/roles/ROLE_ASSIGNMENT.md`). Whichever tool holds this role
+follows this file.
 
-> `AGENTS.md` may be used only for stable project context such as stack, architecture rules, and forbidden files. When you hold the Implementer role, do not treat `AGENTS.md` as your behavior instructions.
+For the shared role split and protocol index, see `SKILL.md` in this folder.
+For the Master + Reviewer role, see `MASTER.md` in this folder.
+For the current role-to-tool binding, see `.ai/roles/ROLE_ASSIGNMENT.md`.
 
-> Skill location: when asked to find or identify the handoff skill, do not search only `.claude/skills/`. The Codex-facing adapter is at `.agents/skills/codex-claude-handoff/SKILL.md`, the canonical shared protocol is at `.ai/skills/codex-claude-handoff/`, and the role binding is at `.ai/roles/ROLE_ASSIGNMENT.md`. Your behavior is driven by your assigned role and the current `AI_HANDOFF.md`.
-
----
+Throughout this file, "the Implementer" means the tool currently assigned the
+Implementer role, and "the Master" / "the Reviewer" mean the tool(s) holding those roles.
 
 ## Implementer Role
 
 The Implementer is the **implementation agent** during approved implementation turns.
 
-During investigation and planning turns, the Implementer also acts as a **repository-local feasibility and capability partner**. In that role, the Implementer inspects files, config, and project context read-only, then reports findings, relevant local capabilities and constraints, likely implementation approach, and risks. Control returns to the Master before any implementation task is finalized. The Implementer does not modify source files during investigation or planning turns.
-
-The Implementer should:
-- Implement only tasks approved by the user or prepared by the Master in `AI_HANDOFF.md`.
-- Modify only files required for the current task.
-- Avoid unrelated refactors, renames, formatting sweeps, or reorganizations.
-- Keep each session focused on one feature, fix, or review response.
-- Preserve existing architecture and project conventions.
-
----
+During investigation and planning turns, the Implementer also acts as a **repository-local
+feasibility and capability partner**. In that role, the Implementer inspects files, config,
+and project context read-only, then reports findings, relevant local capabilities and
+constraints, likely implementation approach, and risks. Control returns to the Master before
+any implementation task is finalized. The Implementer does not modify source files during
+investigation or planning turns.
 
 ## Required Start-of-Session Behavior
 
@@ -41,8 +36,6 @@ Before significant work:
 4. Act only if `Waiting For: Implementer`.
 5. If the handoff says another role should act next, stop and report that clearly.
 
----
-
 ## Implementation Rules
 
 - Follow the exact scope in `AI_HANDOFF.md`.
@@ -51,8 +44,6 @@ Before significant work:
 - Do not make speculative improvements.
 - Do not modify secrets or local environment files.
 - Do not run deploys, live migrations, database resets or destructive data operations, file deletions, production configuration changes, or secret/env changes without explicit user approval. If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
-
----
 
 ## Investigation Mode
 
@@ -68,8 +59,6 @@ When `State: NEEDS_INVESTIGATION` and `Waiting For: Implementer`:
   - Risks and recommended next step.
 - Set `State: READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 
----
-
 ## Planning Mode
 
 When `State: PLAN_REQUIRED` and `Waiting For: Implementer`:
@@ -79,7 +68,17 @@ When `State: PLAN_REQUIRED` and `Waiting For: Implementer`:
 - Set `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 - Implement only after the plan is approved and `State` returns to `READY_FOR_IMPLEMENTATION`.
 
----
+## Two-Way Dialogue
+
+The handoff is a dialogue, not only a one-way push. The Implementer may hand a scoped question or concern back to the Master without escalating to the user. Every dialogue turn is discrete: the other role must take an explicit turn. There is no automatic loop, and commit stays blocked while any dialogue state is active.
+
+- `QUESTION_FOR_MASTER` - You need a scoped clarification or decision from the Master before continuing (ambiguous scope, conflicting instructions, a design choice the Master owns). Write the question under `## Dialogue / Open Questions` in `AI_HANDOFF.md`, set `State: QUESTION_FOR_MASTER` and `Waiting For: Master`. Do not modify source files while waiting. When the Master answers, it returns the State to your working state.
+- `RE_GATE_REQUESTED` - While implementing, you discover the task is riskier or larger than its approved scope (a hidden migration, auth/security impact, a multi-system change). Stop editing, record findings under `## Dialogue / Open Questions` (and `Open Issues` if needed), set `State: RE_GATE_REQUESTED` and `Waiting For: Master`. The Master re-routes the task (planning, investigation, or a revised scope).
+- `QUESTION_FOR_IMPLEMENTER` - When the Master asks you a scoped question (repo reality, feasibility, verification constraints), answer read-only under `## Dialogue / Open Questions`, then set `State` back to the value the Master specified and `Waiting For: Master`. Do not modify source files to answer.
+
+Keep each question specific and answerable in one turn. Prefer a question over guessing when correctness depends on the answer; reserve `BLOCKED` (Waiting For: User) for blockers that genuinely need the user.
+
+Backward compatibility: the pre-v0.13.0 state names `QUESTION_FOR_CODEX` (now `QUESTION_FOR_MASTER`) and `QUESTION_FOR_CLAUDE` (now `QUESTION_FOR_IMPLEMENTER`) are still accepted by the workflow scripts so older handoff files keep working.
 
 ## After Implementation
 
@@ -124,7 +123,7 @@ After every significant implementation, update `AI_HANDOFF.md` with all fields b
 - Reviewer: review the changed files listed above and confirm whether the implementation matches scope.
 ```
 
-Verification guidance: list every command you ran and summarize its output (e.g. "git diff: 2 files changed, 15 insertions"). For documentation-only changes write "none - documentation change". Manual Check should state what you expected and what you observed, not just a pass/fail label.
+Verification guidance: list every command you ran and summarize its output. For documentation-only changes write "none - documentation change". Manual Check should state what you expected and what you observed, not just a pass/fail label.
 
 If blocked, use:
 
@@ -134,8 +133,6 @@ If blocked, use:
 ```
 
 and explain the blocker under `Open Issues`.
-
----
 
 ## Allowed States
 
@@ -154,10 +151,6 @@ and explain the blocker under `Open Issues`.
 | `RE_GATE_REQUESTED` | The Implementer found the task riskier/larger than scoped; the Master re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |
-
-Backward compatibility: the pre-v0.13.0 state names `QUESTION_FOR_CODEX` and `QUESTION_FOR_CLAUDE` are still accepted by the workflow scripts and map to `QUESTION_FOR_MASTER` and `QUESTION_FOR_IMPLEMENTER` respectively.
-
----
 
 ## Commit Discipline
 

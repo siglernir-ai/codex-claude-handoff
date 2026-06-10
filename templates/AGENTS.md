@@ -1,6 +1,11 @@
-# AGENTS.md - Codex Instructions
+# AGENTS.md - Master + Reviewer Instructions
 
-> This file is primarily for **Codex**. Claude Code may use the project-context sections only for orientation. Claude-specific behavior is defined in `CLAUDE.md`.
+> This file is read by the tool that follows the `AGENTS.md` convention (by default **Codex**).
+> Your behavior in this protocol is determined by your assigned **role**, not your name.
+> Resolve your role in `.ai/roles/ROLE_ASSIGNMENT.md`. By default this tool holds the
+> **Master + Reviewer** roles and follows the protocol below. If you have been reassigned to
+> the **Implementer** role, follow `.ai/skills/codex-claude-handoff/IMPLEMENTER.md` instead.
+> The full Master + Reviewer protocol also lives in `.ai/skills/codex-claude-handoff/MASTER.md`.
 
 ---
 
@@ -54,25 +59,26 @@ Recommended examples:
 
 ---
 
-## Codex Role
+## Master Role
 
-Codex acts as **advisor, architect, task writer, and reviewer**.
+The Master acts as **advisor, architect, task writer, and decision router**. The Reviewer
+(held by the same tool by default) reviews implementation against approved scope.
 
-Codex should:
-1. Read `AI_HANDOFF.md` first at the beginning of every session.
+The Master should:
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm its role, then read `AI_HANDOFF.md` first at the beginning of every session.
 2. Check `State` and `Waiting For` before doing anything else.
-3. If it is not Codex's turn, stop and explain who should act next.
+3. If it is not the Master's turn, stop and explain which role should act next.
 4. Analyze problems before recommending implementation.
-5. Prepare clear Claude Code implementation instructions.
-6. Review only the files listed under `Changed Files` after Claude Code finishes, unless broader context is required.
+5. Prepare clear Implementer instructions.
+6. Review only the files listed under `Changed Files` after the Implementer finishes, unless broader context is required.
 
-> Default behavior: Codex should not modify project source code unless the user explicitly asks. Codex's primary output is analysis, review, and Claude-ready task descriptions.
+> Default behavior: the Master should not modify project source code unless the user explicitly asks. The Master's primary output is analysis, review, and Implementer-ready task descriptions.
 
-Before finalizing task instructions, Codex should consider routing to `NEEDS_INVESTIGATION` when:
-- The task is unclear or implementation-uncertain and a read-only Claude Code pass would improve the task description.
-- The task affects multiple files, systems, architecture, or project conventions that Codex has not verified.
-- The task depends on scripts, tools, configs, skills, or local implementation constraints whose current state Codex has not confirmed.
-- A read-only Claude Code pass would improve correctness, feasibility, safety, or execution quality more than it adds overhead.
+Before finalizing task instructions, the Master should consider routing to `NEEDS_INVESTIGATION` when:
+- The task is unclear or implementation-uncertain and a read-only Implementer pass would improve the task description.
+- The task affects multiple files, systems, architecture, or project conventions that the Master has not verified.
+- The task depends on scripts, tools, configs, skills, or local implementation constraints whose current state the Master has not confirmed.
+- A read-only Implementer pass would improve correctness, feasibility, safety, or execution quality more than it adds overhead.
 
 This does not apply to simple, clear, low-risk tasks with well-understood scope. Advisory answers and small single-file changes do not need consultation.
 
@@ -80,39 +86,39 @@ This does not apply to simple, clear, low-risk tasks with well-understood scope.
 
 ## Coordination Protocol
 
-### At the beginning of every Codex session
+### At the beginning of every Master session
 
-1. Read `AI_HANDOFF.md`.
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md` and `AI_HANDOFF.md`.
 2. Check:
    - `State`
    - `Waiting For`
    - `Current Task`
    - `Changed Files`
-3. Act only if `Waiting For: Codex`.
+3. Act only if `Waiting For: Master` (or `Waiting For: Reviewer` for a review turn).
 
-### When preparing work for Claude Code
+### When preparing work for the Implementer
 
-Codex should update `AI_HANDOFF.md` with:
+The Master should update `AI_HANDOFF.md` with:
 
 ```md
 - State: READY_FOR_IMPLEMENTATION
-- Waiting For: Claude Code
-- Last Updated By: Codex
+- Waiting For: Implementer
+- Last Updated By: Master
 - Current Task: [short task name]
 ```
 
 Then write a clear implementation prompt under `Next Recommended Step`.
 
-### When reviewing Claude Code work
+### When reviewing the Implementer's work
 
 If:
 
 ```md
 State: READY_FOR_REVIEW
-Waiting For: Codex
+Waiting For: Reviewer
 ```
 
-Codex should:
+The Reviewer should:
 1. Read `AI_HANDOFF.md`.
 2. Inspect only files listed under `Changed Files`.
 3. Verify the implementation matches the requested scope.
@@ -128,8 +134,28 @@ Unless fixes are needed, then set:
 
 ```md
 State: READY_FOR_IMPLEMENTATION
-Waiting For: Claude Code
+Waiting For: Implementer
 ```
+
+The Reviewer must not be the same tool as the Implementer for the same work.
+
+### Reviewer fast-fix exception
+
+By default, the Reviewer sends fixes back to the Implementer. If the user explicitly
+authorizes the Reviewer to fix small issues, the Reviewer may make a tightly scoped
+fast-fix during review only when all of the following are true:
+
+- The fix is mechanical and low-risk, such as a missing guard, typo, parser edge
+  case, or canonical/template sync fix.
+- The fix touches only files already listed under `Changed Files`, or their direct
+  canonical/template mirrors.
+- The fix does not change product behavior, architecture, task scope, secrets,
+  production configuration, deployment, or database behavior.
+- The Reviewer can immediately run the relevant verification.
+
+After a fast-fix, the Reviewer must update `AI_HANDOFF.md` with what was changed,
+why the fast-fix was allowed, and which verification commands passed. If there is
+any uncertainty, return the work to the Implementer instead.
 
 ---
 
@@ -138,46 +164,46 @@ Waiting For: Claude Code
 When the user provides a natural request rather than a protocol state:
 
 1. Read the request. Do not ask the user to reformat it as a protocol state.
-2. Route the request using the Codex Decision Router below.
+2. Route the request using the Decision Router below.
 3. For advisory requests: answer directly. Do not update `AI_HANDOFF.md`.
-4. For action requests: select the appropriate path, update `AI_HANDOFF.md`, and write a focused task description for Claude Code under `Next Recommended Step`.
+4. For action requests: select the appropriate path, update `AI_HANDOFF.md`, and write a focused task description for the Implementer under `Next Recommended Step`.
 5. Ask for clarification only when the task cannot be safely classified even with the safest available gate.
 
-The user is not responsible for operating the protocol. Codex is.
+The user is not responsible for operating the protocol. The Master is.
 
 ---
 
-## Codex Decision Router
+## Decision Router
 
-Codex acts as the primary decision layer for natural user requests. Route every request to one of six paths.
+The Master acts as the primary decision layer for natural user requests. Route every request to one of six paths.
 
-| # | Path | When to use | What Codex does | `AI_HANDOFF.md` update? |
+| # | Path | When to use | What the Master does | `AI_HANDOFF.md` update? |
 |---|---|---|---|---|
 | 1 | Advisory only | Advice, assessment, explanation, comparison, recommendation, status - even if the topic could later become a code change | Answer the user directly; may inspect files read-only if needed | No (unless the user later explicitly approves or asks for action) |
-| 2 | Needs investigation | User asks Codex to inspect the codebase to understand feasibility, root cause, or what would be needed for a change | Set `NEEDS_INVESTIGATION` / `Waiting For: Claude Code` | Yes |
-| 3 | Needs planning | User explicitly asks to implement or prepare work in a risky area: DB, auth/RLS, security, AI routing, architecture, large refactor, deployment | Set `PLAN_REQUIRED` / `Waiting For: Claude Code` | Yes |
-| 4 | Ready for implementation | User explicitly asks for a simple, clear, non-risky change with well-defined scope | Set `READY_FOR_IMPLEMENTATION` / `Waiting For: Claude Code` | Yes |
-| 5 | Needs user decision | Business or product tradeoff Codex cannot resolve; approval required for a risky action; user must choose between options with meaningfully different implications | Set `WAITING_FOR_USER` or answer with a focused decision question | Yes (or no if answered inline) |
-| 6 | Ready for review | `AI_HANDOFF.md` already says `State: READY_FOR_REVIEW` and it is Codex's turn | Review Changed Files; set `REVIEW_DONE`, `READY_FOR_IMPLEMENTATION`, or `BLOCKED` | Yes |
+| 2 | Needs investigation | User asks to inspect the codebase to understand feasibility, root cause, or what would be needed for a change | Set `NEEDS_INVESTIGATION` / `Waiting For: Implementer` | Yes |
+| 3 | Needs planning | User explicitly asks to implement or prepare work in a risky area: DB, auth/RLS, security, AI routing, architecture, large refactor, deployment | Set `PLAN_REQUIRED` / `Waiting For: Implementer` | Yes |
+| 4 | Ready for implementation | User explicitly asks for a simple, clear, non-risky change with well-defined scope | Set `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` | Yes |
+| 5 | Needs user decision | Business or product tradeoff the Master cannot resolve; approval required for a risky action; user must choose between options with meaningfully different implications | Set `WAITING_FOR_USER` or answer with a focused decision question | Yes (or no if answered inline) |
+| 6 | Ready for review | `AI_HANDOFF.md` already says `State: READY_FOR_REVIEW` and it is the Reviewer's turn | Review Changed Files; set `REVIEW_DONE`, `READY_FOR_IMPLEMENTATION`, or `BLOCKED` | Yes |
 
 ### Advisory-First Rule
 
-Codex answers the user directly (path 1) whenever:
+The Master answers the user directly (path 1) whenever:
 - The user asks for advice, assessment, explanation, comparison, recommendation, or status.
 - The topic could eventually lead to a code change, but the user has not yet asked for action.
-- Codex can provide a useful answer without needing Claude Code to investigate or implement.
+- The Master can provide a useful answer without needing the Implementer to investigate or implement.
 
-Codex must not update `AI_HANDOFF.md` or involve Claude Code unless the user explicitly:
+The Master must not update `AI_HANDOFF.md` or involve the Implementer unless the user explicitly:
 - Asks for action: "add", "fix", "implement", "build", "change", "remove".
 - Approves action after an advisory exchange.
-- Asks Codex to inspect the codebase: "check what would be needed", "look at", "find out why".
-- Or the current handoff state already requires a Codex review.
+- Asks to inspect the codebase: "check what would be needed", "look at", "find out why".
+- Or the current handoff state already requires a Reviewer review.
 
-If the user asks about a risky topic as a question, Codex may answer advisory and explain risks, or ask the user for a decision. It must not automatically create a Claude Code task.
+If the user asks about a risky topic as a question, the Master may answer advisory and explain risks, or ask the user for a decision. It must not automatically create an Implementer task.
 
 ### Routing Examples
 
-| User message | Path | Codex action |
+| User message | Path | Master action |
 |---|---|---|
 | "What does this component do?" | 1 - Advisory | Answer directly; may read files read-only |
 | "Should we add streaming to the AI chat?" | 1 - Advisory or 5 - User decision | Answer with assessment and risks; or ask user to decide |
@@ -191,7 +217,7 @@ When in doubt between two action paths, choose the safer one. A Planning Gate on
 
 ### AI_HANDOFF.md Update Rule
 
-Advisory responses (path 1) must not update `AI_HANDOFF.md`. If the user approves an action after an advisory response, Codex must then select the correct action path and update `AI_HANDOFF.md` before involving Claude Code.
+Advisory responses (path 1) must not update `AI_HANDOFF.md`. If the user approves an action after an advisory response, the Master must then select the correct action path and update `AI_HANDOFF.md` before involving the Implementer.
 
 ---
 
@@ -225,17 +251,17 @@ If any are required, set `State: WAITING_FOR_USER` and document the required act
 
 ## Investigation Gate
 
-When the current task requires information that is not yet available, or when Codex needs Claude Code to act as a repository-local feasibility and capability partner before finalizing task instructions:
+When the current task requires information that is not yet available, or when the Master needs the Implementer to act as a repository-local feasibility and capability partner before finalizing task instructions:
 
-1. Codex sets `State: NEEDS_INVESTIGATION` and `Waiting For: Claude Code`.
-2. Claude Code gathers evidence only - no source-file edits.
-3. Claude Code reports in `AI_HANDOFF.md`:
+1. The Master sets `State: NEEDS_INVESTIGATION` and `Waiting For: Implementer`.
+2. The Implementer gathers evidence only - no source-file edits.
+3. The Implementer reports in `AI_HANDOFF.md`:
    - Findings and unknowns.
-   - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from `AGENTS.md` or `CLAUDE.md`).
+   - Relevant local capabilities or constraints (available scripts, skills, configs, conventions, verification commands, implementation constraints from `AGENTS.md` or the Implementer protocol).
    - Likely files to change and why.
    - Likely implementation approach based on existing codebase patterns.
    - Risks and recommended next step.
-4. Claude Code sets `State: READY_FOR_REVIEW` and `Waiting For: Codex`.
+4. The Implementer sets `State: READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 
 ---
 
@@ -250,19 +276,19 @@ Risky-task examples:
 - Architecture changes or large refactors
 - Production AI routing or model-routing changes
 
-When a task is risky, **Codex must not write the implementation plan itself**. Codex's role in this gate is to classify the task as risky, hand off to Claude Code, and write clear plan-only instructions under `Next Recommended Step`.
+When a task is risky, **the Master must not write the implementation plan itself**. The Master's role in this gate is to classify the task as risky, hand off to the Implementer, and write clear plan-only instructions under `Next Recommended Step`.
 
-1. Codex sets `State: PLAN_REQUIRED` and `Waiting For: Claude Code`, and writes plan-only instructions for Claude Code.
-2. Claude Code writes a plan only - no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence.
-3. Claude Code sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Codex`.
-4. Codex reviews the plan. If approved -> `READY_FOR_IMPLEMENTATION`. If changes needed -> `PLAN_REQUIRED`. If user approval required -> `WAITING_FOR_USER`.
-5. Claude Code implements only after plan approval.
+1. The Master sets `State: PLAN_REQUIRED` and `Waiting For: Implementer`, and writes plan-only instructions.
+2. The Implementer writes a plan only - no source-file edits. Include: what changes and why, files affected, risks and mitigations, implementation sequence.
+3. The Implementer sets `State: PLAN_READY_FOR_REVIEW` and `Waiting For: Reviewer`.
+4. The Reviewer reviews the plan. If approved -> `READY_FOR_IMPLEMENTATION`. If changes needed -> `PLAN_REQUIRED`. If user approval required -> `WAITING_FOR_USER`.
+5. The Implementer implements only after plan approval.
 
 ---
 
 ## Verification Gate
 
-After Claude Code implementation, Codex should verify using safe read-only commands where applicable:
+After Implementer implementation, the Reviewer should verify using safe read-only commands where applicable:
 
 ```bash
 git status
@@ -273,12 +299,12 @@ npm.cmd run lint
 npm.cmd test
 ```
 
-Codex review checklist:
+Reviewer checklist:
 - Run `git status` and confirm the file list matches `AI_HANDOFF.md` `Changed Files` exactly.
-- Run `git diff -- <each changed file>` and confirm the diff matches Claude Code's description.
+- Run `git diff -- <each changed file>` and confirm the diff matches the Implementer's description.
 - Check for unlisted edits: files modified but not in `Changed Files`.
 - Check for scope creep: edits outside the approved task scope.
-- Check verification claims: if Claude Code says lint passed, confirm it; if "not run", confirm it is acceptable for this change type.
+- Check verification claims: if the Implementer says lint passed, confirm it; if "not run", confirm it is acceptable for this change type.
 - Flag missing or vague evidence: "not run" without explanation, or "manual check: looks good" without specifics.
 - Record which commands were run and what they showed in `AI_HANDOFF.md` before approving.
 
@@ -286,7 +312,7 @@ Codex review checklist:
 
 ## Unsafe Command Rules
 
-Codex and Claude Code must not run the following without explicit user approval:
+No role may run the following without explicit user approval:
 
 - Deploy commands
 - Live database migrations
@@ -301,29 +327,30 @@ If any are required, set `State: WAITING_FOR_USER` and document the required act
 
 ## Encoding-Safe Handoff Rule
 
-When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any language with encoding-sensitive characters), both Codex and Claude Code must follow these rules:
+When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any language with encoding-sensitive characters), every role must follow these rules:
 
 - **Never copy UI text from handoff files.** `AI_HANDOFF.md` and `NEXT_TURN.md` may contain garbled or corrupted characters if the author's terminal encoding was unstable. Do not use that text as a search string, a match pattern, or text to insert.
 - **Write semantic English descriptions in handoff files.** Describe what the text means rather than copying the literal characters. Example: write "the Hebrew button label that means 'Save'" rather than attempting to copy the Hebrew word into the handoff file.
 - **Always inspect the source file directly.** Before editing, searching for, or reviewing any UI string, open the actual source file (component, translation file, string resource) and read the text from there.
 - **Point to the exact location.** When writing handoff instructions that involve UI text, reference the file path, component name, line number, or a nearby code comment - not the raw text itself.
 - **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
-- **The source of truth for UI text is the source file, not the handoff.** This rule does not change what text belongs in the product; Hebrew labels stay Hebrew in source. It only changes how agents refer to that text in handoff files.
+- **The source of truth for UI text is the source file, not the handoff.** This rule does not change what text belongs in the product; Hebrew labels stay Hebrew in source. It only changes how roles refer to that text in handoff files.
 
 ---
 
 ## Handoff Operator
 
-`scripts/handoff.ps1` is the user-facing helper for the daily workflow. It provides four commands:
+`scripts/handoff.ps1` is the user-facing helper for the daily workflow. It provides these commands:
 
 | Command | What it does |
 |---|---|
-| `status` | Print State, Waiting For, Current Task, and commit status in plain English. |
+| `status` | Print State, Waiting For, Current Task, the current role binding, and commit status in plain English. |
 | `next [-Clip]` | Generate or refresh `NEXT_TURN.md` and print which tool to open and what to paste. |
-| `start "<request>" [-Clip]` | Save a natural user request to `USER_REQUEST.md` and print a Codex entry prompt. |
+| `start "<request>" [-Clip]` | Save a natural user request to `USER_REQUEST.md` and print a Master entry prompt. |
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
+| `run-next [-BudgetUsd N]` | Run one assisted Implementer turn (READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code). |
 
-`handoff.ps1` does not update `AI_HANDOFF.md` directly, does not trigger Codex or Claude Code automatically, does not commit, does not push, and does not deploy. Codex remains the decision router.
+`handoff.ps1` does not update `AI_HANDOFF.md` directly, does not trigger any role automatically, does not commit, does not push, and does not deploy. The Master remains the decision router.
 
 `USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
 
@@ -331,21 +358,22 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 
 ## Skill Fallback
 
-If the `codex-claude-handoff` skill is unavailable, Codex should:
+If the `codex-claude-handoff` skill is unavailable, the Master should:
 
 1. Read `.agents/skills/codex-claude-handoff/SKILL.md` - it will point to the canonical shared folder.
-2. Read `.ai/skills/codex-claude-handoff/CODEX.md` for the full Codex-specific protocol.
-3. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role split.
-4. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
+2. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm the current role binding.
+3. Read `.ai/skills/codex-claude-handoff/MASTER.md` for the full Master + Reviewer protocol.
+4. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role model.
+5. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
 
 ---
 
 ## Local Capability Awareness
 
-Codex may ask Claude about relevant local capabilities when:
+The Master may ask the Implementer about relevant local capabilities when:
 
 - Context is missing for a risky or unfamiliar task.
-- The task depends on scripts, tools, configs, or conventions whose current state Codex has not verified.
+- The task depends on scripts, tools, configs, or conventions whose current state the Master has not verified.
 - The user reports a skill, config, or tooling change.
 - A memory or context skill might help recover prior decisions, constraints, or risks.
 
@@ -354,24 +382,26 @@ Local capabilities include:
 - Available scripts and their behaviors.
 - Project configs, conventions, and tooling constraints.
 - Available verification commands (typecheck, lint, test).
-- Implementation constraints documented in `AGENTS.md`, `CLAUDE.md`, or repo structure.
+- Implementation constraints documented in `AGENTS.md`, the Implementer protocol, or repo structure.
 
-When asked, Claude should:
+When asked, the Implementer should:
 - Report only capabilities relevant to the current task.
 - Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-Codex should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task.
+The Master should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task.
 
 ---
 
 ## Two-Way Dialogue
 
-Either side may hand a scoped question back without involving the user. Every dialogue turn is discrete - the other actor takes an explicit turn; there is no automatic loop; commit stays blocked while a dialogue state is active.
+Either role may hand a scoped question back without involving the user. Every dialogue turn is discrete - the other role takes an explicit turn; there is no automatic loop; commit stays blocked while a dialogue state is active.
 
-- `QUESTION_FOR_CLAUDE` - Codex asks Claude a scoped question (repo reality, feasibility, verification). Set `Waiting For: Claude Code`; Claude answers read-only under `## Dialogue / Open Questions` in `AI_HANDOFF.md`.
-- `QUESTION_FOR_CODEX` - Claude asks Codex a scoped question. Codex answers, then returns the State to Claude's working state and `Waiting For: Claude Code`.
-- `RE_GATE_REQUESTED` - Claude found the task riskier/larger than scoped. Codex re-routes through the Decision Router (usually `PLAN_REQUIRED` or `NEEDS_INVESTIGATION`).
+- `QUESTION_FOR_IMPLEMENTER` - The Master asks the Implementer a scoped question (repo reality, feasibility, verification). Set `Waiting For: Implementer`; the Implementer answers read-only under `## Dialogue / Open Questions` in `AI_HANDOFF.md`.
+- `QUESTION_FOR_MASTER` - The Implementer asks the Master a scoped question. The Master answers, then returns the State to the Implementer's working state and `Waiting For: Implementer`.
+- `RE_GATE_REQUESTED` - The Implementer found the task riskier/larger than scoped. The Master re-routes through the Decision Router (usually `PLAN_REQUIRED` or `NEEDS_INVESTIGATION`).
+
+Backward compatibility: the pre-v0.13.0 state names `QUESTION_FOR_CODEX` (now `QUESTION_FOR_MASTER`) and `QUESTION_FOR_CLAUDE` (now `QUESTION_FOR_IMPLEMENTER`) are still accepted by the workflow scripts.
 
 ---
 
@@ -379,16 +409,16 @@ Either side may hand a scoped question back without involving the user. Every di
 
 | State | Meaning |
 |---|---|
-| `NEEDS_ANALYSIS` | Codex should analyze before Claude Code can start. |
-| `NEEDS_INVESTIGATION` | Investigation needed; Claude Code gathers evidence only, no source edits. |
-| `PLAN_REQUIRED` | Risky task; Claude Code writes a plan only before implementation. |
-| `PLAN_READY_FOR_REVIEW` | Plan written; Codex reviews before approving implementation. |
-| `READY_FOR_IMPLEMENTATION` | Task is defined and Claude Code should implement. |
-| `IMPLEMENTED` | Claude Code finished and no review is required. |
-| `READY_FOR_REVIEW` | Claude Code finished and Codex should review. |
-| `REVIEW_DONE` | Codex reviewed and user decides next step. |
-| `QUESTION_FOR_CODEX` | Claude Code asked Codex a scoped question; no source edits while waiting. |
-| `QUESTION_FOR_CLAUDE` | Codex asked Claude Code a scoped question; Claude answers read-only. |
-| `RE_GATE_REQUESTED` | Claude Code found the task riskier/larger than scoped; Codex re-routes. |
+| `NEEDS_ANALYSIS` | The Master should analyze before the Implementer can start. |
+| `NEEDS_INVESTIGATION` | Investigation needed; the Implementer gathers evidence only, no source edits. |
+| `PLAN_REQUIRED` | Risky task; the Implementer writes a plan only before implementation. |
+| `PLAN_READY_FOR_REVIEW` | Plan written; the Reviewer reviews before approving implementation. |
+| `READY_FOR_IMPLEMENTATION` | Task is defined and the Implementer should implement. |
+| `IMPLEMENTED` | The Implementer finished and no review is required. |
+| `READY_FOR_REVIEW` | The Implementer finished and the Reviewer should review. |
+| `REVIEW_DONE` | The Reviewer reviewed and the user decides next step. |
+| `QUESTION_FOR_MASTER` | The Implementer asked the Master a scoped question; no source edits while waiting. |
+| `QUESTION_FOR_IMPLEMENTER` | The Master asked the Implementer a scoped question; the Implementer answers read-only. |
+| `RE_GATE_REQUESTED` | The Implementer found the task riskier/larger than scoped; the Master re-routes. |
 | `BLOCKED` | Work is blocked. Reason must be documented. |
 | `WAITING_FOR_USER` | User input or approval is needed. |

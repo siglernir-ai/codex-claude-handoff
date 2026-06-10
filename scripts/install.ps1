@@ -85,9 +85,12 @@ else {
 
 # Install shared canonical skill folder and adapter stubs
 $SkillFiles = @(
+    ".ai/roles/ROLE_ASSIGNMENT.md",
     ".ai/skills/codex-claude-handoff/VERSION",
     ".ai/skills/codex-claude-handoff/README.md",
     ".ai/skills/codex-claude-handoff/SKILL.md",
+    ".ai/skills/codex-claude-handoff/MASTER.md",
+    ".ai/skills/codex-claude-handoff/IMPLEMENTER.md",
     ".ai/skills/codex-claude-handoff/CODEX.md",
     ".ai/skills/codex-claude-handoff/CLAUDE.md",
     ".ai/skills/codex-claude-handoff/CAPABILITIES.md",

@@ -3,6 +3,33 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.13.0 - Multi-Agent Role Assignment (role-neutral protocol)
+
+- Introduced a role layer: the protocol is now written in terms of three roles -
+  **Master**, **Implementer**, and **Reviewer** - bound to concrete tools in the new
+  `.ai/roles/ROLE_ASSIGNMENT.md`. Roles can be reassigned with user approval without
+  rewriting the protocol; this is the foundation for swapping which tool is Master.
+- Default binding is behaviorally identical to before: Master = Codex, Reviewer = Codex,
+  Implementer = Claude Code. Invariant: the Reviewer must never be the same tool as the
+  Implementer.
+- Added role protocol files `MASTER.md` (Master + Reviewer) and `IMPLEMENTER.md`
+  (Implementer) to the canonical skill folder. `CODEX.md` and `CLAUDE.md` became thin
+  entry pointers that resolve each tool's current role and send it to the right role file.
+- Neutralized `SKILL.md`, `CAPABILITIES.md`, the skill `README.md`, `templates/AGENTS.md`,
+  `templates/CLAUDE.md`, `templates/AI_HANDOFF.md`, the root `README.md`, and both discovery
+  adapters to role tokens. `CAPABILITIES.md` keeps tool strengths tool-keyed and adds the
+  default role binding.
+- Renamed the dialogue states `QUESTION_FOR_CODEX` -> `QUESTION_FOR_MASTER` and
+  `QUESTION_FOR_CLAUDE` -> `QUESTION_FOR_IMPLEMENTER`. The old names are still accepted by
+  the workflow scripts as backward-compatible aliases.
+- Made the workflow scripts role-aware: `next-step.ps1` and `handoff.ps1` resolve the
+  expected actor by mapping State -> Role -> Tool via `.ai/roles/ROLE_ASSIGNMENT.md`, and
+  `handoff.ps1 status` now prints the current role binding. `run-next` blocks unless the
+  Implementer is bound to Claude Code (only Claude Code has a local CLI).
+- Updated `install.ps1` to ship `.ai/roles/ROLE_ASSIGNMENT.md`, `MASTER.md`, and
+  `IMPLEMENTER.md`, and updated the README install/verify file lists.
+- Bumped `VERSION` to 0.13.0.
+
 ## 0.12.4 - Two-Way Dialogue States
 
 - Added two-way dialogue states so Codex and Claude Code can resolve scoped questions without escalating to the user: `QUESTION_FOR_CODEX`, `QUESTION_FOR_CLAUDE`, and `RE_GATE_REQUESTED` (Claude can flag mid-implementation that a task is riskier or larger than scoped).

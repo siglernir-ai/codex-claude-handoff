@@ -7,11 +7,19 @@ This folder is the canonical shared protocol source for the `codex-claude-handof
 | File | Purpose |
 |---|---|
 | `README.md` | This file - human-facing overview |
-| `SKILL.md` | Shared protocol index, role split, and tool pointers |
-| `CODEX.md` | Codex-specific protocol: decision router, gates, states, and rules |
-| `CLAUDE.md` | Claude Code-specific protocol: investigation mode, planning mode, implementation rules |
-| `CAPABILITIES.md` | Agent capability profile: what each agent is good at and when to consult it |
+| `SKILL.md` | Shared protocol index and role model |
+| `MASTER.md` | Master + Reviewer role protocol: decision router, gates, states, review, verification |
+| `IMPLEMENTER.md` | Implementer role protocol: investigation mode, planning mode, implementation rules |
+| `CODEX.md` | Codex entry pointer - resolves Codex's role(s) and points to the role file |
+| `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role(s) and points to the role file |
+| `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
 | `VERSION` | Installed protocol version |
+
+The role-to-tool binding lives one level up:
+
+| File | Purpose |
+|---|---|
+| `.ai/roles/ROLE_ASSIGNMENT.md` | Binds Master / Implementer / Reviewer to concrete tools |
 
 ## Discovery
 
@@ -22,16 +30,25 @@ Both Codex and Claude Code discover this shared folder via lightweight adapter s
 
 The adapter stubs are small files. All protocol content lives here in `.ai/skills/codex-claude-handoff/`.
 
+## Resolving Behavior by Role
+
+Behavior is defined by role, not by tool name:
+
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to find your current role(s).
+2. Master / Reviewer -> follow `MASTER.md`. Implementer -> follow `IMPLEMENTER.md`.
+3. `CODEX.md` and `CLAUDE.md` are thin entry pointers that send each tool to the right role file.
+
 ## Relationship to Root Files
 
 | File | Role |
 |---|---|
-| `AGENTS.md` | Codex operational behavior and project context (customized per project) |
-| `CLAUDE.md` | Claude Code operational behavior (customized per project) |
+| `AGENTS.md` | Project context plus the Master + Reviewer protocol (customized per project) |
+| `CLAUDE.md` | Claude Code operational entry file - resolves its role (customized per project) |
 | `AI_HANDOFF.md` | Execution state - dynamic, local, not committed |
 | `.ai/skills/codex-claude-handoff/` | This folder - shared protocol source of truth |
+| `.ai/roles/ROLE_ASSIGNMENT.md` | Role-to-tool binding |
 
-Root `CLAUDE.md` remains the Claude Code operational behavior file. It is separate from this skill folder.
+Root `CLAUDE.md` remains the Claude Code operational entry file. It is separate from this skill folder.
 
 ## Version
 

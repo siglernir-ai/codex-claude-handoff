@@ -1,8 +1,22 @@
 # Agent Capability Profile
 
-This file describes what each agent in the codex-claude-handoff protocol is good at, and when the others should consult it. Codex reads this profile so it can route work to the right agent by default, instead of treating Claude Code only as an executor.
+This file describes what each tool in the codex-claude-handoff protocol is good at. Tool
+strengths are stable properties of the tools; the protocol uses them to decide which tool
+should hold which role. The role-to-tool binding itself lives in `.ai/roles/ROLE_ASSIGNMENT.md`.
 
-For the shared role split, see `SKILL.md`. For Codex-side behavior, see `CODEX.md`. For Claude Code-side behavior, see `CLAUDE.md`.
+For the shared role model, see `SKILL.md`. For the Master + Reviewer protocol, see `MASTER.md`.
+For the Implementer protocol, see `IMPLEMENTER.md`.
+
+## Default Role Binding
+
+| Role | Default Tool | Why |
+|---|---|---|
+| Master | Codex | Strong at reasoning, planning, task definition, and decision routing |
+| Reviewer | Codex | Independent review and risk classification; must differ from the Implementer |
+| Implementer | Claude Code | Source of truth for live repo behavior; strong at local inspection and approved edits |
+
+The User is always the approval point and is never one of these roles. Switching the binding
+requires explicit user approval, and the Reviewer must never be the same tool as the Implementer.
 
 ## Codex
 
@@ -12,7 +26,7 @@ Strengths:
 - Independent review of implementation against approved scope.
 - Coordination and decision routing.
 
-Consult Codex when:
+These strengths are why Codex is the default Master and Reviewer. Consult Codex (as Master) when:
 - A task needs design, architecture, or risk routing.
 - Work must be classified, scoped, or reviewed before or after implementation.
 
@@ -24,12 +38,12 @@ Strengths:
 - Implementation feasibility checks and awareness of local patterns and conventions.
 - Running approved local commands (build, lint, test, installer checks) when permitted.
 
-Consult Claude Code by default when correctness depends on:
+These strengths are why Claude Code is the default Implementer. Consult the Implementer by default when correctness depends on:
 - Current repository behavior (what the code does now, not what it should do).
 - Local implementation details (files, scripts, configs, conventions actually present).
 - Verification constraints (which checks exist and what they currently report).
 
-During investigation and planning turns Claude Code is read-only: it reports findings and returns control to Codex before any implementation task is finalized. It does not modify source files in those turns.
+During investigation and planning turns the Implementer is read-only: it reports findings and returns control to the Master before any implementation task is finalized. It does not modify source files in those turns.
 
 ## User
 
@@ -40,10 +54,10 @@ Strengths and authority:
 
 The user is the final approval point and must never be bypassed.
 
-## Future Agents
+## Additional Tools
 
-The protocol is forward-compatible with additional agents (for example an independent reviewer such as Gemini). These are not active unless explicitly assigned through a future role model (see the v0.13 role-assignment work). Until assigned, only Codex, Claude Code, and the User hold roles.
+The protocol is forward-compatible with additional tools (for example an independent reviewer such as Gemini). A new tool becomes active only when the user assigns it a role in `.ai/roles/ROLE_ASSIGNMENT.md`. Until assigned, only Codex, Claude Code, and the User participate.
 
-## How Codex Uses This Profile
+## How the Master Uses This Profile
 
-Before finalizing a task that touches the live codebase, Codex should check whether Claude Code's strengths above materially reduce risk. If correctness depends on current repo behavior, local implementation details, or verification constraints, Codex should default to a read-only `NEEDS_INVESTIGATION` pass first. See `CODEX.md` -> "When Claude Adds Value".
+Before finalizing a task that touches the live codebase, the Master should check whether the Implementer's strengths above materially reduce risk. If correctness depends on current repo behavior, local implementation details, or verification constraints, the Master should default to a read-only `NEEDS_INVESTIGATION` pass first. See `MASTER.md` -> "When the Implementer Adds Value".

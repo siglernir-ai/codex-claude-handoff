@@ -8,7 +8,7 @@
 - Current Task: Initial setup
 
 ## Last Update
-- Tool: User
+- Actor: User
 - Date: YYYY-MM-DD
 - Task: Installed the Codex-Claude handoff protocol files.
 
@@ -30,16 +30,16 @@
 
 ## Dialogue / Open Questions
 - None
-- (When State is QUESTION_FOR_CODEX, QUESTION_FOR_CLAUDE, or RE_GATE_REQUESTED, log one scoped exchange per turn here. Format: "[Q <Asker> -> <Responder>] ..." then "[A <Responder>] ..." - works both directions: "[Q Claude Code -> Codex] ..." / "[A Codex] ..." for QUESTION_FOR_CODEX, and "[Q Codex -> Claude Code] ..." / "[A Claude Code] ..." for QUESTION_FOR_CLAUDE. Each exchange is a discrete turn; no auto-loop.)
+- (When State is QUESTION_FOR_MASTER, QUESTION_FOR_IMPLEMENTER, or RE_GATE_REQUESTED, log one scoped exchange per turn here. Format: "[Q <Asker> -> <Responder>] ..." then "[A <Responder>] ..." - works both directions: "[Q Implementer -> Master] ..." / "[A Master] ..." for QUESTION_FOR_MASTER, and "[Q Master -> Implementer] ..." / "[A Implementer] ..." for QUESTION_FOR_IMPLEMENTER. Each exchange is a discrete turn; no auto-loop.)
 
 ## Open Issues
-- Define the first task for Codex or Claude Code.
+- Define the first task for the Master or the Implementer.
 
 ## Risks / Notes
 - `AI_HANDOFF.md` is dynamic and may contain local project context. Decide whether to keep it out of Git.
 - `AGENTS.md` and `CLAUDE.md` are stable protocol files and should usually be committed.
 
 ## Next Recommended Step
-- User: ask Codex to analyze the next task, or set `State: NEEDS_ANALYSIS` / `Waiting For: Codex` with a specific task.
-- For risky tasks (migrations, auth, architecture changes), Codex may set `State: PLAN_REQUIRED` to require a plan before implementation.
-- For tasks with missing information, Codex may set `State: NEEDS_INVESTIGATION` to gather evidence first.
+- User: ask the Master to analyze the next task, or set `State: NEEDS_ANALYSIS` / `Waiting For: Master` with a specific task.
+- For risky tasks (migrations, auth, architecture changes), the Master may set `State: PLAN_REQUIRED` to require a plan before implementation.
+- For tasks with missing information, the Master may set `State: NEEDS_INVESTIGATION` to gather evidence first.
