@@ -348,9 +348,10 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 | `next [-Clip]` | Generate or refresh `NEXT_TURN.md` and print which tool to open and what to paste. |
 | `start "<request>" [-Clip]` | Save a natural user request to `USER_REQUEST.md` and print a Master entry prompt. |
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
-| `run-next [-BudgetUsd N]` | Run one assisted Implementer turn (READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code). |
+| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
+| `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 
-`handoff.ps1` does not update `AI_HANDOFF.md` directly, does not trigger any role automatically, does not commit, does not push, and does not deploy. The Master remains the decision router.
+`handoff.ps1` does not update `AI_HANDOFF.md` directly and never commits, pushes, or deploys. Its only automation is `cycle` / `run-next`, which can trigger one approved Implementer turn with explicit user confirmation, then stops; it never automates the Master or the Reviewer. The Master remains the decision router.
 
 `USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
 

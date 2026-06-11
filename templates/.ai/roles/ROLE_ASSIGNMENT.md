@@ -40,7 +40,9 @@ The User is always the approval point and is never one of these roles.
 
 ## Tooling Note
 
-- `scripts/handoff.ps1 run-next` can only automate an Implementer bound to Claude
-  Code, because only Claude Code has a local CLI. If the Implementer is bound to a
-  tool without a local CLI (for example Codex), run-next blocks and the Implementer
-  turn must be run manually.
+- `scripts/handoff.ps1 cycle` (and its backward-compatible alias `run-next`) can only
+  automate an Implementer bound to Claude Code, because only Claude Code has a local
+  CLI. If the Implementer is bound to a tool without a local CLI (for example Codex),
+  cycle blocks and the Implementer turn must be run manually.
+- `cycle` enforces the invariant above in its preflight: if the Reviewer and the
+  Implementer resolve to the same tool, it blocks before any automation turn runs.

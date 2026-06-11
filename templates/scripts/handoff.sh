@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.16.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.16.1)
 # Commands: status, next, start, commit-check
 # cycle and run-next require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
 

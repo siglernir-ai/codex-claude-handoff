@@ -3,6 +3,29 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.16.1 - Cycle Safety Hardening
+
+- Confirmation guard now fails closed: `cycle` / `run-next` proceed only when the
+  confirmation value is a non-null string whose trimmed value is exactly `yes`. Null
+  (EOF, redirected no-input, non-interactive), empty, whitespace, or any other value
+  cancels with exit code 2 and no method-call error.
+- Clean working tree guard now includes untracked files: the preflight uses
+  `git status --short --untracked-files=all` and blocks on any tracked or untracked
+  change. Only the local handoff files (`AI_HANDOFF.md`, `NEXT_TURN.md`,
+  `USER_REQUEST.md`) are exempt.
+- Role invariant enforced in preflight: `cycle` / `run-next` block with exit code 1 if
+  the Reviewer and the Implementer resolve to the same tool, before the Claude Code
+  preflight and before confirmation.
+- Updated stale canonical/template docs after v0.16.0: `MASTER.md` and
+  `templates/AGENTS.md` now describe `cycle` as the primary bounded automation command
+  with `run-next` as its alias, and state precisely what `handoff.ps1` automates (one
+  confirmed Implementer turn) and what it never does (Master/Reviewer turns, commit,
+  push, deploy). `ROLE_ASSIGNMENT.md` tooling note updated to `cycle` and documents
+  the enforced invariant.
+- Updated the README `cycle` eligibility step to include the role invariant and the
+  untracked-files-included clean-tree semantics.
+- Bumped `VERSION` to 0.16.1 (canonical and template mirror).
+
 ## 0.16.0 - Bounded Single-Command Orchestrator
 
 - Promoted the bounded single-turn automation in `handoff.ps1` to a primary `cycle` command.

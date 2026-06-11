@@ -348,9 +348,10 @@ The Master should not request capability status every session - only when it add
 | `next [-Clip]` | Generate or refresh NEXT_TURN.md. Print which tool to open and what to paste. |
 | `start "<request>" [-Clip]` | Save a natural user request to USER_REQUEST.md and print a Master entry prompt. |
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
-| `run-next [-BudgetUsd N]` | Run one assisted Implementer turn (READY_FOR_IMPLEMENTATION only). Requires the Implementer to be bound to Claude Code, and requires explicit confirmation. |
+| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only), then prepare the Reviewer handoff and stop. Requires the Implementer to be bound to Claude Code, Reviewer != Implementer, a clean working tree, and explicit confirmation. |
+| `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 
-The Master remains the decision router. `handoff.ps1` does not update AI_HANDOFF.md directly, does not trigger the Master or the Implementer automatically, does not commit, does not push, and does not deploy.
+The Master remains the decision router. `handoff.ps1` does not update AI_HANDOFF.md directly and never commits, pushes, or deploys. Its only automation is `cycle` / `run-next`: with explicit user confirmation it can trigger one approved Implementer turn in READY_FOR_IMPLEMENTATION, then it stops. It never automates Master or Reviewer turns.
 
 ## Allowed States
 

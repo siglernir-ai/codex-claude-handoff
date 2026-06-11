@@ -545,18 +545,35 @@ function Invoke-Cycle {
         exit 1
     }
 
-    # Guard: block if tracked working tree changes exist
-    $trackedDirtyFiles = [System.Collections.Generic.List[string]]::new()
+    # Role invariant: the Reviewer must never be the same tool as the Implementer.
+    # An implementer cannot be the sole reviewer of its own work.
+    if ($Binding.Reviewer -eq $implementerTool) {
+        Write-Host ""
+        Write-Host "${CommandLabel}: blocked."
+        Write-Host "Reviewer:    $($Binding.Reviewer)"
+        Write-Host "Implementer: $implementerTool"
+        Write-Host "Reason:      Role invariant violation. The Reviewer must not be the same tool as the Implementer."
+        Write-Host "Next step:   Fix the binding in .ai/roles/ROLE_ASSIGNMENT.md so Reviewer and Implementer are different tools."
+        Write-Host ""
+        exit 1
+    }
+
+    # Guard: block if any working tree changes exist (tracked or untracked).
+    # Only the local handoff files are exempt - they are expected to change between turns.
+    $localIgnored = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md")
+    $dirtyFiles = [System.Collections.Generic.List[string]]::new()
     $gitCheckOk = $false
     try {
-        $gitStatusLines = & git status --short 2>$null
+        $gitStatusLines = & git status --short --untracked-files=all 2>$null
         if ($LASTEXITCODE -eq 0) {
             $gitCheckOk = $true
             foreach ($gitLine in $gitStatusLines) {
                 if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
-                if ($gitLine.Substring(0, 2) -eq "??") { continue }  # skip untracked
                 $filePart = $gitLine.Substring(3).Trim()
-                if ($filePart -ne "") { $trackedDirtyFiles.Add($filePart) }
+                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
+                if ($filePart -eq "") { continue }
+                if ($localIgnored -contains $filePart) { continue }
+                $dirtyFiles.Add($filePart)
             }
         }
     } catch { }
@@ -570,15 +587,15 @@ function Invoke-Cycle {
         exit 1
     }
 
-    if ($trackedDirtyFiles.Count -gt 0) {
+    if ($dirtyFiles.Count -gt 0) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Working tree is not clean."
         Write-Host ""
-        Write-Host "Tracked changed files:"
-        foreach ($f in $trackedDirtyFiles) { Write-Host "  $f" }
+        Write-Host "Changed files (tracked and untracked; local handoff files excluded):"
+        foreach ($f in $dirtyFiles) { Write-Host "  $f" }
         Write-Host ""
-        Write-Host "Commit, stash, or revert existing changes before running $CommandLabel."
+        Write-Host "Commit, stash, revert, or remove these files before running $CommandLabel."
         Write-Host ""
         exit 1
     }
@@ -625,8 +642,10 @@ function Invoke-Cycle {
     Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
     Write-Host "         This tool does not commit, push, or deploy automatically."
     Write-Host ""
+    # Fail closed: only an explicit, non-null "yes" proceeds. Null (EOF, redirected
+    # no-input, non-interactive), empty, whitespace, or anything else cancels.
     $confirm = Read-Host 'Type "yes" to proceed, or press Enter to cancel'
-    if ($confirm.Trim() -ne "yes") {
+    if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
         Write-Host "Cancelled."
         exit 2
     }

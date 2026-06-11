@@ -209,7 +209,9 @@ compatibility).
 Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
 
 **What cycle does:**
-1. Checks eligibility (state, turn ownership, Implementer binding, clean working tree).
+1. Checks eligibility: state, turn ownership, Implementer bound to Claude Code, the
+   Reviewer != Implementer role invariant, and a clean working tree (tracked and untracked
+   files; only `AI_HANDOFF.md`, `NEXT_TURN.md`, and `USER_REQUEST.md` are exempt).
 2. Refreshes `NEXT_TURN.md` (intentional local handoff-file write).
 3. Checks that Claude Code is available via `npx --yes @anthropic-ai/claude-code`.
 4. Prints the command it is about to run.
