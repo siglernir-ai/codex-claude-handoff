@@ -85,11 +85,11 @@ done
 
 # .gitignore: create or update
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"
-RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md")
+RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log")
 
 if [ ! -f "$GITIGNORE_PATH" ]; then
-    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\n' > "$GITIGNORE_PATH"
-    echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md rules"
+    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\n' > "$GITIGNORE_PATH"
+    echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log rules"
 else
     ADDED=()
     for rule in "${RULES[@]}"; do
@@ -101,7 +101,7 @@ else
     if [ ${#ADDED[@]} -gt 0 ]; then
         echo "Added to .gitignore: ${ADDED[*]}"
     else
-        echo ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md"
+        echo ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log"
     fi
 fi
 

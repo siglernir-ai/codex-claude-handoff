@@ -350,8 +350,9 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
 | `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
+| `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of automated Implementer turns (same callable turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares `NEXT_TURN.md` whenever the next actor is the Master, the Reviewer, or the User. Writes a local `HANDOFF_LOOP.log` (never committed). |
 
-`handoff.ps1` does not update `AI_HANDOFF.md` directly and never commits, pushes, or deploys. Its only automation is `cycle` / `run-next`, which can trigger one approved Implementer turn with explicit user confirmation, then stops; it never automates the Master or the Reviewer. The Master remains the decision router.
+`handoff.ps1` does not update `AI_HANDOFF.md` directly and never commits, pushes, or deploys. Its automation (`cycle` / `run-next` / `loop`) can trigger only approved Implementer turns with explicit user confirmation, then stops at the first non-callable actor; it never automates the Master or the Reviewer. The Master remains the decision router.
 
 `USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
 

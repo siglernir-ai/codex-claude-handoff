@@ -5,7 +5,9 @@ param(
     [string]$Request,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
-    [decimal]$BudgetUsd = 2
+    [decimal]$BudgetUsd = 2,
+    [int]$MaxTurns = 3,
+    [decimal]$SessionBudgetUsd = 6
 )
 
 if ($CopyPrompt) { $Clip = $true }
@@ -78,6 +80,58 @@ function Resolve-Actor {
     if ($Role -eq "User") { return "User" }
     if ($Binding.ContainsKey($Role)) { return $Binding[$Role] }
     return $Role
+}
+
+# Local protocol files exempt from the clean-tree guard - they are expected to
+# change between turns and must never be committed.
+$LocalHandoffFiles = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log")
+
+# Working tree state for the automation guards (cycle and loop).
+# Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
+function Get-WorkingTreeState {
+    $files = [System.Collections.Generic.List[string]]::new()
+    $ok = $false
+    try {
+        $gitStatusLines = & git status --short --untracked-files=all 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $ok = $true
+            foreach ($gitLine in $gitStatusLines) {
+                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
+                $filePart = $gitLine.Substring(3).Trim()
+                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
+                if ($filePart -eq "") { continue }
+                if ($LocalHandoffFiles -contains $filePart) { continue }
+                $files.Add($filePart)
+            }
+        }
+    } catch { }
+    return @{ Ok = $ok; Files = $files }
+}
+
+function Test-ClaudeAvailable {
+    $null = npx --yes @anthropic-ai/claude-code --version 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Run one Claude Code Implementer turn with the standard safety constraints.
+function Invoke-ClaudeTurn {
+    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+    npx --yes @anthropic-ai/claude-code -p $prompt `
+        --permission-mode acceptEdits `
+        --disallowed-tools "Bash" `
+        --max-budget-usd $BudgetUsd `
+        --no-session-persistence `
+        --output-format text
+    return $LASTEXITCODE
+}
+
+# Append-only local loop log (ASCII, never committed - see .gitignore).
+function Write-LoopLog {
+    param([string]$Message)
+    $ts = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+    try {
+        Add-Content -Path (Join-Path (Get-Location) "HANDOFF_LOOP.log") -Value "$ts $Message" -Encoding ascii
+    } catch { }
 }
 
 $Binding = Get-RoleBinding
@@ -234,7 +288,10 @@ function Invoke-Next {
     if ($afterLine -ne "") { $ntLines.Add(""); $ntLines.Add("## After You Finish"); $ntLines.Add($afterLine) }
 
     $ntPath = Join-Path (Get-Location) "NEXT_TURN.md"
-    Set-Content -Path $ntPath -Value ($ntLines -join "`n") -Encoding utf8
+    # -ErrorAction Stop: write failures must be terminating so callers' try/catch
+    # blocks fire and the workflow fails closed instead of reporting a handoff that
+    # was never written.
+    Set-Content -Path $ntPath -Value ($ntLines -join "`n") -Encoding utf8 -ErrorAction Stop
 
     $pasteInstruction = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
 
@@ -467,7 +524,8 @@ function Invoke-Menu {
     Write-Host "3. Show status                    - show current state and next actor"
     Write-Host "4. Check commit                   - verify whether commit is allowed"
     Write-Host "5. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
-    Write-Host "6. Exit"
+    Write-Host "6. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
+    Write-Host "7. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -480,7 +538,8 @@ function Invoke-Menu {
         "3" { Invoke-Status }
         "4" { Invoke-CommitCheck }
         "5" { Invoke-Cycle }
-        "6" { }
+        "6" { Invoke-Loop }
+        "7" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -560,25 +619,9 @@ function Invoke-Cycle {
 
     # Guard: block if any working tree changes exist (tracked or untracked).
     # Only the local handoff files are exempt - they are expected to change between turns.
-    $localIgnored = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md")
-    $dirtyFiles = [System.Collections.Generic.List[string]]::new()
-    $gitCheckOk = $false
-    try {
-        $gitStatusLines = & git status --short --untracked-files=all 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $gitCheckOk = $true
-            foreach ($gitLine in $gitStatusLines) {
-                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
-                $filePart = $gitLine.Substring(3).Trim()
-                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
-                if ($filePart -eq "") { continue }
-                if ($localIgnored -contains $filePart) { continue }
-                $dirtyFiles.Add($filePart)
-            }
-        }
-    } catch { }
+    $tree = Get-WorkingTreeState
 
-    if (-not $gitCheckOk) {
+    if (-not $tree.Ok) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Could not determine Git working tree state."
@@ -587,13 +630,13 @@ function Invoke-Cycle {
         exit 1
     }
 
-    if ($dirtyFiles.Count -gt 0) {
+    if ($tree.Files.Count -gt 0) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Working tree is not clean."
         Write-Host ""
         Write-Host "Changed files (tracked and untracked; local handoff files excluded):"
-        foreach ($f in $dirtyFiles) { Write-Host "  $f" }
+        foreach ($f in $tree.Files) { Write-Host "  $f" }
         Write-Host ""
         Write-Host "Commit, stash, revert, or remove these files before running $CommandLabel."
         Write-Host ""
@@ -628,13 +671,10 @@ function Invoke-Cycle {
 
     # Preflight: confirm Claude Code is available
     Write-Host "Checking Claude Code availability..."
-    $null = npx --yes @anthropic-ai/claude-code --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-ClaudeAvailable)) {
         Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
         exit 3
     }
-
-    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
 
     Write-Host ""
     Write-Host "Command: npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence"
@@ -654,14 +694,7 @@ function Invoke-Cycle {
     Write-Host "Running Claude Code assisted turn..."
     Write-Host ""
 
-    npx --yes @anthropic-ai/claude-code -p $prompt `
-        --permission-mode acceptEdits `
-        --disallowed-tools "Bash" `
-        --max-budget-usd $BudgetUsd `
-        --no-session-persistence `
-        --output-format text
-
-    $claudeExit = $LASTEXITCODE
+    $claudeExit = Invoke-ClaudeTurn
 
     Write-Host ""
     if ($claudeExit -eq 0) {
@@ -676,8 +709,16 @@ function Invoke-Cycle {
         $script:WaitingFor  = $freshStatus.WaitingFor
         $script:CurrentTask = $freshStatus.CurrentTask
 
-        # Refresh NEXT_TURN.md with the updated state
-        try { Invoke-Next -Silent $true } catch { Write-Host "Could not refresh NEXT_TURN.md: $_" }
+        # Refresh NEXT_TURN.md with the updated state. Fail closed: do not print
+        # Reviewer handoff instructions for a NEXT_TURN.md that was never written.
+        try {
+            Invoke-Next -Silent $true
+        } catch {
+            Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-Host "The Implementer turn completed, but the next-turn handoff could not be generated."
+            Write-Host "Inspect AI_HANDOFF.md manually before continuing."
+            exit 4
+        }
 
         $reviewerTool = Resolve-Actor -Role "Reviewer" -Binding $Binding
         $reviewerReady = ($script:State -eq "READY_FOR_REVIEW") -and
@@ -731,6 +772,244 @@ function Invoke-Cycle {
     Write-Host ""
 }
 
+# Bounded loop skeleton (v0.17.0). Runs automated turns until a hard stop.
+# Only callable turn: READY_FOR_IMPLEMENTATION / Implementer bound to Claude Code.
+# Master, Reviewer, and User turns are never automated - the loop prepares
+# NEXT_TURN.md, prints the next actor, and stops.
+function Invoke-Loop {
+    # --- Validate arguments ---
+    if ($MaxTurns -lt 1) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Reason:      -MaxTurns must be at least 1 (got: $MaxTurns)."
+        Write-Host ""
+        exit 1
+    }
+    if ($BudgetUsd -le 0) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Reason:      -BudgetUsd must be greater than 0 (got: $BudgetUsd)."
+        Write-Host ""
+        exit 1
+    }
+    if ($SessionBudgetUsd -lt $BudgetUsd) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Reason:      -SessionBudgetUsd ($SessionBudgetUsd) must be at least -BudgetUsd ($BudgetUsd)."
+        Write-Host ""
+        exit 1
+    }
+
+    # --- Session preflight: role invariant ---
+    if ($Binding.Reviewer -eq $Binding.Implementer) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Reviewer:    $($Binding.Reviewer)"
+        Write-Host "Implementer: $($Binding.Implementer)"
+        Write-Host "Reason:      Role invariant violation. The Reviewer must not be the same tool as the Implementer."
+        Write-Host "Next step:   Fix the binding in .ai/roles/ROLE_ASSIGNMENT.md so Reviewer and Implementer are different tools."
+        Write-Host ""
+        exit 1
+    }
+
+    # --- Session preflight: clean working tree ---
+    $tree = Get-WorkingTreeState
+    if (-not $tree.Ok) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Could not determine Git working tree state."
+        Write-Host "Ensure you are in a Git repository and git is available, then try again."
+        Write-Host ""
+        exit 1
+    }
+    if ($tree.Files.Count -gt 0) {
+        Write-Host ""
+        Write-Host "loop: blocked."
+        Write-Host "Working tree is not clean."
+        Write-Host ""
+        Write-Host "Changed files (tracked and untracked; local handoff files excluded):"
+        foreach ($f in $tree.Files) { Write-Host "  $f" }
+        Write-Host ""
+        Write-Host "Commit, stash, revert, or remove these files before running loop."
+        Write-Host ""
+        exit 1
+    }
+
+    # --- Budget info + single session confirmation ---
+    $worstCase = [Math]::Min($MaxTurns * $BudgetUsd, $SessionBudgetUsd)
+    Write-Host ""
+    Write-Host "Preparing bounded loop session..."
+    Write-Host ""
+    Write-Host "Max turns:          $MaxTurns"
+    Write-Host "Per-turn budget:    `$$BudgetUsd (passed to --max-budget-usd)"
+    Write-Host "Session budget cap: `$$SessionBudgetUsd (worst-case authorized spend this session: `$$worstCase)"
+    Write-Host "Callable turns:     READY_FOR_IMPLEMENTATION only, Implementer bound to Claude Code."
+    Write-Host "Never automated:    Master turns, Reviewer turns, User turns, commit/push/tag/deploy."
+    Write-Host ""
+    Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
+    Write-Host ""
+    # Fail closed: only an explicit, non-null "yes" starts the session.
+    $confirm = Read-Host 'Type "yes" to start the loop session, or press Enter to cancel'
+    if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+        Write-Host "Cancelled."
+        exit 2
+    }
+
+    Write-LoopLog "=== session start MaxTurns=$MaxTurns BudgetUsd=$BudgetUsd SessionBudgetUsd=$SessionBudgetUsd"
+
+    $authorized = [decimal]0
+    $turnsRun   = 0
+    $ntPath     = Join-Path (Get-Location) "NEXT_TURN.md"
+
+    while ($true) {
+        # Re-read handoff state and role binding every iteration
+        $script:Lines       = Get-Content -Path $HandoffFile
+        $freshStatus        = Read-HandoffState -Lines $script:Lines
+        $script:State       = $freshStatus.State
+        $script:WaitingFor  = $freshStatus.WaitingFor
+        $script:CurrentTask = $freshStatus.CurrentTask
+        $script:Binding     = Get-RoleBinding
+
+        $entry = $ActionMap[$script:State]
+        if (-not $entry) {
+            Write-Host ""
+            Write-Host "loop: stop - unrecognized state: $($script:State)."
+            Write-Host "NEXT_TURN.md was not refreshed for this state. Inspect AI_HANDOFF.md manually before continuing."
+            Write-LoopLog "turn=$turnsRun stop reason=unrecognized-state state=$($script:State) exit=6"
+            Write-Host ""
+            exit 6
+        }
+        $role = $entry.Role
+        $tool = Resolve-Actor -Role $role -Binding $Binding
+
+        # Turn-ownership mismatch routes to User (same rule as next/cycle)
+        if (($script:WaitingFor -ne "(unknown)") -and ($script:WaitingFor -ne $role) -and ($script:WaitingFor -ne $tool)) {
+            try {
+                Invoke-Next -Silent $true
+            } catch {
+                Write-Host "Failed to refresh NEXT_TURN.md: $_"
+                Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
+                exit 4
+            }
+            Write-Host ""
+            Write-Host "loop: stop - handoff mismatch."
+            Write-Host "State $($script:State) expects Waiting For: $role ($tool), but found: $($script:WaitingFor)."
+            Write-Host "NEXT_TURN.md routed to User for mismatch resolution."
+            Write-LoopLog "turn=$turnsRun stop reason=mismatch state=$($script:State) waitingFor=$($script:WaitingFor) expected=$role/$tool exit=6"
+            Write-Host ""
+            exit 6
+        }
+
+        # Callable in v0.17.0: only an approved Implementer turn bound to Claude Code
+        $callable = ($script:State -eq "READY_FOR_IMPLEMENTATION") -and
+            ($role -eq "Implementer") -and ($tool -eq "Claude Code")
+
+        if (-not $callable) {
+            try {
+                Invoke-Next -Silent $true
+            } catch {
+                Write-Host "Failed to refresh NEXT_TURN.md: $_"
+                Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
+                exit 4
+            }
+            Write-Host ""
+            Write-Host "loop: stop - next actor is not callable."
+            Write-Host "State:      $($script:State)"
+            Write-Host "Next actor: $tool ($role)"
+            if ($tool -ne "User") {
+                Write-Host "Paste:      Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+            }
+            Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+            Write-LoopLog "turn=$turnsRun stop reason=not-callable state=$($script:State) nextActor=$tool($role) exit=0"
+            Write-Host ""
+            exit 0
+        }
+
+        # Hard caps before another automated turn
+        if ($turnsRun -ge $MaxTurns) {
+            Write-Host ""
+            Write-Host "loop: stop - MaxTurns ($MaxTurns) reached."
+            Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+            Write-LoopLog "turn=$turnsRun stop reason=max-turns exit=0"
+            Write-Host ""
+            exit 0
+        }
+        if (($authorized + $BudgetUsd) -gt $SessionBudgetUsd) {
+            Write-Host ""
+            Write-Host "loop: stop - session budget cap reached."
+            Write-Host "Authorized so far: `$$authorized. Next turn would authorize `$$BudgetUsd more, exceeding `$$SessionBudgetUsd."
+            Write-LoopLog "turn=$turnsRun stop reason=session-budget authorized=$authorized exit=0"
+            Write-Host ""
+            exit 0
+        }
+
+        # Per-turn re-checks: the binding or the tree may have changed since the session started
+        if ($Binding.Reviewer -eq $Binding.Implementer) {
+            Write-Host ""
+            Write-Host "loop: blocked."
+            Write-Host "Reason:      Role invariant violation detected mid-session (Reviewer == Implementer)."
+            Write-Host "Next step:   Fix the binding in .ai/roles/ROLE_ASSIGNMENT.md so Reviewer and Implementer are different tools."
+            Write-LoopLog "turn=$turnsRun stop reason=role-invariant exit=1"
+            Write-Host ""
+            exit 1
+        }
+        $tree = Get-WorkingTreeState
+        if (-not $tree.Ok -or $tree.Files.Count -gt 0) {
+            Write-Host ""
+            Write-Host "loop: blocked."
+            Write-Host "Working tree is not clean (or git is unavailable)."
+            foreach ($f in $tree.Files) { Write-Host "  $f" }
+            Write-Host "Commit, stash, revert, or remove these files before continuing the loop."
+            Write-LoopLog "turn=$turnsRun stop reason=dirty-tree exit=1"
+            Write-Host ""
+            exit 1
+        }
+
+        # Refresh NEXT_TURN.md for the automated turn
+        try {
+            Invoke-Next -Silent $true
+        } catch {
+            Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
+            exit 4
+        }
+        if (-not (Test-Path $ntPath)) {
+            Write-Host "NEXT_TURN.md was not created. Aborting."
+            Write-LoopLog "turn=$turnsRun stop reason=next-turn-missing exit=4"
+            exit 4
+        }
+
+        # Preflight: Claude Code availability
+        if (-not (Test-ClaudeAvailable)) {
+            Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
+            Write-LoopLog "turn=$turnsRun stop reason=claude-unavailable exit=3"
+            exit 3
+        }
+
+        # Run one automated Implementer turn
+        $turnNo = $turnsRun + 1
+        Write-Host ""
+        Write-Host "loop: turn $turnNo of $MaxTurns - automated Claude Code Implementer turn (per-turn budget `$$BudgetUsd)..."
+        Write-LoopLog "turn=$turnNo action=automated-claude-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=Claude Code(Implementer) budget=$BudgetUsd"
+        $authorized += $BudgetUsd
+        $turnsRun    = $turnNo
+
+        $claudeExit = Invoke-ClaudeTurn
+        Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
+
+        if ($claudeExit -ne 0) {
+            Write-Host "Claude Code exited with error (code: $claudeExit)."
+            Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+            Write-LoopLog "turn=$turnNo stop reason=claude-error exit=5"
+            exit 5
+        }
+
+        # Log the post-turn state; the next iteration re-reads and routes it
+        $postStatus = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
+        Write-LoopLog "turn=$turnNo post state=$($postStatus.State) waitingFor=$($postStatus.WaitingFor)"
+    }
+}
+
 # --- Dispatch ---
 
 switch ($Command) {
@@ -740,6 +1019,7 @@ switch ($Command) {
     "commit-check" { Invoke-CommitCheck }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
+    "loop"         { Invoke-Loop }
     default {
         if ([string]::IsNullOrWhiteSpace($Command)) {
             Invoke-Menu
@@ -754,6 +1034,8 @@ switch ($Command) {
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle: one Implementer turn, then prepare the Reviewer handoff (READY_FOR_IMPLEMENTATION; Implementer must be Claude Code)."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"
+            Write-Host "                            Run a bounded loop of automated Implementer turns; stops at any non-callable actor or hard stop. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
     }

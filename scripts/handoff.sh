@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.16.1)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.17.0)
 # Commands: status, next, start, commit-check
-# cycle and run-next require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
+# cycle, run-next, and loop require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
 
 set -euo pipefail
 
@@ -404,6 +404,7 @@ case "$COMMAND" in
     commit-check) cmd_commit_check ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
+    loop)         cmd_automation_blocked "loop" ;;
     "")
         echo ""
         echo "Usage: bash handoff.sh <command> [options]"
@@ -415,6 +416,7 @@ case "$COMMAND" in
         echo "  commit-check              Show whether a commit is allowed and what to commit."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
+        echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."
         echo ""
         ;;
     *)

@@ -116,21 +116,25 @@ copy prompts between tools.
 
 ---
 
-### v0.17.0 - Autonomous Dialogue Loop
+### v0.17.0 - Autonomous Loop Skeleton (Callable-Agent Loop)
 
-**Goal:** Allow Master, Implementer, and Reviewer to complete multiple turns automatically,
-within a bounded turn budget and safety perimeter, stopping only when the user's approval
-is required.
+**Goal:** Add a bounded loop manager that runs callable turns automatically within a turn
+budget and safety perimeter, stopping cleanly whenever the next actor is not callable or
+the user's approval is required.
 
-This is the target for fully autonomous Codex <-> Claude Code dialogue. It should be
-attempted only after v0.16.0 is stable and the safety model in this document is validated
-in practice.
+**Honest scope:** v0.17.0 is the loop skeleton, not full autonomous Codex <-> Claude Code
+dialogue. The only callable automated turn is an approved Implementer turn
+(`READY_FOR_IMPLEMENTATION`) bound to Claude Code, because only Claude Code has a local
+CLI. Master and Reviewer turns (Codex by default) have no callable adapter yet - when one
+of them is the next actor, the loop prepares `NEXT_TURN.md`, prints the paste instruction,
+and stops. Full autonomous dialogue requires a Codex callable adapter, which is future
+work beyond v0.17.0.
 
 **Includes:**
-- A `handoff.ps1 loop` command that runs turns automatically until a hard stop condition
-  is reached.
+- A `handoff.ps1 loop` command that runs callable turns automatically until a hard stop
+  condition is reached.
 - Configurable maximum turns per session (default: 3).
-- Per-turn and per-session spending budget caps.
+- Per-turn and per-session spending budget caps (worst-case authorized spend).
 - Per-turn state log written to a local file (not committed).
 - All hard stop conditions in the safety model enforced (see below).
 

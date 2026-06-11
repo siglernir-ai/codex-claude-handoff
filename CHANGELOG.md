@@ -3,6 +3,43 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.17.0 - Autonomous Loop Skeleton (Callable-Agent Loop)
+
+- Added `handoff.ps1 loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]`: a bounded
+  loop manager that routes each turn by State -> Role -> Tool, runs only callable safe
+  turns, re-reads `AI_HANDOFF.md` after every automated turn, and stops cleanly with a
+  clear reason. Defaults: MaxTurns 3, BudgetUsd 2 (per turn), SessionBudgetUsd 6.
+- The only callable automated turn is `READY_FOR_IMPLEMENTATION` / Implementer bound to
+  Claude Code - the same turn `cycle` automates. Master, Reviewer, and User turns are
+  never automated: the loop prepares `NEXT_TURN.md`, prints the next actor and paste
+  instruction, and stops with exit 0. Full Codex <-> Claude autonomy still requires a
+  Codex callable adapter (future work; ROADMAP updated to say so honestly).
+- One fail-closed confirmation per loop session (exact `yes`; null/EOF/empty/other
+  cancels with exit 2). Argument validation: MaxTurns >= 1, BudgetUsd > 0,
+  SessionBudgetUsd >= BudgetUsd (violations exit 1).
+- Session budget enforced as worst-case authorized spend: a turn starts only if
+  authorized-so-far + BudgetUsd <= SessionBudgetUsd; budget info is printed before
+  confirmation and at every stop.
+- Hard stops: non-callable next actor, unrecognized state (exit 6), Waiting For mismatch
+  (exit 6, NEXT_TURN.md routed to User), Reviewer == Implementer (exit 1), dirty tree
+  including untracked files (exit 1), missing npx/Claude (exit 3), NEXT_TURN.md refresh
+  failure (exit 4), Claude non-zero exit (exit 5), MaxTurns reached (exit 0), session
+  budget cap (exit 0). No new exit codes were introduced.
+- Added a local append-only ASCII loop log `HANDOFF_LOOP.log` (session parameters, per-turn
+  pre/post state, Claude exit codes, final stop reason). Added the file to `.gitignore`,
+  `templates/gitignore-snippet.txt`, the clean-tree exemption list, and both installers'
+  .gitignore handling. It must never be committed.
+- Refactored shared automation helpers out of `Invoke-Cycle` so `cycle` and `loop` use one
+  implementation: `Get-WorkingTreeState`, `Test-ClaudeAvailable`, `Invoke-ClaudeTurn`, and
+  a shared local-handoff-files exemption list. `cycle` and `run-next` behavior is
+  unchanged (one turn, confirmation, exit codes, messages).
+- Bash `handoff.sh`: `loop` prints the shared blocked-automation message and exits 1
+  (PowerShell/pwsh required); usage and header updated.
+- Updated `README.md` (loop section: scope, hard stops, budget semantics, log, exit
+  codes), `MASTER.md` and `templates/AGENTS.md` operator tables, and the ROADMAP v0.17.0
+  milestone wording (loop skeleton, not full autonomous dialogue).
+- Bumped `VERSION` to 0.17.0 (canonical and template mirror).
+
 ## 0.16.1 - Cycle Safety Hardening
 
 - Confirmation guard now fails closed: `cycle` / `run-next` proceed only when the

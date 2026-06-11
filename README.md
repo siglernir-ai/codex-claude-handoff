@@ -211,7 +211,8 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 **What cycle does:**
 1. Checks eligibility: state, turn ownership, Implementer bound to Claude Code, the
    Reviewer != Implementer role invariant, and a clean working tree (tracked and untracked
-   files; only `AI_HANDOFF.md`, `NEXT_TURN.md`, and `USER_REQUEST.md` are exempt).
+   files; only the local handoff files `AI_HANDOFF.md`, `NEXT_TURN.md`, `USER_REQUEST.md`,
+   and `HANDOFF_LOOP.log` are exempt).
 2. Refreshes `NEXT_TURN.md` (intentional local handoff-file write).
 3. Checks that Claude Code is available via `npx --yes @anthropic-ai/claude-code`.
 4. Prints the command it is about to run.
@@ -243,6 +244,53 @@ invariant.
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `cycle` exits with code 3.
 
 **Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
+
+### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]`
+
+Run a bounded loop of automated handoff turns until a hard stop. This is the v0.17.0
+autonomous-loop skeleton: it routes each turn by `State -> Role -> Tool`, runs only
+callable safe turns, re-reads `AI_HANDOFF.md` after every automated turn, writes a local
+turn log, and stops with a clear reason.
+
+```powershell
+.\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
+.\scripts\handoff.ps1 loop -MaxTurns 2
+.\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
+```
+
+**What it automates:** only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`
+turns where the Implementer is bound to Claude Code - the same callable turn as `cycle`,
+repeated up to `MaxTurns` times with one upfront confirmation for the whole session.
+
+**What it cannot automate yet:** Master turns, Reviewer turns, and User decisions. Codex
+has no local callable adapter, so when the next actor is Codex (Master or Reviewer) the
+loop refreshes `NEXT_TURN.md`, prints the exact next actor and paste instruction, and
+stops with exit 0. Investigation (`NEEDS_INVESTIGATION`), planning (`PLAN_REQUIRED`), and
+`QUESTION_FOR_IMPLEMENTER` turns also remain manual - the Claude Code CLI turn cannot be
+safely restricted to handoff-only edits.
+
+**Hard stops:** `REVIEW_DONE`, `WAITING_FOR_USER`, `BLOCKED`, `IMPLEMENTED`, unrecognized
+state, `Waiting For` mismatch, Reviewer == Implementer, dirty working tree (tracked or
+untracked), missing Claude Code/npx, Claude Code non-zero exit, `MaxTurns` reached, and
+the session budget cap.
+
+**Budget semantics:** `-BudgetUsd` is the per-turn cap passed to `--max-budget-usd`.
+`-SessionBudgetUsd` is a conservative worst-case authorized-spend cap: before each turn,
+if authorized-so-far plus one more per-turn budget would exceed it, the loop stops cleanly.
+The script tracks authorized budget, not actual spend.
+
+**Loop log:** each session appends ASCII lines to `HANDOFF_LOOP.log` in the project root -
+session parameters, each turn's pre/post state, Claude exit codes, and the final stop
+reason. The file is local and ignored by Git (the installer adds the rule); never commit it.
+
+**Exit codes:** same meanings as `cycle` - 0 clean expected stop (non-callable next actor,
+MaxTurns, or session budget), 1 blocked (preflight, invalid arguments, invariant, dirty
+tree), 2 cancelled confirmation, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude
+Code error, 6 mismatch or unrecognized state.
+
+**Safety:** one explicit `yes` confirmation before the session starts (fail-closed - EOF,
+empty, or anything else cancels); Bash is disallowed during automated turns; no commit,
+push, tag, deploy, database, or secret automation; `cycle` and `run-next` are unchanged.
 
 ---
 
@@ -429,7 +477,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Full orchestration CLI (`cycle`/`run-next` run a single bounded turn for `READY_FOR_IMPLEMENTATION` only; full multi-turn orchestration remains out of scope)
+- Full Codex <-> Claude automation (as of v0.17.0 the callable-agent `loop` skeleton exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no local callable adapter)
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching

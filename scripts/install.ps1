@@ -52,8 +52,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -76,10 +76,15 @@ else {
         $addedRules.Add("USER_REQUEST.md")
     }
 
+    if ($lines -notcontains "HANDOFF_LOOP.log") {
+        Add-Content -Path $GitignorePath -Value "HANDOFF_LOOP.log"
+        $addedRules.Add("HANDOFF_LOOP.log")
+    }
+
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, and USER_REQUEST.md"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log"
     }
 }
 
