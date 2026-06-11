@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.15.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v0.16.0)
 # Commands: status, next, start, commit-check
-# run-next requires PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
+# cycle and run-next require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
 
 set -euo pipefail
 
@@ -378,12 +378,14 @@ cmd_commit_check() {
     echo ""
 }
 
-cmd_run_next() {
+# Shared blocked message for automation commands (cycle, run-next).
+# Bash automation is not implemented; PowerShell (pwsh) is required.
+cmd_automation_blocked() {
+    local cmd_name="$1"
     echo ""
-    echo "run-next is not available in handoff.sh (v0.15.0)."
-    echo "To use run-next: install PowerShell (pwsh) and run handoff.ps1 run-next."
+    echo "$cmd_name is not available in handoff.sh."
+    echo "To use $cmd_name: install PowerShell (pwsh) and run handoff.ps1 $cmd_name."
     echo "On macOS/Linux without pwsh: run 'bash handoff.sh next', then paste the prompt manually."
-    echo "A cross-platform equivalent is planned for v0.16.0."
     echo ""
     exit 1
 }
@@ -400,7 +402,8 @@ case "$COMMAND" in
     next)         cmd_next ;;
     start)        cmd_start ;;
     commit-check) cmd_commit_check ;;
-    run-next)     cmd_run_next ;;
+    cycle)        cmd_automation_blocked "cycle" ;;
+    run-next)     cmd_automation_blocked "run-next" ;;
     "")
         echo ""
         echo "Usage: bash handoff.sh <command> [options]"
@@ -410,7 +413,8 @@ case "$COMMAND" in
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'
         echo "  commit-check              Show whether a commit is allowed and what to commit."
-        echo "  run-next                  Not available in v0.15.0; requires PowerShell (pwsh)."
+        echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo ""
         ;;
     *)

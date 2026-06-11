@@ -115,7 +115,7 @@ This writes `NEXT_TURN.md` and also copies the tool prompt to your clipboard. `-
 
 ## Handoff Operator
 
-A higher-level helper script with four named commands for the daily workflow.
+A higher-level helper script with named commands for the daily workflow.
 
 Run from your project root:
 
@@ -179,22 +179,27 @@ Show whether a commit is allowed and which files to commit. Never runs git comma
 
 When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed files and prints suggested `git add`, `git commit`, and `git push` commands as text only. You run them yourself after confirming the list.
 
-### `run-next [-BudgetUsd N]`
+### `cycle [-BudgetUsd N]`
 
-Run one Claude Code turn automatically. Requires `npx`; a network connection is needed only if the package is not cached.
+Run one bounded handoff cycle: at most one Claude Code Implementer turn, then prepare the
+next handoff (typically the Reviewer prompt) and stop. Requires `npx`; a network connection
+is needed only if the package is not cached.
 
 ```powershell
-.\scripts\handoff.ps1 run-next
-.\scripts\handoff.ps1 run-next -BudgetUsd 5   # raise the budget cap
+.\scripts\handoff.ps1 cycle
+.\scripts\handoff.ps1 cycle -BudgetUsd 5   # raise the budget cap
 ```
 
-**Eligible state:** `run-next` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
+`run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
+compatibility).
+
+**Eligible state:** `cycle` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
 | State | Waiting For | What to do instead |
 |---|---|---|
-| READY_FOR_IMPLEMENTATION | Implementer (Claude Code) | Eligible - run-next proceeds |
+| READY_FOR_IMPLEMENTATION | Implementer (Claude Code) | Eligible - cycle proceeds |
 | NEEDS_INVESTIGATION | Implementer | Blocked - run `next` and paste manually |
 | PLAN_REQUIRED | Implementer | Blocked - run `next` and paste manually |
 | Any | Master | Blocked - open the Master tool and paste the prompt |
@@ -203,8 +208,8 @@ Run one Claude Code turn automatically. Requires `npx`; a network connection is 
 
 Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
 
-**What run-next does:**
-1. Checks eligibility (state + actor).
+**What cycle does:**
+1. Checks eligibility (state, turn ownership, Implementer binding, clean working tree).
 2. Refreshes `NEXT_TURN.md` (intentional local handoff-file write).
 3. Checks that Claude Code is available via `npx --yes @anthropic-ai/claude-code`.
 4. Prints the command it is about to run.
@@ -214,19 +219,28 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
    - `--disallowed-tools "Bash"` - shell execution explicitly blocked
    - `--max-budget-usd N` - hard spending cap (default: $2)
    - `--no-session-persistence` - session not saved or resumed
-7. Prints the result and exits.
+7. Re-reads `AI_HANDOFF.md` after the turn.
+8. If the new state is `READY_FOR_REVIEW` / `Waiting For: Reviewer`: refreshes
+   `NEXT_TURN.md` for the Reviewer, copies the paste instruction to the clipboard, and stops.
+   Otherwise it reports the next actor (tool + role) and stops, or routes an inconsistent
+   handoff to the User with exit code 6. `cycle` never runs a second tool turn.
+
+**The Reviewer turn is not automated.** `cycle` prepares and displays the Reviewer handoff;
+you paste it into the Reviewer tool yourself. The default Reviewer (Codex) has no local CLI,
+and automatic review of an automated implementation would weaken the independent-review
+invariant.
 
 **Bash is blocked during the assisted turn.** Claude Code cannot run tests, typecheck, or lint. Run these manually after the turn completes.
 
-**No automatic commit, push, or deploy.** `run-next` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
+**No automatic commit, push, or deploy.** `cycle` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
 
-**No Master automation.** The default Master (Codex) has no local CLI, so Master turns always remain manual. `run-next` only automates an Implementer bound to Claude Code.
+**No Master automation.** The default Master (Codex) has no local CLI, so Master turns always remain manual. `cycle` only automates an Implementer bound to Claude Code.
 
-**macOS/Linux.** `run-next` requires PowerShell (`handoff.ps1`). If you have `pwsh` on macOS/Linux, use `pwsh scripts/handoff.ps1 run-next`. Without `pwsh`, use `bash scripts/handoff.sh next` to generate `NEXT_TURN.md` and paste the prompt manually. A cross-platform equivalent is planned for v0.16.0.
+**macOS/Linux.** `cycle` requires PowerShell (`handoff.ps1`). If you have `pwsh` on macOS/Linux, use `pwsh scripts/handoff.ps1 cycle`. Without `pwsh`, use `bash scripts/handoff.sh next` to generate `NEXT_TURN.md` and paste the prompt manually. `bash scripts/handoff.sh cycle` prints a blocked message and exits 1.
 
-**npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `run-next` exits with code 3.
+**npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `cycle` exits with code 3.
 
-**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error.
+**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
 
 ---
 
@@ -413,7 +427,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Full orchestration CLI (`run-next` is a limited single-turn MVP for `READY_FOR_IMPLEMENTATION` only; full orchestration remains out of scope)
+- Full orchestration CLI (`cycle`/`run-next` run a single bounded turn for `READY_FOR_IMPLEMENTATION` only; full multi-turn orchestration remains out of scope)
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching

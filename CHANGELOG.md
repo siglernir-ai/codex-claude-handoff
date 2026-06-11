@@ -3,6 +3,30 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.16.0 - Bounded Single-Command Orchestrator
+
+- Promoted the bounded single-turn automation in `handoff.ps1` to a primary `cycle` command.
+  `cycle` runs at most one approved Claude Code Implementer turn, re-reads `AI_HANDOFF.md`,
+  prepares the Reviewer handoff (or reports the next actor), and stops. It never runs a
+  second tool turn and never automates the Reviewer or the Master.
+- `run-next` remains as a fully supported alias of `cycle` - both dispatch to one shared
+  `Invoke-Cycle` implementation (no duplicated orchestration logic).
+- Improved post-turn reporting: for non-review post-turn states, `cycle` resolves and prints
+  the next actor (tool + role) via the role binding instead of a generic message.
+- Added exit code 6: the Implementer turn succeeded but the post-turn handoff is
+  inconsistent (`Waiting For` mismatch or unrecognized state). Full exit-code contract:
+  0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure,
+  5 Claude Code error, 6 post-turn handoff inconsistency.
+- Extracted a shared `Read-HandoffState` helper in `handoff.ps1`, used at script init and
+  in the post-turn re-read, removing duplicated Status-section parsing.
+- `handoff.sh`: `cycle` and `run-next` now print a shared blocked message and exit 1;
+  automation requires PowerShell (`pwsh` on macOS/Linux).
+- Clarified ROADMAP v0.16.0: `cycle` prepares the Reviewer prompt and stops; it does not
+  execute the Reviewer turn. Exit criteria updated accordingly.
+- Updated `README.md`: `cycle` documentation with `run-next` as alias, post-turn behavior,
+  exit-code table, and Bash limitation note.
+- Bumped `VERSION` to 0.16.0 (canonical and template mirror).
+
 ## 0.15.0 - Cross-Platform Installation and CLI Hardening
 
 - Added `scripts/handoff.sh`: Bash equivalent of `handoff.ps1` for macOS/Linux. Supports

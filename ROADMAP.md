@@ -86,23 +86,31 @@ by a Reviewer prompt) within explicit safety boundaries, without requiring the u
 copy prompts between tools.
 
 **Includes:**
-- A new `handoff.ps1 cycle` command that runs one Implementer turn via `run-next`, then
-  generates and displays the Reviewer prompt.
-- Hard turn limits: at most 1 Implementer turn and 1 Reviewer turn per cycle invocation.
+- A new `handoff.ps1 cycle` command that runs one Implementer turn, then generates and
+  displays the Reviewer prompt. `cycle` and `run-next` share one implementation;
+  `run-next` remains as a backward-compatible alias.
+- Hard turn limit: at most 1 Implementer turn per cycle invocation. The Reviewer turn is
+  prepared (prompt + `NEXT_TURN.md`), not executed - the Reviewer turn remains manual.
 - State validation before each step: if state or actor does not match, the cycle aborts
   with a clear message before any turn executes.
+- A distinct exit code for post-turn handoff inconsistency, so future orchestration can
+  rely on exit codes instead of parsing output.
 - No automatic git operations; the user still runs `commit-check` and commits manually.
 
 **Does not include:**
 - Multi-turn autonomous loop.
+- Automatic Reviewer or Master execution.
 - Automatic model switching or token budgeting.
 - Shared memory layer.
 - Event-driven or file-watcher orchestration.
 
 **Exit criteria:**
-- `handoff.ps1 cycle` takes a state from `READY_FOR_IMPLEMENTATION` through `REVIEW_DONE`
-  with one command, without user prompt-copying.
+- `handoff.ps1 cycle` takes a state from `READY_FOR_IMPLEMENTATION` to `READY_FOR_REVIEW`
+  with one command and prepares the Reviewer prompt without user prompt-copying. The
+  Reviewer turn itself, and the path to `REVIEW_DONE`, remain manual.
 - A state mismatch aborts cleanly before any turn runs.
+- A post-turn handoff inconsistency stops the cycle with a distinct exit code and routes
+  resolution to the user.
 - No automatic git operations occur.
 - The manual single-turn workflow continues to work independently of `cycle`.
 

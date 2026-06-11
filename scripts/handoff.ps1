@@ -40,6 +40,24 @@ function Get-SectionContent {
     return ((Get-SectionLines -Lines $Lines -Heading $Heading) -join "`n").Trim()
 }
 
+# Backward-compatible state aliases (pre-v0.13.0 tool-named dialogue states)
+$StateAlias = @{
+    "QUESTION_FOR_CODEX"  = "QUESTION_FOR_MASTER"
+    "QUESTION_FOR_CLAUDE" = "QUESTION_FOR_IMPLEMENTER"
+}
+
+function Read-HandoffState {
+    param([string[]]$Lines)
+    $status = @{ State = "(unknown)"; WaitingFor = "(unknown)"; CurrentTask = "(unknown)" }
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Status")) {
+        if ($line -match "^- State:\s*(.+)")        { $status.State       = $Matches[1].Trim() }
+        if ($line -match "^- Waiting For:\s*(.+)")  { $status.WaitingFor  = $Matches[1].Trim() }
+        if ($line -match "^- Current Task:\s*(.+)") { $status.CurrentTask = $Matches[1].Trim() }
+    }
+    if ($StateAlias.ContainsKey($status.State)) { $status.State = $StateAlias[$status.State] }
+    return $status
+}
+
 # --- Role binding (State -> Role -> Tool) ---
 
 function Get-RoleBinding {
@@ -64,23 +82,10 @@ function Resolve-Actor {
 
 $Binding = Get-RoleBinding
 
-$StatusLines = Get-SectionLines -Lines $Lines -Heading "Status"
-$State       = "(unknown)"
-$WaitingFor  = "(unknown)"
-$CurrentTask = "(unknown)"
-
-foreach ($line in $StatusLines) {
-    if ($line -match "^- State:\s*(.+)")        { $State       = $Matches[1].Trim() }
-    if ($line -match "^- Waiting For:\s*(.+)")  { $WaitingFor  = $Matches[1].Trim() }
-    if ($line -match "^- Current Task:\s*(.+)") { $CurrentTask = $Matches[1].Trim() }
-}
-
-# Backward-compatible state aliases (pre-v0.13.0 tool-named dialogue states)
-$StateAlias = @{
-    "QUESTION_FOR_CODEX"  = "QUESTION_FOR_MASTER"
-    "QUESTION_FOR_CLAUDE" = "QUESTION_FOR_IMPLEMENTER"
-}
-if ($StateAlias.ContainsKey($State)) { $State = $StateAlias[$State] }
+$HandoffStatus = Read-HandoffState -Lines $Lines
+$State         = $HandoffStatus.State
+$WaitingFor    = $HandoffStatus.WaitingFor
+$CurrentTask   = $HandoffStatus.CurrentTask
 
 $CommitStatus = switch ($State) {
     "REVIEW_DONE" { "ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files." }
@@ -461,7 +466,7 @@ function Invoke-Menu {
     Write-Host "2. Continue next turn             - prepare prompt for the Master/Implementer if needed"
     Write-Host "3. Show status                    - show current state and next actor"
     Write-Host "4. Check commit                   - verify whether commit is allowed"
-    Write-Host "5. Run next assisted turn         - only when the Implementer (Claude Code) should act"
+    Write-Host "5. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
     Write-Host "6. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
@@ -474,7 +479,7 @@ function Invoke-Menu {
         "2" { Invoke-Next -MenuMode $true }
         "3" { Invoke-Status }
         "4" { Invoke-CommitCheck }
-        "5" { Invoke-RunNext }
+        "5" { Invoke-Cycle }
         "6" { }
         default {
             Write-Host ""
@@ -484,30 +489,32 @@ function Invoke-Menu {
     }
 }
 
-function Invoke-RunNext {
+function Invoke-Cycle {
+    param([string]$CommandLabel = "cycle")
+
     $implementerTool = $Binding.Implementer
 
     # Only READY_FOR_IMPLEMENTATION is eligible
     if ($State -ne "READY_FOR_IMPLEMENTATION") {
         Write-Host ""
-        Write-Host "run-next: blocked."
+        Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
         $entry = $ActionMap[$State]
         $role  = if ($entry) { $entry.Role } else { "" }
         if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
-            Write-Host "Reason:      run-next does not automate investigation or planning turns in this version."
+            Write-Host "Reason:      $CommandLabel does not automate investigation or planning turns in this version."
             Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into the Implementer."
         } elseif ($role -eq "Master" -or $role -eq "Reviewer") {
             $t = Resolve-Actor -Role $role -Binding $Binding
-            Write-Host "Reason:      This turn is for the $role ($t). run-next cannot automate $role turns."
+            Write-Host "Reason:      This turn is for the $role ($t). $CommandLabel cannot automate $role turns."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $t."
         } elseif ($role -eq "User") {
             Write-Host "Reason:      This turn requires user action."
             Write-Host "Next step:   See AI_HANDOFF.md for details."
         } else {
-            Write-Host "Reason:      State '$State' is not eligible for run-next in this version."
+            Write-Host "Reason:      State '$State' is not eligible for $CommandLabel in this version."
         }
         Write-Host ""
         exit 1
@@ -516,7 +523,7 @@ function Invoke-RunNext {
     # Turn ownership: Waiting For must indicate the Implementer's turn (role name or resolved tool)
     if ($WaitingFor -ne "Implementer" -and $WaitingFor -ne $implementerTool) {
         Write-Host ""
-        Write-Host "run-next: blocked."
+        Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
         Write-Host "Reason:      Turn ownership mismatch. State $State expects the Implementer's turn ($implementerTool), but Waiting For is '$WaitingFor'."
@@ -525,13 +532,13 @@ function Invoke-RunNext {
         exit 1
     }
 
-    # READY_FOR_IMPLEMENTATION: run-next can only drive an Implementer bound to Claude Code
+    # READY_FOR_IMPLEMENTATION: cycle can only drive an Implementer bound to Claude Code
     if ($implementerTool -ne "Claude Code") {
         Write-Host ""
-        Write-Host "run-next: blocked."
+        Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
         Write-Host "Implementer: $implementerTool"
-        Write-Host "Reason:      run-next can only automate an Implementer bound to Claude Code."
+        Write-Host "Reason:      $CommandLabel can only automate an Implementer bound to Claude Code."
         Write-Host "             $implementerTool has no local CLI, so this turn must be run manually."
         Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $implementerTool."
         Write-Host ""
@@ -556,7 +563,7 @@ function Invoke-RunNext {
 
     if (-not $gitCheckOk) {
         Write-Host ""
-        Write-Host "run-next: blocked."
+        Write-Host "${CommandLabel}: blocked."
         Write-Host "Could not determine Git working tree state."
         Write-Host "Ensure you are in a Git repository and git is available, then try again."
         Write-Host ""
@@ -565,13 +572,13 @@ function Invoke-RunNext {
 
     if ($trackedDirtyFiles.Count -gt 0) {
         Write-Host ""
-        Write-Host "run-next: blocked."
+        Write-Host "${CommandLabel}: blocked."
         Write-Host "Working tree is not clean."
         Write-Host ""
         Write-Host "Tracked changed files:"
         foreach ($f in $trackedDirtyFiles) { Write-Host "  $f" }
         Write-Host ""
-        Write-Host "Commit, stash, or revert existing changes before running run-next."
+        Write-Host "Commit, stash, or revert existing changes before running $CommandLabel."
         Write-Host ""
         exit 1
     }
@@ -645,16 +652,10 @@ function Invoke-RunNext {
 
         # Re-read AI_HANDOFF.md to get post-turn state (pre-run values are stale)
         $script:Lines       = Get-Content -Path $HandoffFile
-        $freshStatusLines   = Get-SectionLines -Lines $script:Lines -Heading "Status"
-        $script:State       = "(unknown)"
-        $script:WaitingFor  = "(unknown)"
-        $script:CurrentTask = "(unknown)"
-        foreach ($line in $freshStatusLines) {
-            if ($line -match "^- State:\s*(.+)")        { $script:State       = $Matches[1].Trim() }
-            if ($line -match "^- Waiting For:\s*(.+)")  { $script:WaitingFor  = $Matches[1].Trim() }
-            if ($line -match "^- Current Task:\s*(.+)") { $script:CurrentTask = $Matches[1].Trim() }
-        }
-        if ($StateAlias.ContainsKey($script:State)) { $script:State = $StateAlias[$script:State] }
+        $freshStatus        = Read-HandoffState -Lines $script:Lines
+        $script:State       = $freshStatus.State
+        $script:WaitingFor  = $freshStatus.WaitingFor
+        $script:CurrentTask = $freshStatus.CurrentTask
 
         # Refresh NEXT_TURN.md with the updated state
         try { Invoke-Next -Silent $true } catch { Write-Host "Could not refresh NEXT_TURN.md: $_" }
@@ -670,6 +671,7 @@ function Invoke-RunNext {
             Write-Host ""
             Write-Host "Open $reviewerTool and press Ctrl+V."
             Write-Host "Do not commit before review."
+            Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
         } elseif ($script:State -eq "READY_FOR_REVIEW") {
             Write-Host "Post-turn handoff mismatch detected."
             Write-Host "State:       $($script:State)"
@@ -677,9 +679,30 @@ function Invoke-RunNext {
             Write-Host "Expected:    Reviewer ($reviewerTool)"
             Write-Host "NEXT_TURN.md updated for User mismatch resolution."
             Write-Host "Do not continue to a review turn or commit until AI_HANDOFF.md is corrected."
-        } else {
+            Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
+            Write-Host ""
+            exit 6
+        } elseif ($ActionMap.ContainsKey($script:State)) {
+            $nextRole = $ActionMap[$script:State].Role
+            $nextTool = Resolve-Actor -Role $nextRole -Binding $Binding
+            $postMismatch = ($script:WaitingFor -ne "(unknown)") -and
+                ($script:WaitingFor -ne $nextRole) -and ($script:WaitingFor -ne $nextTool)
             Write-Host "State is now: $($script:State) (Waiting For: $($script:WaitingFor))"
-            Write-Host "Run 'handoff.ps1 next' to prepare the next turn."
+            if ($postMismatch) {
+                Write-Host "WARNING: State $($script:State) expects Waiting For: $nextRole ($nextTool), but found: $($script:WaitingFor)."
+                Write-Host "NEXT_TURN.md routed to User for mismatch resolution."
+                Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
+                Write-Host ""
+                exit 6
+            }
+            Write-Host "Next actor: $nextTool ($nextRole)"
+            Write-Host "NEXT_TURN.md refreshed. $CommandLabel stops here - one Implementer turn per invocation."
+        } else {
+            Write-Host "WARNING: Unrecognized post-turn state: $($script:State)."
+            Write-Host "NEXT_TURN.md was not refreshed for this state. Inspect AI_HANDOFF.md manually before continuing."
+            Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
+            Write-Host ""
+            exit 6
         }
     } else {
         Write-Host "Claude Code exited with error (code: $claudeExit)."
@@ -696,7 +719,8 @@ switch ($Command) {
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
-    "run-next"     { Invoke-RunNext }
+    "cycle"        { Invoke-Cycle }
+    "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     default {
         if ([string]::IsNullOrWhiteSpace($Command)) {
             Invoke-Menu
@@ -709,7 +733,8 @@ switch ($Command) {
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
-            Write-Host "  run-next [-BudgetUsd N]   Run one assisted Implementer turn (READY_FOR_IMPLEMENTATION; Implementer must be Claude Code)."
+            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle: one Implementer turn, then prepare the Reviewer handoff (READY_FOR_IMPLEMENTATION; Implementer must be Claude Code)."
+            Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host ""
         }
     }
