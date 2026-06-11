@@ -384,9 +384,10 @@ The Master may ask the Implementer whether relevant project-local or global Clau
 
 When asked, the Implementer should report only relevant skills. Memory or context skills may be used to recover task-relevant prior decisions, constraints, and risks. The Implementer must not expose unrelated private memory. The Master should not ask every session - only when it adds value.
 
-### v0.3.0 Out of Scope
+### v0.3.0 Out of Scope (now tracked in ROADMAP.md)
 
-The following are explicitly out of scope for this protocol version:
+The following were deferred at the v0.3.0 phase. They are now tracked as future milestones
+in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
@@ -969,6 +970,33 @@ Next possible steps:
 1. evaluate whether Claude Code needs a separate skill or whether `CLAUDE.md` is sufficient
 2. improve cross-platform installation
 3. add release/versioning once the workflow stabilizes
+
+See [ROADMAP.md](ROADMAP.md) for the full milestone plan and acceptance criteria.
+
+## Release Discipline
+
+The following checklist applies before bumping a version and creating a release commit.
+Both the Master and the Implementer should verify these before handing off to the Reviewer.
+
+See [ROADMAP.md](ROADMAP.md) for planned milestones and their acceptance criteria.
+
+### Release Checklist
+
+- Working tree status understood: `git status --short --branch` shows only intended changes.
+- Version files updated: `.ai/skills/codex-claude-handoff/VERSION` and its `templates/` mirror
+  both contain the new version string.
+- Changelog entry added: `CHANGELOG.md` has a top entry for the new version.
+- Canonical/template mirrors checked: every file in `.ai/skills/codex-claude-handoff/` has a
+  matching file in `templates/.ai/skills/codex-claude-handoff/` with identical content.
+- Scripts checked: if any `.ps1` script was changed, run the PowerShell parser on it
+  (`[System.Management.Automation.Language.Parser]::ParseFile`) and confirm zero syntax errors.
+  If scripts were not changed, note that parser checks were skipped.
+- `git diff --check`: no trailing whitespace or line-ending issues.
+- Changed files accurate: the `Changed Files` list in `AI_HANDOFF.md` matches
+  `git status --short --untracked-files=all` before the Reviewer reviews. (`git diff --stat`
+  shows tracked file changes but omits new untracked files; use the status command instead.)
+- Local-only files not staged: `AI_HANDOFF.md`, `NEXT_TURN.md`, and `USER_REQUEST.md` do not
+  appear in the staged file list.
 
 ### v0.4.0 validation
 

@@ -3,6 +3,17 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.14.0 - Roadmap and Release Discipline
+
+- Added `ROADMAP.md` at the repository root: a plain-English description of the long-term
+  vision, proposed milestones (v0.14.0 through v1.0.0), and a safety model for the planned
+  autonomous dialogue loop (v0.17.0). Each milestone includes goal, scope, and exit criteria.
+- Added a "Release Discipline" section to `README.md`: links to `ROADMAP.md` and includes a
+  release checklist that agents and maintainers can follow before bumping a version.
+- Updated the "v0.3.0 Out of Scope" section in `README.md` to note that deferred items are
+  now tracked as future roadmap milestones.
+- Bumped `VERSION` to 0.14.0 (canonical and template mirror).
+
 ## 0.13.0 - Multi-Agent Role Assignment (role-neutral protocol)
 
 - Introduced a role layer: the protocol is now written in terms of three roles -
