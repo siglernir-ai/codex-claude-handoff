@@ -3,6 +3,26 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.15.0 - Cross-Platform Installation and CLI Hardening
+
+- Added `scripts/handoff.sh`: Bash equivalent of `handoff.ps1` for macOS/Linux. Supports
+  `status`, `next`, `start`, and `commit-check` with full role-binding, mismatch detection,
+  and Changed Files comparison. `run-next` is blocked with a message pointing to `handoff.ps1`
+  or a manual paste workflow; a cross-platform equivalent is planned for v0.16.0.
+- Added `scripts/next-step.sh`: Bash equivalent of `next-step.ps1`. Self-contained;
+  supports `--prepare-file` (writes `NEXT_TURN.md`). `--copy-prompt` is a no-op with a note.
+- Added `scripts/install.sh`: Bash equivalent of `install.ps1` for macOS/Linux. Copies root
+  protocol files, skill files, and workflow scripts without overwriting; creates or updates
+  `.gitignore` with all three handoff rules.
+- Updated `scripts/install.ps1` to also install `scripts/handoff.sh` and `scripts/next-step.sh`
+  into target projects.
+- Updated `templates/gitignore-snippet.txt` to list all three handoff rules: `AI_HANDOFF.md`,
+  `NEXT_TURN.md`, and `USER_REQUEST.md` (previously only `AI_HANDOFF.md`).
+- Mirrored all three new scripts to `templates/scripts/` for the install flow.
+- Updated `README.md` with cross-platform usage, Bash install instructions, and a note
+  that `run-next` requires PowerShell (`pwsh` on macOS/Linux).
+- Bumped `VERSION` to 0.15.0.
+
 ## 0.14.0 - Roadmap and Release Discipline
 
 - Added `ROADMAP.md` at the repository root: a plain-English description of the long-term

@@ -75,6 +75,14 @@ Run from your project root:
 .\scripts\next-step.ps1
 ```
 
+On macOS/Linux:
+
+```bash
+bash scripts/next-step.sh
+```
+
+`--copy-prompt` is not supported in the Bash version; copy the prompt manually. `--prepare-file` is supported.
+
 The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, and `Current Task`, followed by a recommended prompt based on the current state. Add `-CopyPrompt` to also copy the prompt to the clipboard. The script also prints a warning when the handoff looks inconsistent.
 
 ### PrepareFile Mode
@@ -113,6 +121,12 @@ Run from your project root:
 
 ```powershell
 .\scripts\handoff.ps1 <command>
+```
+
+On macOS/Linux:
+
+```bash
+bash scripts/handoff.sh <command>
 ```
 
 ### `status`
@@ -208,6 +222,8 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 
 **No Master automation.** The default Master (Codex) has no local CLI, so Master turns always remain manual. `run-next` only automates an Implementer bound to Claude Code.
 
+**macOS/Linux.** `run-next` requires PowerShell (`handoff.ps1`). If you have `pwsh` on macOS/Linux, use `pwsh scripts/handoff.ps1 run-next`. Without `pwsh`, use `bash scripts/handoff.sh next` to generate `NEXT_TURN.md` and paste the prompt manually. A cross-platform equivalent is planned for v0.16.0.
+
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `run-next` exits with code 3.
 
 **Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error.
@@ -297,6 +313,12 @@ Run this from the project root:
 
 ```powershell
 .\scripts\next-step.ps1
+```
+
+On macOS/Linux:
+
+```bash
+bash scripts/next-step.sh
 ```
 
 The script reads `AI_HANDOFF.md` and prints a three-block turn dashboard:
@@ -580,9 +602,9 @@ Use the install script or manual install steps to place those files into the tar
 
 ## Install Script
 
-A PowerShell install script is available for Windows users.
+PowerShell (`install.ps1`) and Bash (`install.sh`) install scripts are available for Windows and macOS/Linux respectively.
 
-Use it when you want to install the handoff protocol files into another project without copying them manually.
+Use them to install the handoff protocol files into another project without copying manually.
 
 ### Run the installer
 
@@ -602,6 +624,24 @@ If PowerShell blocks script execution, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
+```
+
+On macOS/Linux, use the Bash installer:
+
+```bash
+bash scripts/install.sh /path/to/your-project
+```
+
+Example:
+
+```bash
+bash scripts/install.sh ~/projects/my-project
+```
+
+After install, mark the Bash scripts executable:
+
+```bash
+chmod +x /path/to/your-project/scripts/handoff.sh /path/to/your-project/scripts/next-step.sh
 ```
 
 ### What the installer does
@@ -638,6 +678,8 @@ AI_HANDOFF.md
 ```text
 scripts/handoff.ps1
 scripts/next-step.ps1
+scripts/handoff.sh
+scripts/next-step.sh
 ```
 
 It also creates or updates:
@@ -686,6 +728,8 @@ AI_HANDOFF.md
 ```text
 scripts/handoff.ps1
 scripts/next-step.ps1
+scripts/handoff.sh
+scripts/next-step.sh
 ```
 
 This prevents accidental loss of project-specific instructions, customized skill adapters, or customized workflow scripts.
@@ -717,6 +761,8 @@ CLAUDE.md
 .claude/skills/codex-claude-handoff/SKILL.md
 scripts/handoff.ps1
 scripts/next-step.ps1
+scripts/handoff.sh
+scripts/next-step.sh
 ```
 
 `AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md` and `USER_REQUEST.md`.
@@ -728,7 +774,14 @@ Then verify the workflow scripts work:
 .\scripts\handoff.ps1 next
 ```
 
-Both commands should run successfully from the target project root.
+On macOS/Linux (Bash):
+
+```bash
+bash scripts/handoff.sh status
+bash scripts/next-step.sh
+```
+
+Both should run successfully from the target project root.
 
 ## Manual Install - Step by Step
 
