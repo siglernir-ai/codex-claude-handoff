@@ -10,7 +10,7 @@
 
 > Skill location: when asked to find or identify the handoff skill, do not search only `.claude/skills/`. The Codex-facing adapter is at `.agents/skills/codex-claude-handoff/SKILL.md`, the canonical shared protocol is at `.ai/skills/codex-claude-handoff/`, and the role binding is at `.ai/roles/ROLE_ASSIGNMENT.md`. Your behavior is driven by your assigned role and the current `AI_HANDOFF.md`.
 
-> The operating method and lifecycle vocabulary are defined in `.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md` (since v0.18.0). It does not change the Implementer behavior in this file.
+> The operating method and lifecycle vocabulary are defined in `.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md` (since v0.18.0). It does not change the Implementer behavior in this file. `AI_SEQUENCE.md` (since v0.18.1) is the Master's local multi-task ordering artifact - the Implementer does not edit it, and `AI_HANDOFF.md` remains the source of truth for the current task.
 
 ---
 

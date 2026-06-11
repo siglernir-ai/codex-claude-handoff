@@ -3,6 +3,37 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.18.1 - Sequence Artifact
+
+- Shipped the `AI_SEQUENCE.md` artifact per the contract frozen in v0.18.0:
+  a committed `templates/AI_SEQUENCE.md` with the ordered task list, per-task status
+  (`pending`, `active`, `released`), release checkpoints, and sequence notes. The
+  root artifact is local, gitignored, and never committed; per-task execution state
+  stays in `AI_HANDOFF.md`.
+- Added `AI_SEQUENCE.md` to the root `.gitignore` (anchored as `/AI_SEQUENCE.md` so
+  the committed `templates/AI_SEQUENCE.md` stays tracked), to
+  `templates/gitignore-snippet.txt`, and to both installers' .gitignore handling;
+  both installers now also copy the template to the project root without overwriting
+  an existing file.
+- `PROTOCOL_METHOD.md` (+ mirror): contract wording transitioned from "planned for
+  v0.18.1" to "since v0.18.1"; no method changes.
+- `MASTER.md` (+ mirror): the Sequence Ownership section now states exactly when the
+  Sequence Owner updates `AI_SEQUENCE.md` (after the user approves a numbered plan;
+  when choosing the next task; after the user approves each release) and that it is
+  never a replacement for current-task handoff state.
+- `SKILL.md` (+ mirror): `AI_SEQUENCE.md` listed under required project files as a
+  local sequence artifact. Skill folder `README.md` (+ mirror): root-files table row.
+- `templates/AGENTS.md` + `templates/CLAUDE.md`: minimal deference wording
+  (Implementer does not edit the sequence artifact).
+- `README.md`: new "Sequence Artifact" section; install/safety/verify file lists and
+  gitignore-rule listings now include `AI_SEQUENCE.md` (and the previously missing
+  `HANDOFF_LOOP.log` in two stale spots).
+- `ROADMAP.md`: v0.18.1 milestone filled in; added a `v0.18.2 - Controlled Stop
+  Routing` stub (distinguishing User approval, Operator actions, Protocol Repair,
+  Environment/Preflight stops, and Sequence decisions). v0.18.2 is not implemented.
+- Zero behavior change: no workflow script was modified.
+- Bumped `VERSION` to 0.18.1 (canonical and template mirror).
+
 ## 0.18.0 - Protocol Method Specification
 
 - Added canonical `.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md` (+ template

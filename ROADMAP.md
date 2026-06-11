@@ -176,11 +176,37 @@ layer and lifecycle labels over it - so the skill teaches exactly one method.
 
 ---
 
-### v0.18.1 - Sequence Artifact (stub)
+### v0.18.1 - Sequence Artifact
 
-**Goal:** Ship the `AI_SEQUENCE.md` artifact per the contract frozen in v0.18.0:
-template, gitignore rules, README usage, and a manually-run first sequence (this
-release itself). No automation hooks yet.
+**Goal:** Ship the `AI_SEQUENCE.md` artifact per the contract frozen in v0.18.0.
+
+**Includes:**
+- A committed `templates/AI_SEQUENCE.md` (ordered task list, per-task status
+  `pending`/`active`/`released`, release checkpoints, sequence notes).
+- Gitignore rules (repo, snippet, both installers) - the root artifact is local and
+  never committed.
+- Installer support: copy the template to the project root without overwriting.
+- README "Sequence Artifact" section and local-file list updates.
+- A manually-run first sequence: this release itself, dogfooded as a local file.
+
+**Does not include:**
+- Sequence automation, auto-advance, or workflow-script changes.
+- A Director role or `SEQUENCE_*` states.
+
+**Exit criteria:**
+- Fresh installs receive `AI_SEQUENCE.md` (root, ignored) and the gitignore rule.
+- The contract in `PROTOCOL_METHOD.md` reads "since v0.18.1".
+- Workflow scripts have zero diff.
+
+---
+
+### v0.18.2 - Controlled Stop Routing (stub)
+
+**Goal:** Distinguish and route the protocol's stop situations cleanly, without new
+roles or automation: User approval authority, Operator/manual adapter actions,
+Protocol Repair, Environment/Preflight stops, and Sequence decisions each get an
+explicit routing description so tools and users always know which kind of stop they
+are in and who acts next.
 
 ---
 

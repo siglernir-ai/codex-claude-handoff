@@ -13,7 +13,8 @@ $TemplatesDir = Join-Path $RepoRoot "templates"
 $RequiredTemplates = @(
     "AGENTS.md",
     "CLAUDE.md",
-    "AI_HANDOFF.md"
+    "AI_HANDOFF.md",
+    "AI_SEQUENCE.md"
 )
 
 Write-Host "Codex-Claude Handoff Installer"
@@ -52,8 +53,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -81,10 +82,15 @@ else {
         $addedRules.Add("HANDOFF_LOOP.log")
     }
 
+    if ($lines -notcontains "AI_SEQUENCE.md") {
+        Add-Content -Path $GitignorePath -Value "AI_SEQUENCE.md"
+        $addedRules.Add("AI_SEQUENCE.md")
+    }
+
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md"
     }
 }
 

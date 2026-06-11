@@ -16,8 +16,8 @@ binding (see `.ai/roles/ROLE_ASSIGNMENT.md`), the safety model (see `ROADMAP.md`
 2. This file defines the method and its vocabulary.
 3. The role files (`MASTER.md`, `IMPLEMENTER.md`) define per-role behavior.
 4. Prompts and `NEXT_TURN.md` are conveniences. `AI_HANDOFF.md` is authoritative
-   for the current task. `AI_SEQUENCE.md` (planned for v0.18.1) will be
-   authoritative only for multi-task ordering.
+   for the current task. `AI_SEQUENCE.md` (since v0.18.1) is authoritative only
+   for multi-task ordering.
 
 If two documents appear to conflict, resolve in that order and treat the conflict
 as Protocol Repair (see Vocabulary).
@@ -57,9 +57,9 @@ A sequence is an ordered list of Layer 1 tasks that together deliver a larger go
 - The Sequence Owner maintains the numbered execution plan, feeds the next task into
   `AI_HANDOFF.md` only after the previous task completed its full Layer 1 cycle
   including the user's release approval, and records sequence progress.
-- Artifact: `AI_SEQUENCE.md` - its contract is defined below, and the artifact
-  itself ships in v0.18.1. Until then, sequences live in the Master's task planning
-  (for example ROADMAP milestones) and are advanced manually.
+- Artifact: `AI_SEQUENCE.md` - its contract is defined below; the artifact ships
+  since v0.18.1 (template plus installer support). Sequences are advanced manually
+  by the Sequence Owner.
 
 ### Layer 3 - Lifecycle Phases (labels over existing machinery)
 
@@ -105,9 +105,9 @@ change.
   A conflict between a sequence and `AI_HANDOFF.md` is Protocol Repair: the handoff
   wins for the current task, automation stops, and the user resolves the conflict.
 
-## AI_SEQUENCE.md Contract (artifact ships in v0.18.1)
+## AI_SEQUENCE.md Contract (since v0.18.1)
 
-When introduced, `AI_SEQUENCE.md`:
+`AI_SEQUENCE.md`:
 
 - is local and ignored by Git, like `AI_HANDOFF.md`;
 - is written by the Sequence Owner (the Master) only after the user approves the
@@ -119,7 +119,8 @@ When introduced, `AI_SEQUENCE.md`:
   commit/release approval;
 - must never be committed.
 
-Until v0.18.1, no file named `AI_SEQUENCE.md` has protocol meaning.
+The template ships at `templates/AI_SEQUENCE.md` and the installers copy it to the
+project root (no overwrite) and add the `.gitignore` rule.
 
 ## Non-Contradiction Rules
 

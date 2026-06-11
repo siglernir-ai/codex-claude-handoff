@@ -46,6 +46,7 @@ Behavior is defined by role, not by tool name:
 | `AGENTS.md` | Project context plus the Master + Reviewer protocol (customized per project) |
 | `CLAUDE.md` | Claude Code operational entry file - resolves its role (customized per project) |
 | `AI_HANDOFF.md` | Execution state - dynamic, local, not committed |
+| `AI_SEQUENCE.md` | Multi-task ordering and progress (since v0.18.1) - dynamic, local, not committed |
 | `.ai/skills/codex-claude-handoff/` | This folder - shared protocol source of truth |
 | `.ai/roles/ROLE_ASSIGNMENT.md` | Role-to-tool binding |
 

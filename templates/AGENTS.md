@@ -356,7 +356,7 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 
 `handoff.ps1` does not update `AI_HANDOFF.md` directly and never commits, pushes, or deploys. Its automation (`cycle` / `run-next` / `loop`) can trigger only approved Implementer turns with explicit user confirmation, then stops at the first non-callable actor; it never automates the Master or the Reviewer. The Master remains the decision router.
 
-`USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth.
+`USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth. `AI_SEQUENCE.md` (since v0.18.1) is the local multi-task ordering artifact, maintained by the Master as Sequence Owner - also ignored and never committed.
 
 ---
 

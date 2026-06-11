@@ -26,6 +26,20 @@ onto existing states and gates. The specification adds no new states, roles, or
 automation - it exists so every tool reads one method instead of inferring it from
 scattered docs.
 
+## Sequence Artifact
+
+Since v0.18.1 the sequence layer has a concrete artifact: `AI_SEQUENCE.md` in the
+project root.
+
+- It owns multi-task ordering and progress only: the ordered task list, per-task
+  status (`pending`, `active`, `released`), and release checkpoints.
+- `AI_HANDOFF.md` remains the execution state for the current task; the active
+  sequence task must match the handoff's Current Task.
+- The Sequence Owner (a Master duty) updates it - after the user approves a numbered
+  plan, when choosing the next task, and after the user approves each release.
+- It is local, ignored by Git, and never committed - exactly like `AI_HANDOFF.md`.
+  The installer copies a starter template and adds the `.gitignore` rule.
+
 ## Files
 
 ```text
@@ -33,6 +47,7 @@ templates/
   AGENTS.md
   CLAUDE.md
   AI_HANDOFF.md
+  AI_SEQUENCE.md
   gitignore-snippet.txt
 ```
 
@@ -72,9 +87,25 @@ Use it for:
 - verification results
 - risks and next step
 
+### `AI_SEQUENCE.md`
+
+Local multi-task ordering artifact (since v0.18.1), maintained by the Master as
+Sequence Owner.
+
+Use it for:
+
+- the ordered task list of a multi-task sequence
+- per-task status (`pending`, `active`, `released`)
+- release checkpoints and sequence notes
+
+It is local, ignored by Git, and never committed. Per-task execution state stays in
+`AI_HANDOFF.md`.
+
 ### `gitignore-snippet.txt`
 
-Optional `.gitignore` rule for keeping `AI_HANDOFF.md` out of Git.
+The `.gitignore` rules that keep the local protocol files out of Git:
+`AI_HANDOFF.md`, `NEXT_TURN.md`, `USER_REQUEST.md`, `HANDOFF_LOOP.log`, and
+`AI_SEQUENCE.md`.
 
 ## Next Step Script
 
@@ -672,8 +703,9 @@ The project still needs:
 AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
+AI_SEQUENCE.md
 ```
-Use the install script or manual install steps to place those files into the target project.
+Use the install script or manual install steps to place those files into the target project. `AI_HANDOFF.md` and `AI_SEQUENCE.md` stay local and ignored by Git.
 
 ## Install Script
 
@@ -728,6 +760,7 @@ The installer copies these files into the target project:
 AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
+AI_SEQUENCE.md
 ```
 
 **Shared canonical skill architecture:**
@@ -770,6 +803,8 @@ and ensures these rules exist:
 AI_HANDOFF.md
 NEXT_TURN.md
 USER_REQUEST.md
+HANDOFF_LOOP.log
+AI_SEQUENCE.md
 ```
 
 ### Safety behavior
@@ -783,6 +818,7 @@ If any of these files already exist in the target project, they are skipped:
 AGENTS.md
 CLAUDE.md
 AI_HANDOFF.md
+AI_SEQUENCE.md
 ```
 
 **Skill files:**
@@ -843,7 +879,7 @@ scripts/handoff.sh
 scripts/next-step.sh
 ```
 
-`AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md` and `USER_REQUEST.md`.
+`AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md`, `USER_REQUEST.md`, `HANDOFF_LOOP.log`, and `AI_SEQUENCE.md`.
 
 Then verify the workflow scripts work:
 
@@ -873,6 +909,7 @@ From this repository, copy:
 templates/AGENTS.md
 templates/CLAUDE.md
 templates/AI_HANDOFF.md
+templates/AI_SEQUENCE.md
 templates/gitignore-snippet.txt
 ```
 
@@ -885,39 +922,45 @@ your-project/
   AGENTS.md
   CLAUDE.md
   AI_HANDOFF.md
+  AI_SEQUENCE.md
   package.json
   app/
   src/
   ...
 ```
 
-The exact project files may differ. The important point is that `AGENTS.md`, `CLAUDE.md`, and `AI_HANDOFF.md` sit at the project root.
+The exact project files may differ. The important point is that `AGENTS.md`, `CLAUDE.md`, `AI_HANDOFF.md`, and `AI_SEQUENCE.md` sit at the project root.
 
-### 2. Add the handoff file to `.gitignore`
+### 2. Add the local protocol files to `.gitignore`
 
-Open your target project `.gitignore` file and add:
+Open your target project `.gitignore` file and add the rules from
+`templates/gitignore-snippet.txt`:
 
 ```gitignore
 # Local AI handoff context
 AI_HANDOFF.md
+NEXT_TURN.md
+USER_REQUEST.md
+HANDOFF_LOOP.log
+AI_SEQUENCE.md
 ```
 
-This keeps local task context out of Git.
+This keeps local task and sequence context out of Git.
 
 If your project does not have a `.gitignore` file yet, create one.
 
 On Windows PowerShell, you can create it safely with:
 
 ```powershell
-Set-Content -Path .gitignore -Value "# Local AI handoff context`nAI_HANDOFF.md" -Encoding utf8
+Set-Content -Path .gitignore -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md" -Encoding utf8
 ```
 
-Then verify that `AI_HANDOFF.md` is ignored:
+Then verify that the local files are ignored:
 
 ```bash
 git status
 ```
-Expected result: `AI_HANDOFF.md` should not appear in the list of files to commit.
+Expected result: `AI_HANDOFF.md` and `AI_SEQUENCE.md` should not appear in the list of files to commit.
 
 ### 3. Customize `AGENTS.md`
 
@@ -988,7 +1031,7 @@ git commit -m "Add Codex-Claude handoff protocol"
 git push
 ```
 
-Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
+Do not commit `AI_HANDOFF.md` or `AI_SEQUENCE.md` - they are local files listed in `.gitignore`.
 
 ## Basic Workflow
 
@@ -1055,7 +1098,7 @@ git commit -m "Add Codex-Claude handoff protocol"
 git push
 ```
 
-Do not commit `AI_HANDOFF.md` if it is listed in `.gitignore`.
+Do not commit `AI_HANDOFF.md` or `AI_SEQUENCE.md` - they are local files listed in `.gitignore`.
 
 ## Two-Way Dialogue
 
@@ -1126,8 +1169,8 @@ See [ROADMAP.md](ROADMAP.md) for planned milestones and their acceptance criteri
 - Changed files accurate: the `Changed Files` list in `AI_HANDOFF.md` matches
   `git status --short --untracked-files=all` before the Reviewer reviews. (`git diff --stat`
   shows tracked file changes but omits new untracked files; use the status command instead.)
-- Local-only files not staged: `AI_HANDOFF.md`, `NEXT_TURN.md`, and `USER_REQUEST.md` do not
-  appear in the staged file list.
+- Local-only files not staged: `AI_HANDOFF.md`, `NEXT_TURN.md`, `USER_REQUEST.md`,
+  `HANDOFF_LOOP.log`, and `AI_SEQUENCE.md` do not appear in the staged file list.
 
 ### v0.4.0 validation
 

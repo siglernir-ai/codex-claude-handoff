@@ -58,6 +58,7 @@ When this protocol is active, expect these files in the project root:
 - `AGENTS.md` - project context plus the Master + Reviewer protocol (read by the tool that follows the AGENTS.md convention)
 - `CLAUDE.md` - the operational entry file for Claude Code (resolves its role)
 - `AI_HANDOFF.md` - current state, which role acts next, changed files, verification, risks, and next step
+- `AI_SEQUENCE.md` - local multi-task ordering artifact (since v0.18.1): ordered task list, per-task status, release checkpoints. Local, gitignored, never committed; see `PROTOCOL_METHOD.md`
 
 ## Encoding-Safe Handoff Rule
 

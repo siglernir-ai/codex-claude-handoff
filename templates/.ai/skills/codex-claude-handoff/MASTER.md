@@ -70,6 +70,16 @@ task enters `AI_HANDOFF.md` next.
 - The per-task method is unchanged: one task per handoff cycle, with `AI_HANDOFF.md`
   as the source of truth for the current task.
 
+The Sequence Owner updates the local `AI_SEQUENCE.md` artifact (since v0.18.1):
+
+- after the user approves a numbered execution plan (the sequence is created or
+  revised);
+- when choosing which task enters `AI_HANDOFF.md` next (that task becomes `active`);
+- after the user approves release/commit for a completed task (that task becomes
+  `released` and its checkpoint is recorded);
+- never as a replacement for current-task handoff state - `AI_SEQUENCE.md` holds
+  ordering and progress only, and is local, gitignored, and never committed.
+
 ## Preparing a Task for the Implementer
 
 When preparing work for the Implementer:

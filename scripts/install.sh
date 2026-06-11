@@ -48,7 +48,7 @@ copy_if_absent() {
 }
 
 # Root protocol files
-for f in AGENTS.md CLAUDE.md AI_HANDOFF.md; do
+for f in AGENTS.md CLAUDE.md AI_HANDOFF.md AI_SEQUENCE.md; do
     copy_if_absent "$TEMPLATES_DIR/$f" "$TARGET_PATH/$f" "$f"
 done
 
@@ -86,11 +86,11 @@ done
 
 # .gitignore: create or update
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"
-RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log")
+RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md")
 
 if [ ! -f "$GITIGNORE_PATH" ]; then
-    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\n' > "$GITIGNORE_PATH"
-    echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log rules"
+    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\n' > "$GITIGNORE_PATH"
+    echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
 else
     ADDED=()
     for rule in "${RULES[@]}"; do
@@ -102,7 +102,7 @@ else
     if [ ${#ADDED[@]} -gt 0 ]; then
         echo "Added to .gitignore: ${ADDED[*]}"
     else
-        echo ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, and HANDOFF_LOOP.log"
+        echo ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md"
     fi
 fi
 
