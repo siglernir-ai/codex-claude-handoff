@@ -6,6 +6,8 @@
 > **Master + Reviewer** roles and follows the protocol below. If you have been reassigned to
 > the **Implementer** role, follow `.ai/skills/codex-claude-handoff/IMPLEMENTER.md` instead.
 > The full Master + Reviewer protocol also lives in `.ai/skills/codex-claude-handoff/MASTER.md`.
+> The operating method and lifecycle vocabulary are defined in
+> `.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md` (since v0.18.0).
 
 ---
 

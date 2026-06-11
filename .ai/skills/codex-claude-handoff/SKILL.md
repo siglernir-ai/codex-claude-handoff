@@ -22,6 +22,8 @@ The protocol is organized around three roles, plus the User. Roles are bound to 
 
 **Invariant:** the Reviewer must never be the same tool as the Implementer (an implementer cannot be the sole reviewer of its own work). Switching roles requires explicit user approval. See `.ai/roles/ROLE_ASSIGNMENT.md`.
 
+Multi-task coordination (the "Sequence Owner") is a duty of the Master role, not a fourth role. For the operating method, its layers, and the lifecycle vocabulary, read `PROTOCOL_METHOD.md` in this folder (since v0.18.0).
+
 The Master role is read-only with respect to source during consultation: the Implementer does not modify source files during investigation or planning turns, and control returns to the Master before any implementation task is finalized.
 
 ## Canonical Shared Folder
@@ -33,6 +35,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `SKILL.md` | This file - shared protocol index and role model |
 | `MASTER.md` | Master + Reviewer role protocol: decision router, gates, states, review, verification |
 | `IMPLEMENTER.md` | Implementer role protocol: investigation mode, planning mode, implementation rules, states |
+| `PROTOCOL_METHOD.md` | Protocol method specification: method layers, lifecycle mapping, vocabulary, precedence (since v0.18.0) |
 | `CODEX.md` | Codex entry pointer - resolves Codex's current role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |

@@ -153,13 +153,44 @@ work beyond v0.17.0.
 
 ---
 
+### v0.18.0 - Protocol Method Specification
+
+**Goal:** Define the operating method formally - one per-task core with a sequence
+layer and lifecycle labels over it - so the skill teaches exactly one method.
+
+**Includes:**
+- A canonical `PROTOCOL_METHOD.md` (+ template mirror): method layers, the lifecycle
+  mapping to existing states, vocabulary (Sequence Owner duty, Operator action
+  category, Environment/Preflight Stop, Protocol Repair), precedence rules, and the
+  `AI_SEQUENCE.md` contract.
+- One-line deference references from the role files and entry docs.
+- Installer support for the new canonical file.
+
+**Does not include:**
+- Any behavior change to the workflow scripts.
+- A Director role, new states, or the `AI_SEQUENCE.md` artifact itself.
+
+**Exit criteria:**
+- All protocol docs describe one method; the contradiction-audit checks are clean.
+- Fresh installs receive `PROTOCOL_METHOD.md`.
+
+---
+
+### v0.18.1 - Sequence Artifact (stub)
+
+**Goal:** Ship the `AI_SEQUENCE.md` artifact per the contract frozen in v0.18.0:
+template, gitignore rules, README usage, and a manually-run first sequence (this
+release itself). No automation hooks yet.
+
+---
+
 ### v1.0.0 - Stable Protocol Release
 
 **Goal:** Declare the protocol stable and ready for use in production projects with a
 commitment to backward compatibility.
 
 **Includes:**
-- All milestones through v0.17.0 validated.
+- All milestones through v0.18.x validated.
 - Full cross-platform support confirmed.
 - Any breaking changes from the 0.x line resolved and documented.
 - A migration guide if any protocol behavior changed incompatibly.

@@ -15,6 +15,17 @@ The protocol is organized around three roles, bound to concrete tools in `.ai/ro
 
 Default binding: Master = Codex, Reviewer = Codex, Implementer = Claude Code. Roles can be reassigned with user approval without rewriting the protocol. All roles coordinate through a shared file: `AI_HANDOFF.md`.
 
+## Protocol Method
+
+Since v0.18.0 the operating method is formally specified in
+`.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md`. The method has one per-task core
+(the handoff cycle above) and two coordination views over it: a sequence layer
+(multi-task ordering, owned by the Master as "Sequence Owner" - a duty, not a fourth
+role) and lifecycle labels (Specification, Architecture, Release, and so on) that map
+onto existing states and gates. The specification adds no new states, roles, or
+automation - it exists so every tool reads one method instead of inferring it from
+scattered docs.
+
 ## Files
 
 ```text
@@ -726,6 +737,7 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
+.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
@@ -780,6 +792,7 @@ AI_HANDOFF.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
+.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
@@ -817,6 +830,7 @@ CLAUDE.md
 .ai/skills/codex-claude-handoff/SKILL.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
+.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md

@@ -7,6 +7,8 @@ holds these roles follows this file.
 For the shared role split and protocol index, see `SKILL.md` in this folder.
 For the Implementer role, see `IMPLEMENTER.md` in this folder.
 For the current role-to-tool binding, see `.ai/roles/ROLE_ASSIGNMENT.md`.
+For the operating method, its layers, and the lifecycle vocabulary, see
+`PROTOCOL_METHOD.md` in this folder (since v0.18.0).
 
 Throughout this file, "the Master" means the tool currently assigned the Master role
 and "the Implementer" means the tool currently assigned the Implementer role. The
@@ -55,6 +57,18 @@ Before finalizing task instructions, the Master should consider routing to `NEED
 - A read-only Implementer pass would improve correctness, feasibility, safety, or execution quality more than it adds overhead.
 
 This does not apply to simple, clear, low-risk tasks with well-understood scope. Advisory answers and small single-file changes do not need consultation.
+
+## Sequence Ownership
+
+The Master also holds the **Sequence Owner** duty (defined in `PROTOCOL_METHOD.md`,
+since v0.18.0): maintaining the numbered multi-task execution plan and choosing which
+task enters `AI_HANDOFF.md` next.
+
+- Sequence ownership is a duty, not a fourth role; the role binding table is unchanged.
+- Advance the sequence only after the previous task completed its full cycle,
+  including the user's commit/release approval (REVIEW_DONE is a user checkpoint).
+- The per-task method is unchanged: one task per handoff cycle, with `AI_HANDOFF.md`
+  as the source of truth for the current task.
 
 ## Preparing a Task for the Implementer
 

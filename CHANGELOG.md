@@ -3,6 +3,36 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.18.0 - Protocol Method Specification
+
+- Added canonical `.ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md` (+ template
+  mirror): the single normative definition of the operating method. One method,
+  three layers: Layer 1 is the frozen per-task handoff method (states, gates,
+  invariants - quoted with their source files, never restated); Layer 2 is the
+  sequence layer (multi-task ordering as a "Sequence Owner" DUTY of the Master role,
+  not a fourth role); Layer 3 maps lifecycle phases (Specification, Architecture,
+  Tooling & Capability Plan, Release, Sequence update) onto existing states and
+  gates as labels - a lifecycle phase is never a new state, role, or process.
+- Vocabulary made official: Operator = a manual action category performed by the
+  user (never an AI role); Environment/Preflight Stop and Protocol Repair = stop
+  categories mapping to the existing automation exit codes (1/3/4 and 6).
+  Director = reserved term, explicitly not a role in this version.
+- Defined the `AI_SEQUENCE.md` contract (local, gitignored, ordering/progress/release
+  checkpoints only, never crosses a REVIEW_DONE checkpoint without user approval,
+  never committed). The artifact itself ships in v0.18.1.
+- Added one-line deference references in `SKILL.md` (folder table row + role-model
+  note), `MASTER.md` (new "Sequence Ownership" section), `IMPLEMENTER.md`,
+  `ROLE_ASSIGNMENT.md` (new "Duties Note"), `templates/AGENTS.md`, and
+  `templates/CLAUDE.md`.
+- Fixed the stale `ROLE_ASSIGNMENT.md` Tooling Note to cover `loop` as well as
+  `cycle`/`run-next`.
+- Updated `README.md` (new "Protocol Method" section; install/skip/verify file lists
+  include the new file), `ROADMAP.md` (v0.18.0 milestone + v0.18.1 stub; v1.0.0
+  wording), and both installers to ship `PROTOCOL_METHOD.md`.
+- Zero behavior change: no workflow script (`handoff.ps1/.sh`, `next-step.ps1/.sh`)
+  was modified.
+- Bumped `VERSION` to 0.18.0 (canonical and template mirror).
+
 ## 0.17.0 - Autonomous Loop Skeleton (Callable-Agent Loop)
 
 - Added `handoff.ps1 loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]`: a bounded

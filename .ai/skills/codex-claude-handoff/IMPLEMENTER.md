@@ -7,6 +7,8 @@ follows this file.
 For the shared role split and protocol index, see `SKILL.md` in this folder.
 For the Master + Reviewer role, see `MASTER.md` in this folder.
 For the current role-to-tool binding, see `.ai/roles/ROLE_ASSIGNMENT.md`.
+The operating method and lifecycle vocabulary are defined in `PROTOCOL_METHOD.md`
+in this folder (since v0.18.0); it does not change Implementer behavior in this file.
 
 Throughout this file, "the Implementer" means the tool currently assigned the
 Implementer role, and "the Master" / "the Reviewer" mean the tool(s) holding those roles.

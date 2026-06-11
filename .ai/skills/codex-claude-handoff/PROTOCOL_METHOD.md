@@ -1,0 +1,142 @@
+# Codex-Claude Handoff - Protocol Method Specification
+
+Since v0.18.0. This file is the single normative definition of the protocol's
+operating method: its layers, its lifecycle vocabulary, and its precedence rules.
+
+Scope boundaries: this file is normative for the method layers, the lifecycle
+mapping, the vocabulary, precedence, and the sequence contract. It is NOT normative
+for per-role behavior (see `MASTER.md` and `IMPLEMENTER.md`), the role-to-tool
+binding (see `.ai/roles/ROLE_ASSIGNMENT.md`), the safety model (see `ROADMAP.md`,
+"Safety Model for Autonomous Dialogue"), or the current task state (see
+`AI_HANDOFF.md`). It quotes those sources; it must never alter them.
+
+## Precedence
+
+1. User decisions are always the highest authority.
+2. This file defines the method and its vocabulary.
+3. The role files (`MASTER.md`, `IMPLEMENTER.md`) define per-role behavior.
+4. Prompts and `NEXT_TURN.md` are conveniences. `AI_HANDOFF.md` is authoritative
+   for the current task. `AI_SEQUENCE.md` (planned for v0.18.1) will be
+   authoritative only for multi-task ordering.
+
+If two documents appear to conflict, resolve in that order and treat the conflict
+as Protocol Repair (see Vocabulary).
+
+## The Method in One View
+
+The protocol is ONE method with three layers. Layers 2 and 3 are coordination views
+over Layer 1; they never replace or modify it.
+
+### Layer 1 - Per-Task Handoff Method (the frozen core)
+
+One task at a time flows through the role cycle:
+
+```text
+User -> Master -> Implementer -> Reviewer -> User
+```
+
+- `AI_HANDOFF.md` is the source of truth for the current task.
+- The allowed states and their owners are defined in `MASTER.md` ("Allowed States")
+  and resolved by the workflow scripts via the role binding.
+- Gates: Investigation Gate, Planning Gate, Verification Gate (`MASTER.md`).
+- Invariants (quoted authorities - this file does not restate them in new words):
+  - "One task per handoff cycle." (`MASTER.md`, "Scope Discipline")
+  - The Reviewer must not be the same tool as the Implementer
+    (`.ai/roles/ROLE_ASSIGNMENT.md`, "Invariant").
+  - Commits, pushes, deploys, database work, and secret changes require explicit
+    user approval (`MASTER.md`, "Manual Approval Boundaries").
+
+Nothing in this file changes Layer 1.
+
+### Layer 2 - Sequence Layer (multi-task ordering)
+
+A sequence is an ordered list of Layer 1 tasks that together deliver a larger goal.
+
+- The **Sequence Owner** is a DUTY of the Master role (default: Codex). It is not a
+  fourth role and never appears in the role binding table.
+- The Sequence Owner maintains the numbered execution plan, feeds the next task into
+  `AI_HANDOFF.md` only after the previous task completed its full Layer 1 cycle
+  including the user's release approval, and records sequence progress.
+- Artifact: `AI_SEQUENCE.md` - its contract is defined below, and the artifact
+  itself ships in v0.18.1. Until then, sequences live in the Master's task planning
+  (for example ROADMAP milestones) and are advanced manually.
+
+### Layer 3 - Lifecycle Phases (labels over existing machinery)
+
+The end-to-end lifecycle from user idea to release is a set of LABELS over Layer 1
+and Layer 2 machinery. A lifecycle phase is never a new state, a new role, or a new
+process.
+
+| Lifecycle phase | Is exactly (existing machinery) |
+|---|---|
+| User idea | natural request via `handoff.ps1 start` or a direct prompt -> the Master's Decision Router (`MASTER.md`) |
+| Specification | the Master's task analysis and task writing (NEEDS_ANALYSIS -> a defined task in `AI_HANDOFF.md`) |
+| Architecture | Planning Gate output (PLAN_REQUIRED -> PLAN_READY_FOR_REVIEW) |
+| Tooling & Capability Plan | `CAPABILITIES.md` consultation plus a read-only NEEDS_INVESTIGATION pass |
+| Sequence ownership | the Master's Sequence Owner duty (Layer 2): the numbered execution plan |
+| Current handoff | `AI_HANDOFF.md` - one task per cycle |
+| Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
+| Review | READY_FOR_REVIEW -> Reviewer; Verification Gate |
+| Release | REVIEW_DONE -> user commit/tag (Manual Approval Boundaries) |
+| Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval |
+
+Rule: if a future phase cannot be expressed as a mapping to existing machinery, it
+is out of scope for this specification and requires its own reviewed protocol
+change.
+
+## Vocabulary
+
+- **Sequence** - an ordered list of Layer 1 tasks with per-task status and release
+  checkpoints.
+- **Sequence Owner** - the Master-role duty that maintains and advances a sequence.
+  Not a role.
+- **Director** - a reserved future term. Not a role in this version. Reconsider only
+  if a third tool exists that could hold a separate coordination seat.
+- **Operator** - a manual/mechanical ACTION CATEGORY: pasting a prompt into a tool,
+  running a workflow script, committing, tagging, deploying. Operator actions are
+  performed by the user (or a human at a terminal). Operator is not an AI role and
+  never appears in the role binding.
+- **Environment / Preflight Stop** - a STOP CATEGORY, not a state or a role. It maps
+  to the existing automation exits: blocked preflight, dirty working tree, or
+  invalid arguments (exit 1); missing Claude Code / npx prerequisite (exit 3);
+  NEXT_TURN.md write failure (exit 4).
+- **Protocol Repair** - a STOP CATEGORY, not a state or a role. It maps to the
+  existing mismatch and unrecognized-state handling: route to the User, exit 6.
+  A conflict between a sequence and `AI_HANDOFF.md` is Protocol Repair: the handoff
+  wins for the current task, automation stops, and the user resolves the conflict.
+
+## AI_SEQUENCE.md Contract (artifact ships in v0.18.1)
+
+When introduced, `AI_SEQUENCE.md`:
+
+- is local and ignored by Git, like `AI_HANDOFF.md`;
+- is written by the Sequence Owner (the Master) only after the user approves the
+  numbered execution plan;
+- owns ONLY: the ordered task list, per-task status (pending / active / released),
+  and release checkpoints;
+- must never contain per-task execution state (that belongs to `AI_HANDOFF.md`);
+- must never advance past a REVIEW_DONE checkpoint without the user's
+  commit/release approval;
+- must never be committed.
+
+Until v0.18.1, no file named `AI_SEQUENCE.md` has protocol meaning.
+
+## Non-Contradiction Rules
+
+Single authority per concern:
+
+| Concern | Single authority |
+|---|---|
+| Approval of commits, pushes, releases, risky actions | The User (`MASTER.md`, "Manual Approval Boundaries"; `ROADMAP.md` safety model) |
+| Per-task routing and gates | The Master via the Decision Router (`MASTER.md`) |
+| Multi-task ordering | The Sequence Owner duty (this file, Layer 2) |
+| Source edits, investigation, and planning | The Implementer (`IMPLEMENTER.md`) |
+| Independent review | The Reviewer (`MASTER.md`; invariant in `ROLE_ASSIGNMENT.md`) |
+| Manual adapter actions | The Operator action category (this file) - performed by the user |
+| Automation stop semantics | The workflow scripts' exit codes, categorized here as Environment/Preflight Stop and Protocol Repair |
+
+- New vocabulary must map to existing machinery; this specification may not invent
+  states, roles, or automation.
+- Documents that need the method refer to this file instead of restating it.
+- If wording elsewhere appears to define the method differently, this file wins and
+  the discrepancy should be fixed as a documentation task.
