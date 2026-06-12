@@ -3,6 +3,14 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.18.2.1 - Stop Routing Consistency Fix
+
+- Fixed the `PROTOCOL_METHOD.md` Non-Contradiction Rules table (+ mirror): the
+  "Automation stop semantics" row now points to the v0.18.2 "Stop Routing" section
+  and its six stop categories. Workflow scripts must print one of those categories;
+  exit codes remain script behavior and are not the category system.
+- Bumped `VERSION` to 0.18.2.1 (canonical and template mirror).
+
 ## 0.18.2 - Controlled Stop Routing + Release Authorization Gate
 
 - Added a "Stop Routing" section to `PROTOCOL_METHOD.md` (+ mirror) with six stop

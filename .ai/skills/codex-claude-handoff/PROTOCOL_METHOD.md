@@ -170,7 +170,7 @@ Single authority per concern:
 | Source edits, investigation, and planning | The Implementer (`IMPLEMENTER.md`) |
 | Independent review | The Reviewer (`MASTER.md`; invariant in `ROLE_ASSIGNMENT.md`) |
 | Manual adapter actions | The Operator action category (this file) - performed by the user |
-| Automation stop semantics | The workflow scripts' exit codes, categorized here as Environment/Preflight Stop and Protocol Repair |
+| Automation stop semantics | This file, "Stop Routing": workflow scripts must print one of the defined stop categories. Exit codes remain script behavior and must not be redefined as the category system. |
 
 - New vocabulary must map to existing machinery; this specification may not invent
   states, roles, or automation.
