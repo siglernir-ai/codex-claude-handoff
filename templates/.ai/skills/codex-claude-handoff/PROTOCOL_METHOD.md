@@ -77,7 +77,7 @@ process.
 | Current handoff | `AI_HANDOFF.md` - one task per cycle |
 | Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
 | Review | READY_FOR_REVIEW -> Reviewer; Verification Gate |
-| Release | REVIEW_DONE -> user commit/tag (Manual Approval Boundaries) |
+| Release | REVIEW_DONE (Reviewer attestation) -> user release authorization -> operator commit/tag (Manual Approval Boundaries) |
 | Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval |
 
 Rule: if a future phase cannot be expressed as a mapping to existing machinery, it
@@ -99,11 +99,47 @@ change.
 - **Environment / Preflight Stop** - a STOP CATEGORY, not a state or a role. It maps
   to the existing automation exits: blocked preflight, dirty working tree, or
   invalid arguments (exit 1); missing Claude Code / npx prerequisite (exit 3);
-  NEXT_TURN.md write failure (exit 4).
+  NEXT_TURN.md write failure (exit 4). Resolving it is an environment task, not a
+  user decision.
 - **Protocol Repair** - a STOP CATEGORY, not a state or a role. It maps to the
   existing mismatch and unrecognized-state handling: route to the User, exit 6.
   A conflict between a sequence and `AI_HANDOFF.md` is Protocol Repair: the handoff
   wins for the current task, automation stops, and the user resolves the conflict.
+  Protocol Repair is a correction task, not a product decision.
+- **User Release Authorization** (since v0.18.2) - a STOP CATEGORY: the Reviewer has
+  attested technical readiness (REVIEW_DONE - see `MASTER.md`, "Review Outcomes")
+  and the only remaining step is the user's approval to turn reviewed work into a
+  commit, push, tag, or release. The user is the authority, not the technical
+  verifier: re-running verification is not the user's default duty.
+- **User Decision** (since v0.18.2) - a STOP CATEGORY: a product, scope, business,
+  or risk decision that only the user can make (WAITING_FOR_USER, a documented
+  blocker, or a Decision Router user-decision outcome).
+- **Non-callable Actor** (since v0.18.2) - a STOP CATEGORY: automation stops because
+  the next role's tool has no callable adapter (for example Master or Reviewer bound
+  to Codex), or the turn type cannot be safely automated. This is an automation
+  limitation, not a user decision; the next step is an Operator Manual Action
+  (paste the prepared prompt into the bound tool).
+
+## Stop Routing (since v0.18.2)
+
+Every stop the protocol prints or documents belongs to exactly one category. A stop
+names its category, says whether a user decision is required, and says who or what
+acts next. Not every stop belongs to the User: most are mechanical, environmental,
+or automation-limitation stops.
+
+| Stop category | Typical trigger | Who/what acts next | User decision required? |
+|---|---|---|---|
+| User Release Authorization | REVIEW_DONE after Reviewer attestation | The user authorizes; an operator action performs the commit/push/tag | Authorization only - not technical re-verification |
+| User Decision | WAITING_FOR_USER, a documented blocker | The user decides | Yes |
+| Operator Manual Action | paste a prompt, run a script, execute an authorized commit | The user acting as operator (mechanical) | No |
+| Protocol Repair | Waiting For mismatch, unrecognized state, contradictory handoff or binding | The user corrects the handoff or binding | No product decision - a correction |
+| Environment / Preflight | dirty tree, missing dependency, NEXT_TURN.md failure, invalid arguments, tool unavailable | Whoever controls the environment | No |
+| Non-callable Actor | next role's tool has no adapter, or the turn type is not automatable | Operator pastes the prepared prompt into the bound tool | No - automation limitation |
+
+Future automation model (NOT implemented in v0.18.2): Reviewer attestation ->
+User Release Authorization -> an authorized operator/adapter may execute the
+commit/push/tag. The user remains the only authority for releases; the user is
+never the default technical verifier.
 
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 

@@ -3,6 +3,41 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.18.2 - Controlled Stop Routing + Release Authorization Gate
+
+- Added a "Stop Routing" section to `PROTOCOL_METHOD.md` (+ mirror) with six stop
+  categories - User Release Authorization, User Decision, Operator Manual Action,
+  Protocol Repair, Environment/Preflight, and Non-callable Actor - each stating who
+  or what acts next and whether a user decision is required. Not every stop belongs
+  to the User.
+- `REVIEW_DONE` is now defined as a Reviewer attestation (`MASTER.md`, "Review
+  Outcomes"): Changed Files reviewed against scope, verification checked or every
+  skip justified, local protocol files excluded from commit scope, and no unsafe
+  deploy/database/production-config/secrets issue. After `REVIEW_DONE` the user's
+  step is Release Authorization only - approving the commit/push/tag - not re-running
+  technical verification.
+- Workflow scripts (`handoff.ps1`, `next-step.ps1`, `handoff.sh`, `next-step.sh`)
+  now print a stop-category line at every stop they report: release authorization,
+  user decision, operator action, protocol repair, environment/preflight, or
+  non-callable actor. Message-level change only - all exit codes and automation
+  behavior are unchanged. Added small shared helpers (`Get-StopCategoryLine` in
+  PowerShell, `_stop_category` in Bash).
+- Updated `REVIEW_DONE` wording across the state tables (`IMPLEMENTER.md`,
+  `templates/CLAUDE.md`, `templates/AGENTS.md`, `README.md`) and the README
+  Daily Workflow / Short Workflow Example / commit-check / Release Discipline
+  sections: the Reviewer attests technical readiness; the user grants release
+  authorization.
+- Stated the future automation model in `PROTOCOL_METHOD.md` (NOT implemented):
+  Reviewer attestation -> User release authorization -> an authorized
+  operator/adapter may execute the commit/push/tag.
+- `ROADMAP.md`: v0.18.2 milestone filled in; the loop hard-stop intro now references
+  the stop categories without weakening any stop condition.
+- Remaining automation limitations recorded: investigation/planning turns cannot be
+  safely automated by the Claude Code CLI (cannot restrict edits to AI_HANDOFF.md
+  only in non-interactive mode), and Master/Reviewer turns are non-callable without
+  a Codex adapter.
+- Bumped `VERSION` to 0.18.2 (canonical and template mirror).
+
 ## 0.18.1 - Sequence Artifact
 
 - Shipped the `AI_SEQUENCE.md` artifact per the contract frozen in v0.18.0:

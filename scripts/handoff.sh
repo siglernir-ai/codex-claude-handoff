@@ -108,7 +108,7 @@ _action_text() {
         PLAN_READY_FOR_REVIEW)     echo "Review the plan. Approve or request changes before implementation begins." ;;
         READY_FOR_IMPLEMENTATION)  echo "Implement the approved scope. Do not modify unrelated files." ;;
         READY_FOR_REVIEW)          echo "Review Changed Files. Run git status and git diff before approving." ;;
-        REVIEW_DONE)               echo "Commit and push approved changes. Do not commit AI_HANDOFF.md." ;;
+        REVIEW_DONE)               echo "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md." ;;
         QUESTION_FOR_MASTER)       echo "Answer the Implementer's question under Dialogue / Open Questions, then return the working state." ;;
         QUESTION_FOR_IMPLEMENTER)  echo "Answer the Master's question read-only under Dialogue / Open Questions. No source edits." ;;
         RE_GATE_REQUESTED)         echo "Re-route the task; the Implementer found it riskier/larger than scoped." ;;
@@ -138,10 +138,29 @@ _after_text() {
 
 _commit_status_text() {
     case "$STATE" in
-        REVIEW_DONE) echo "ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files." ;;
+        REVIEW_DONE) echo "ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files." ;;
         IMPLEMENTED) echo "ALLOWED - no Reviewer review required. Review the work before committing." ;;
         *)           echo "Blocked - $STATE requires action before committing." ;;
     esac
+}
+
+# Stop-category label (v0.18.2 controlled stop routing). See PROTOCOL_METHOD.md, "Stop Routing".
+_stop_category() {
+    local for_state="$1" actor_tool="$2" automation="${3:-no}"
+    if [ "$actor_tool" = "User" ]; then
+        case "$for_state" in
+            REVIEW_DONE)
+                echo "Stop category: User Release Authorization - approve the release; technical readiness was attested by the Reviewer." ;;
+            IMPLEMENTED)
+                echo "Stop category: User Release Authorization - this work did not require Reviewer review; check it yourself before approving the commit." ;;
+            *)
+                echo "Stop category: User Decision - see AI_HANDOFF.md." ;;
+        esac
+    elif [ "$automation" = "yes" ]; then
+        echo "Stop category: Non-callable Actor (automation limitation) - next step is an Operator Manual Action: paste the prompt into $actor_tool."
+    else
+        echo "Stop category: Operator Manual Action - paste the prompt into $actor_tool."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -214,13 +233,16 @@ $cf"
     if $is_mismatch; then
         echo "WARNING: State $STATE expects Waiting For: $exp_role ($exp_tool), but found: $WAITING_FOR."
         echo "Next actor: User - resolve the handoff mismatch in AI_HANDOFF.md before continuing."
+        echo "Stop category: Protocol Repair - a correction, not a product decision."
     elif [ "$actor" = "User" ]; then
         echo "Next actor: User"
+        _stop_category "$STATE" "User"
         echo "No tool handoff needed."
         echo "Review the status, start a new request, or run commit-check if you are about to commit."
     else
         echo "Open:  $actor  (role: $role_label)"
         echo "Paste: $paste"
+        _stop_category "$STATE" "$actor"
         echo ""
         if $CLIP; then
             echo "(--clip: clipboard auto-copy is not supported in handoff.sh; copy the Paste line manually.)"
@@ -315,7 +337,8 @@ cmd_commit_check() {
             return
         fi
 
-        echo "Commit: ALLOWED - the Reviewer approved."
+        echo "Commit: ALLOWED - the Reviewer attested technical readiness."
+        echo "Stop category: User Release Authorization - you approve the release; running the commands is an Operator Manual Action."
         echo ""
 
         local mismatch=false x y found
@@ -385,6 +408,7 @@ cmd_automation_blocked() {
     echo ""
     echo "$cmd_name is not available in handoff.sh."
     echo "To use $cmd_name: install PowerShell (pwsh) and run handoff.ps1 $cmd_name."
+    echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
     echo "On macOS/Linux without pwsh: run 'bash handoff.sh next', then paste the prompt manually."
     echo ""
     exit 1

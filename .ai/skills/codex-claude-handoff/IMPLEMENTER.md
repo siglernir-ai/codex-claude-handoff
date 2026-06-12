@@ -147,7 +147,7 @@ and explain the blocker under `Open Issues`.
 | `READY_FOR_IMPLEMENTATION` | Task is defined and the Implementer should implement. |
 | `IMPLEMENTED` | The Implementer finished and no review is required. |
 | `READY_FOR_REVIEW` | The Implementer finished and the Reviewer should review. |
-| `REVIEW_DONE` | The Reviewer reviewed and the user decides next step. |
+| `REVIEW_DONE` | The Reviewer attested technical readiness; the user grants release authorization. |
 | `QUESTION_FOR_MASTER` | The Implementer asked the Master a scoped question; no source edits while waiting. |
 | `QUESTION_FOR_IMPLEMENTER` | The Master asked the Implementer a scoped question; the Implementer answers read-only. |
 | `RE_GATE_REQUESTED` | The Implementer found the task riskier/larger than scoped; the Master re-routes. |

@@ -200,13 +200,40 @@ layer and lifecycle labels over it - so the skill teaches exactly one method.
 
 ---
 
-### v0.18.2 - Controlled Stop Routing (stub)
+### v0.18.2 - Controlled Stop Routing + Release Authorization Gate
 
-**Goal:** Distinguish and route the protocol's stop situations cleanly, without new
-roles or automation: User approval authority, Operator/manual adapter actions,
-Protocol Repair, Environment/Preflight stops, and Sequence decisions each get an
-explicit routing description so tools and users always know which kind of stop they
-are in and who acts next.
+**Goal:** Route the protocol's stop situations cleanly so the User is the authority
+and approval point - not the default handler for every technical stop - without new
+roles, new states, or new automation.
+
+**Includes:**
+- A "Stop Routing" section in `PROTOCOL_METHOD.md` with six stop categories:
+  User Release Authorization, User Decision, Operator Manual Action, Protocol
+  Repair, Environment/Preflight, and Non-callable Actor - each stating who acts
+  next and whether a user decision is required.
+- `REVIEW_DONE` redefined as a Reviewer attestation (`MASTER.md`, "Review
+  Outcomes"): Changed Files reviewed, verification checked or skips justified,
+  local protocol files excluded from commit scope, no unsafe scope. After it, the
+  user's step is release authorization only.
+- Stop-category lines in the workflow script output (message-level only; exit
+  codes and automation behavior unchanged).
+- State-table and workflow wording updates across the docs.
+- The future automation model stated (not implemented): Reviewer attestation ->
+  User release authorization -> an authorized operator/adapter executes the
+  commit/push/tag.
+
+**Does not include:**
+- New roles or states; sequence auto-advance; automatic commit/push/tag; a Codex
+  adapter; any weakening of the approval boundaries.
+
+**Exit criteria:**
+- Every printed stop names its category and whether a user decision is required.
+- `REVIEW_DONE` is documented everywhere as Reviewer attestation + user release
+  authorization, not user technical review.
+- Workflow script exit codes and automation behavior are unchanged.
+- The remaining automation limitations are recorded: investigation/planning turns
+  cannot be safely automated by the Claude Code CLI, and Master/Reviewer turns are
+  non-callable without a Codex adapter.
 
 ---
 
@@ -260,10 +287,14 @@ in the "must stop for the user" list is a hard stop, not a soft guideline.
 
 ### Hard stop conditions for the loop
 
-The loop must exit and wait for the user when any of the following are true:
+The loop must exit when any of the following are true. Since v0.18.2 each stop is
+categorized (see `PROTOCOL_METHOD.md`, "Stop Routing"): some require a user decision
+or release authorization, others are operator actions, protocol repair, or
+environment stops - but the loop never continues past any of them on its own:
 
 - `State: WAITING_FOR_USER` or `State: BLOCKED`.
-- `State: REVIEW_DONE` (user reviews result and commits).
+- `State: REVIEW_DONE` - User Release Authorization: the user authorizes the
+  reviewed release, and an operator/manual action runs the commit/push/tag.
 - Turn budget exceeded (configurable; default maximum 3 turns per loop session).
 - Spending budget exceeded (per-turn or per-session cap).
 - State mismatch detected (`Waiting For` does not match the expected actor).

@@ -105,7 +105,7 @@ _action_text() {
         PLAN_READY_FOR_REVIEW)     echo "Review the plan. Approve or request changes before implementation begins." ;;
         READY_FOR_IMPLEMENTATION)  echo "Implement the approved scope. Do not modify unrelated files." ;;
         READY_FOR_REVIEW)          echo "Review Changed Files. Run git status and git diff before approving." ;;
-        REVIEW_DONE)               echo "Commit and push approved changes. Do not commit AI_HANDOFF.md." ;;
+        REVIEW_DONE)               echo "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md." ;;
         QUESTION_FOR_MASTER)       echo "Answer the Implementer's question under Dialogue / Open Questions, then return the working state." ;;
         QUESTION_FOR_IMPLEMENTER)  echo "Answer the Master's question read-only under Dialogue / Open Questions. No source edits." ;;
         RE_GATE_REQUESTED)         echo "Re-route the task; the Implementer found it riskier/larger than scoped." ;;
@@ -187,20 +187,23 @@ if $MISMATCH; then
     echo "Actor:  User"
     echo "Action: Resolve handoff mismatch. State $STATE normally expects Waiting For: $EXP_ROLE ($EXP_TOOL), but found: $WAITING_FOR."
     echo "Commit: Blocked - handoff state is inconsistent."
+    echo "Stop:   Protocol Repair - a correction, not a product decision."
     ACTION_LINE="Resolve handoff mismatch. State $STATE normally expects Waiting For: $EXP_ROLE ($EXP_TOOL)."
     AFTER_LINE="Correct Waiting For in AI_HANDOFF.md to match the expected role for this state."
 elif [ "$STATE" = "REVIEW_DONE" ]; then
     echo "=== Next Action ==="
     echo "Actor:  User"
-    echo "Action: Commit and push approved changes. Do not commit AI_HANDOFF.md."
-    echo "Commit: ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files."
-    ACTION_LINE="Commit and push approved changes. Do not commit AI_HANDOFF.md."
+    echo "Action: Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
+    echo "Commit: ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files."
+    echo "Stop:   User Release Authorization - approval only; technical verification was attested by the Reviewer."
+    ACTION_LINE="Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
     AFTER_LINE="No handoff update required. Commit only the files listed under Changed Files."
 elif [ "$STATE" = "IMPLEMENTED" ]; then
     echo "=== Next Action ==="
     echo "Actor:  User"
     echo "Action: Review the work. Commit if satisfied, or ask the Reviewer to review first."
     echo "Commit: ALLOWED - no Reviewer review was required for this task."
+    echo "Stop:   User Release Authorization - approve the release; running the commit is an Operator Manual Action."
     ACTION_LINE="Review the work. Commit if satisfied, or ask the Reviewer to review first."
     AFTER_LINE="No handoff update required. Commit only the files listed under Changed Files."
 elif [ "$STATE" = "BLOCKED" ]; then
@@ -208,6 +211,7 @@ elif [ "$STATE" = "BLOCKED" ]; then
     echo "Actor:  User"
     echo "Action: Resolve the blocking issue documented under Open Issues in AI_HANDOFF.md."
     echo "Commit: Blocked - work is blocked."
+    echo "Stop:   User Decision - resolve the documented blocker."
     _section_content "Open Issues" | grep -v '^$' | while IFS= read -r l; do echo "$l"; done
     ACTION_LINE="Resolve the blocking issue documented under Open Issues in AI_HANDOFF.md."
     AFTER_LINE="Resolve the blocker, update AI_HANDOFF.md, and set State and Waiting For appropriately."
@@ -216,6 +220,7 @@ elif [ "$STATE" = "WAITING_FOR_USER" ]; then
     echo "Actor:  User"
     echo "Action: Review AI_HANDOFF.md and decide the next step or provide approval."
     echo "Commit: Blocked - waiting for user decision."
+    echo "Stop:   User Decision - product, scope, or risk decision required."
     ACTION_LINE="Review AI_HANDOFF.md and decide the next step or provide approval."
     AFTER_LINE="Update AI_HANDOFF.md with your decision and set State and Waiting For accordingly."
 elif [ "$EXP_ROLE" = "Master" ] || [ "$EXP_ROLE" = "Reviewer" ] || [ "$EXP_ROLE" = "Implementer" ]; then
@@ -263,6 +268,7 @@ else
     echo "Actor:  User"
     echo "Action: Inspect AI_HANDOFF.md and decide the next step."
     echo "Commit: Blocked - state is unknown."
+    echo "Stop:   Protocol Repair (unrecognized state) - a correction, not a product decision."
     ACTION_LINE="Inspect AI_HANDOFF.md and decide the next step."
     AFTER_LINE="Update AI_HANDOFF.md with the correct State and Waiting For."
 fi

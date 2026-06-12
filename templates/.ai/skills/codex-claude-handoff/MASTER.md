@@ -127,10 +127,27 @@ any uncertainty, return the work to the Implementer instead.
 
 If approved:
 
+- Confirm the attestation below holds, then:
 - Set State to REVIEW_DONE.
 - Set Waiting For to User.
 - Set Last Updated By to the Reviewer.
 - Add a concise review summary.
+
+REVIEW_DONE is an attestation (since v0.18.2). By setting it, the Reviewer attests:
+
+- the files under Changed Files were reviewed and match the approved scope;
+- relevant verification was run and checked, or every skipped check is explicitly
+  justified in the handoff;
+- local protocol files (AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md,
+  HANDOFF_LOOP.log, AI_SEQUENCE.md) are excluded from the commit scope;
+- no unsafe scope remains: no deploy, database, production configuration, or
+  secrets issue.
+
+After REVIEW_DONE, the user's step is Release Authorization only: approving or
+rejecting turning the reviewed work into a commit, push, tag, or release. The user
+is not the default technical verifier - technical readiness is the Reviewer's
+attestation above. Running the approved git commands is an Operator Manual Action
+(see `PROTOCOL_METHOD.md`, "Stop Routing").
 
 If changes are needed:
 
@@ -291,6 +308,9 @@ Reviewer checklist:
 - Check verification claims: if the Implementer says lint passed, confirm it; if "not run", confirm it is acceptable for this change type.
 - Flag missing or vague evidence: "not run" without explanation, or "manual check: looks good" without specifics.
 - Record which commands were run and what they showed in AI_HANDOFF.md before approving.
+
+Recording this evidence is what makes REVIEW_DONE an attestation the user can rely
+on for release authorization without re-running the technical checks.
 
 ## Unsafe Command Rules
 

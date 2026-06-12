@@ -125,6 +125,25 @@ function Invoke-ClaudeTurn {
     return $LASTEXITCODE
 }
 
+# Stop-category label for printed stops (v0.18.2 controlled stop routing).
+# Categories: see PROTOCOL_METHOD.md, "Stop Routing".
+function Get-StopCategoryLine {
+    param([string]$ForState, [string]$ActorTool, [bool]$Automation = $false)
+    if ($ActorTool -eq "User") {
+        if ($ForState -eq "REVIEW_DONE") {
+            return "Stop category: User Release Authorization - approve the release; technical readiness was attested by the Reviewer."
+        }
+        if ($ForState -eq "IMPLEMENTED") {
+            return "Stop category: User Release Authorization - this work did not require Reviewer review; check it yourself before approving the commit."
+        }
+        return "Stop category: User Decision - see AI_HANDOFF.md."
+    }
+    if ($Automation) {
+        return "Stop category: Non-callable Actor (automation limitation) - next step is an Operator Manual Action: paste the prompt into $ActorTool."
+    }
+    return "Stop category: Operator Manual Action - paste the prompt into $ActorTool."
+}
+
 # Append-only local loop log (ASCII, never committed - see .gitignore).
 function Write-LoopLog {
     param([string]$Message)
@@ -142,7 +161,7 @@ $WaitingFor    = $HandoffStatus.WaitingFor
 $CurrentTask   = $HandoffStatus.CurrentTask
 
 $CommitStatus = switch ($State) {
-    "REVIEW_DONE" { "ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files." }
+    "REVIEW_DONE" { "ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files." }
     "IMPLEMENTED" { "ALLOWED - no Reviewer review required. Review the work before committing." }
     default       { "Blocked - $State requires action before committing." }
 }
@@ -187,7 +206,7 @@ $ActionMap = @{
     }
     "REVIEW_DONE"              = @{
         Role   = "User"
-        Action = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
+        Action = "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
         After  = "No handoff update required. Commit only the files listed under Changed Files."
     }
     "QUESTION_FOR_MASTER"      = @{
@@ -302,13 +321,16 @@ function Invoke-Next {
         if ($isMismatch) {
             Write-Host "WARNING: State $State expects Waiting For: $role ($expTool), but found: $WaitingFor."
             Write-Host "Next actor: User - resolve the handoff mismatch in AI_HANDOFF.md before continuing."
+            Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
         } elseif ($actor -eq "User") {
             Write-Host "Next actor: User"
+            Write-Host (Get-StopCategoryLine -ForState $State -ActorTool "User")
             Write-Host "No tool handoff needed."
             Write-Host "Review the status, start a new request, or run commit-check if you are about to commit."
         } else {
             Write-Host "Open:  $actor  (role: $role)"
             Write-Host "Paste: $pasteInstruction"
+            Write-Host (Get-StopCategoryLine -ForState $State -ActorTool $actor)
             Write-Host ""
 
             if ($Clip -or $MenuMode) {
@@ -457,7 +479,8 @@ function Invoke-CommitCheck {
             if (-not $mismatch -and $nsHasStaleGuidance) { $mismatch = $true }
         }
 
-        Write-Host "Commit: ALLOWED - the Reviewer approved."
+        Write-Host "Commit: ALLOWED - the Reviewer attested technical readiness."
+        Write-Host "Stop category: User Release Authorization - you approve the release; running the commands is an Operator Manual Action."
         Write-Host ""
 
         if ($mismatch) {
@@ -564,16 +587,20 @@ function Invoke-Cycle {
         if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
             Write-Host "Reason:      $CommandLabel does not automate investigation or planning turns in this version."
             Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
+            Write-Host "Stop category: Non-callable Actor (automation limitation) - not a user decision."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into the Implementer."
         } elseif ($role -eq "Master" -or $role -eq "Reviewer") {
             $t = Resolve-Actor -Role $role -Binding $Binding
             Write-Host "Reason:      This turn is for the $role ($t). $CommandLabel cannot automate $role turns."
+            Write-Host "Stop category: Non-callable Actor ($t has no callable adapter) - not a user decision."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $t."
         } elseif ($role -eq "User") {
             Write-Host "Reason:      This turn requires user action."
+            Write-Host (Get-StopCategoryLine -ForState $State -ActorTool "User")
             Write-Host "Next step:   See AI_HANDOFF.md for details."
         } else {
             Write-Host "Reason:      State '$State' is not eligible for $CommandLabel in this version."
+            Write-Host "Stop category: Non-callable Actor (this turn type is not automatable in this version)."
         }
         Write-Host ""
         exit 1
@@ -586,6 +613,7 @@ function Invoke-Cycle {
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
         Write-Host "Reason:      Turn ownership mismatch. State $State expects the Implementer's turn ($implementerTool), but Waiting For is '$WaitingFor'."
+        Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
         Write-Host "Next step:   Correct Waiting For in AI_HANDOFF.md to Implementer, or re-route via the Master."
         Write-Host ""
         exit 1
@@ -599,6 +627,7 @@ function Invoke-Cycle {
         Write-Host "Implementer: $implementerTool"
         Write-Host "Reason:      $CommandLabel can only automate an Implementer bound to Claude Code."
         Write-Host "             $implementerTool has no local CLI, so this turn must be run manually."
+        Write-Host "Stop category: Non-callable Actor (automation limitation) - not a user decision."
         Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $implementerTool."
         Write-Host ""
         exit 1
@@ -612,6 +641,7 @@ function Invoke-Cycle {
         Write-Host "Reviewer:    $($Binding.Reviewer)"
         Write-Host "Implementer: $implementerTool"
         Write-Host "Reason:      Role invariant violation. The Reviewer must not be the same tool as the Implementer."
+        Write-Host "Stop category: Protocol Repair (the role binding contradicts the invariant) - a correction, not a product decision."
         Write-Host "Next step:   Fix the binding in .ai/roles/ROLE_ASSIGNMENT.md so Reviewer and Implementer are different tools."
         Write-Host ""
         exit 1
@@ -626,6 +656,7 @@ function Invoke-Cycle {
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Could not determine Git working tree state."
         Write-Host "Ensure you are in a Git repository and git is available, then try again."
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
         Write-Host ""
         exit 1
     }
@@ -638,6 +669,7 @@ function Invoke-Cycle {
         Write-Host "Changed files (tracked and untracked; local handoff files excluded):"
         foreach ($f in $tree.Files) { Write-Host "  $f" }
         Write-Host ""
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
         Write-Host "Commit, stash, revert, or remove these files before running $CommandLabel."
         Write-Host ""
         exit 1
@@ -673,6 +705,7 @@ function Invoke-Cycle {
     Write-Host "Checking Claude Code availability..."
     if (-not (Test-ClaudeAvailable)) {
         Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
+        Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
         exit 3
     }
 
@@ -715,6 +748,7 @@ function Invoke-Cycle {
             Invoke-Next -Silent $true
         } catch {
             Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
             Write-Host "The Implementer turn completed, but the next-turn handoff could not be generated."
             Write-Host "Inspect AI_HANDOFF.md manually before continuing."
             exit 4
@@ -731,6 +765,7 @@ function Invoke-Cycle {
             Write-Host ""
             Write-Host "Open $reviewerTool and press Ctrl+V."
             Write-Host "Do not commit before review."
+            Write-Host "Stop category: Non-callable Actor ($reviewerTool has no callable adapter) - next step is an Operator Manual Action: paste into $reviewerTool."
             Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
         } elseif ($script:State -eq "READY_FOR_REVIEW") {
             Write-Host "Post-turn handoff mismatch detected."
@@ -738,6 +773,7 @@ function Invoke-Cycle {
             Write-Host "Waiting For: $($script:WaitingFor)"
             Write-Host "Expected:    Reviewer ($reviewerTool)"
             Write-Host "NEXT_TURN.md updated for User mismatch resolution."
+            Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
             Write-Host "Do not continue to a review turn or commit until AI_HANDOFF.md is corrected."
             Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
             Write-Host ""
@@ -751,15 +787,18 @@ function Invoke-Cycle {
             if ($postMismatch) {
                 Write-Host "WARNING: State $($script:State) expects Waiting For: $nextRole ($nextTool), but found: $($script:WaitingFor)."
                 Write-Host "NEXT_TURN.md routed to User for mismatch resolution."
+                Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
                 Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
                 Write-Host ""
                 exit 6
             }
             Write-Host "Next actor: $nextTool ($nextRole)"
+            Write-Host (Get-StopCategoryLine -ForState $script:State -ActorTool $nextTool -Automation $true)
             Write-Host "NEXT_TURN.md refreshed. $CommandLabel stops here - one Implementer turn per invocation."
         } else {
             Write-Host "WARNING: Unrecognized post-turn state: $($script:State)."
             Write-Host "NEXT_TURN.md was not refreshed for this state. Inspect AI_HANDOFF.md manually before continuing."
+            Write-Host "Stop category: Protocol Repair (unrecognized state) - a correction, not a product decision."
             Write-Host "$CommandLabel stops here - one Implementer turn per invocation."
             Write-Host ""
             exit 6
@@ -807,6 +846,7 @@ function Invoke-Loop {
         Write-Host "Reviewer:    $($Binding.Reviewer)"
         Write-Host "Implementer: $($Binding.Implementer)"
         Write-Host "Reason:      Role invariant violation. The Reviewer must not be the same tool as the Implementer."
+        Write-Host "Stop category: Protocol Repair (the role binding contradicts the invariant) - a correction, not a product decision."
         Write-Host "Next step:   Fix the binding in .ai/roles/ROLE_ASSIGNMENT.md so Reviewer and Implementer are different tools."
         Write-Host ""
         exit 1
@@ -819,6 +859,7 @@ function Invoke-Loop {
         Write-Host "loop: blocked."
         Write-Host "Could not determine Git working tree state."
         Write-Host "Ensure you are in a Git repository and git is available, then try again."
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
         Write-Host ""
         exit 1
     }
@@ -830,6 +871,7 @@ function Invoke-Loop {
         Write-Host "Changed files (tracked and untracked; local handoff files excluded):"
         foreach ($f in $tree.Files) { Write-Host "  $f" }
         Write-Host ""
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
         Write-Host "Commit, stash, revert, or remove these files before running loop."
         Write-Host ""
         exit 1
@@ -875,6 +917,7 @@ function Invoke-Loop {
             Write-Host ""
             Write-Host "loop: stop - unrecognized state: $($script:State)."
             Write-Host "NEXT_TURN.md was not refreshed for this state. Inspect AI_HANDOFF.md manually before continuing."
+            Write-Host "Stop category: Protocol Repair (unrecognized state) - a correction, not a product decision."
             Write-LoopLog "turn=$turnsRun stop reason=unrecognized-state state=$($script:State) exit=6"
             Write-Host ""
             exit 6
@@ -888,6 +931,7 @@ function Invoke-Loop {
                 Invoke-Next -Silent $true
             } catch {
                 Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
                 Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
                 exit 4
             }
@@ -895,6 +939,7 @@ function Invoke-Loop {
             Write-Host "loop: stop - handoff mismatch."
             Write-Host "State $($script:State) expects Waiting For: $role ($tool), but found: $($script:WaitingFor)."
             Write-Host "NEXT_TURN.md routed to User for mismatch resolution."
+            Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
             Write-LoopLog "turn=$turnsRun stop reason=mismatch state=$($script:State) waitingFor=$($script:WaitingFor) expected=$role/$tool exit=6"
             Write-Host ""
             exit 6
@@ -909,6 +954,7 @@ function Invoke-Loop {
                 Invoke-Next -Silent $true
             } catch {
                 Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
                 Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
                 exit 4
             }
@@ -916,6 +962,7 @@ function Invoke-Loop {
             Write-Host "loop: stop - next actor is not callable."
             Write-Host "State:      $($script:State)"
             Write-Host "Next actor: $tool ($role)"
+            Write-Host (Get-StopCategoryLine -ForState $script:State -ActorTool $tool -Automation $true)
             if ($tool -ne "User") {
                 Write-Host "Paste:      Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
             }
@@ -929,6 +976,7 @@ function Invoke-Loop {
         if ($turnsRun -ge $MaxTurns) {
             Write-Host ""
             Write-Host "loop: stop - MaxTurns ($MaxTurns) reached."
+            Write-Host "Stop category: Operator Manual Action - re-run loop to continue if desired; no user decision required."
             Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
             Write-LoopLog "turn=$turnsRun stop reason=max-turns exit=0"
             Write-Host ""
@@ -937,6 +985,7 @@ function Invoke-Loop {
         if (($authorized + $BudgetUsd) -gt $SessionBudgetUsd) {
             Write-Host ""
             Write-Host "loop: stop - session budget cap reached."
+            Write-Host "Stop category: Operator Manual Action - re-run loop (optionally with a higher -SessionBudgetUsd) to continue; no user decision required."
             Write-Host "Authorized so far: `$$authorized. Next turn would authorize `$$BudgetUsd more, exceeding `$$SessionBudgetUsd."
             Write-LoopLog "turn=$turnsRun stop reason=session-budget authorized=$authorized exit=0"
             Write-Host ""
@@ -959,6 +1008,7 @@ function Invoke-Loop {
             Write-Host "loop: blocked."
             Write-Host "Working tree is not clean (or git is unavailable)."
             foreach ($f in $tree.Files) { Write-Host "  $f" }
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
             Write-Host "Commit, stash, revert, or remove these files before continuing the loop."
             Write-LoopLog "turn=$turnsRun stop reason=dirty-tree exit=1"
             Write-Host ""
@@ -970,6 +1020,7 @@ function Invoke-Loop {
             Invoke-Next -Silent $true
         } catch {
             Write-Host "Failed to refresh NEXT_TURN.md: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
             Write-LoopLog "turn=$turnsRun stop reason=next-turn-refresh-failed exit=4"
             exit 4
         }
@@ -982,6 +1033,7 @@ function Invoke-Loop {
         # Preflight: Claude Code availability
         if (-not (Test-ClaudeAvailable)) {
             Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
+        Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
             Write-LoopLog "turn=$turnsRun stop reason=claude-unavailable exit=3"
             exit 3
         }

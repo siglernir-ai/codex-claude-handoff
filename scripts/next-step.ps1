@@ -149,6 +149,7 @@ if ($Mismatch) {
     Write-Host "Actor:  User"
     Write-Host "Action: Resolve handoff mismatch. State $State normally expects Waiting For: $expRole ($expTool), but found: $WaitingFor."
     Write-Host "Commit: Blocked - handoff state is inconsistent."
+    Write-Host "Stop:   Protocol Repair - a correction, not a product decision."
     $ActionLine = "Resolve handoff mismatch. State $State normally expects Waiting For: $expRole ($expTool)."
     $AfterLine = "Correct Waiting For in AI_HANDOFF.md to match the expected role for this state."
 }
@@ -217,6 +218,7 @@ elseif ($State -eq "IMPLEMENTED") {
     Write-Host "Actor:  User"
     Write-Host "Action: Review the work. Commit if satisfied, or ask the Reviewer to review first."
     Write-Host "Commit: ALLOWED - no Reviewer review was required for this task."
+    Write-Host "Stop:   User Release Authorization - approve the release; running the commit is an Operator Manual Action."
     $ActionLine = "Review the work. Commit if satisfied, or ask the Reviewer to review first."
     $AfterLine = "No handoff update required. Commit only the files listed under Changed Files."
 }
@@ -235,9 +237,10 @@ elseif ($State -eq "READY_FOR_REVIEW") {
 elseif ($State -eq "REVIEW_DONE") {
     Write-Host "=== Next Action ==="
     Write-Host "Actor:  User"
-    Write-Host "Action: Commit and push approved changes. Do not commit AI_HANDOFF.md."
-    Write-Host "Commit: ALLOWED - the Reviewer approved. Commit only the files listed under Changed Files."
-    $ActionLine = "Commit and push approved changes. Do not commit AI_HANDOFF.md."
+    Write-Host "Action: Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
+    Write-Host "Commit: ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files."
+    Write-Host "Stop:   User Release Authorization - approval only; technical verification was attested by the Reviewer."
+    $ActionLine = "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
     $AfterLine = "No handoff update required. Commit only the files listed under Changed Files."
 }
 elseif ($State -eq "QUESTION_FOR_MASTER") {
@@ -281,6 +284,7 @@ elseif ($State -eq "BLOCKED") {
     Write-Host "Actor:  User"
     Write-Host "Action: Resolve the blocking issue documented under Open Issues in AI_HANDOFF.md."
     Write-Host "Commit: Blocked - work is blocked."
+    Write-Host "Stop:   User Decision - resolve the documented blocker."
     if ($OpenIssuesLines.Count -gt 0) {
         Write-Host ""
         Write-Host "Open Issues:"
@@ -296,6 +300,7 @@ elseif ($State -eq "WAITING_FOR_USER") {
     Write-Host "Actor:  User"
     Write-Host "Action: Review AI_HANDOFF.md and decide the next step or provide approval."
     Write-Host "Commit: Blocked - waiting for user decision."
+    Write-Host "Stop:   User Decision - product, scope, or risk decision required."
     $ActionLine = "Review AI_HANDOFF.md and decide the next step or provide approval."
     $AfterLine = "Update AI_HANDOFF.md with your decision and set State and Waiting For accordingly."
 }
@@ -306,6 +311,7 @@ else {
     Write-Host "Actor:  User"
     Write-Host "Action: Inspect AI_HANDOFF.md and decide the next step."
     Write-Host "Commit: Blocked - state is unknown."
+    Write-Host "Stop:   Protocol Repair (unrecognized state) - a correction, not a product decision."
     $ActionLine = "Inspect AI_HANDOFF.md and decide the next step."
     $AfterLine = "Update AI_HANDOFF.md with the correct State and Waiting For."
 }
