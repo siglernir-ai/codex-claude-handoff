@@ -3,6 +3,28 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.19.2 - Sequence Advance Command
+
+- Added PowerShell `handoff.ps1 sequence-check` (dry run) and `sequence-advance`
+  (apply): local-only commands that advance `AI_SEQUENCE.md` and prepare
+  `AI_HANDOFF.md` after a user-approved release checkpoint, so the Sequence Owner no
+  longer hand-edits both files.
+- `sequence-advance` verifies the released commit and tag in git read-only (and that
+  the tag points at the commit), requires the released version to be the single
+  `active` task, marks it `released` with its checkpoint, marks any
+  `-SupersededVersions` bundled tasks `released`, sets the next task `active`, and
+  prepares a fresh `AI_HANDOFF.md` (`NEEDS_ANALYSIS` / `Waiting For: Master`, with a
+  `## Task Actors` section defaulted to `TBD`). It fails closed on any missing,
+  unverifiable, or ambiguous input.
+- The command edits only the local, gitignored `AI_SEQUENCE.md` and `AI_HANDOFF.md`.
+  It never runs git add/commit/push/tag, deploys, database, or secret actions, and no
+  new git-mutation path was added. No new role or protocol state was introduced.
+- Bash `handoff.sh sequence-check` / `sequence-advance` refuse honestly and point to
+  the PowerShell command; no Bash sequence-mutation path was added.
+- Updated adapter/method/Master docs, README, roadmap, templates, and mirrors for the
+  sequence advance command.
+- Bumped `VERSION` to 0.19.2 (canonical and template mirror).
+
 ## 0.19.1.1 - Release Executor Actual Actor Audit Fix
 
 - Added structured `AI_HANDOFF.md` `Task Actors` support for release audit:

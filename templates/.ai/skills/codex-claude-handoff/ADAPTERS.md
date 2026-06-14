@@ -93,3 +93,16 @@ For release audit, the executor reads the current task's actual actors from
 
 The global role binding remains the routing/adapters source of truth. It is not
 enough for release audit when a task used an explicit one-off actor assignment.
+
+## Local Sequence Advance (since v0.19.2)
+
+`handoff.ps1 sequence-check` (dry run) and `handoff.ps1 sequence-advance` (apply)
+update local coordination after a released checkpoint. They are not a role turn and
+do not approve work. `sequence-advance` verifies the released commit and tag in git
+read-only, marks the released task (and any `-SupersededVersions` bundled tasks)
+`released` with the checkpoint, sets the next task `active`, and prepares
+`AI_HANDOFF.md` for the next task (`NEEDS_ANALYSIS` / `Waiting For: Master`, Task
+Actors `TBD`). They edit only the local, gitignored `AI_SEQUENCE.md` and
+`AI_HANDOFF.md`, fail closed on any missing/unverified/ambiguous input, and never run
+git add/commit/push/tag, deploys, database, or secret actions. They are
+PowerShell-only; Bash refuses honestly and points to PowerShell.

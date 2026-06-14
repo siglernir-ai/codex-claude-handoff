@@ -6,6 +6,11 @@ param(
     [string]$Version,
     [string]$Message,
     [string]$Authorize,
+    [string]$ReleasedVersion,
+    [string]$Commit,
+    [string]$Tag,
+    [string]$NextTask,
+    [string]$SupersededVersions,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [decimal]$BudgetUsd = 2,
@@ -963,6 +968,323 @@ function Invoke-Release {
     Write-Host ""
 }
 
+# --- Sequence advance (v0.19.2): local coordination only, never git mutation ---
+
+function Test-CommitFormat {
+    param([string]$Value)
+    return ($Value -match '^[0-9a-fA-F]{7,40}$')
+}
+
+function Test-ReleaseVersionFormat {
+    param([string]$Value)
+    return ($Value -match '^v\d+\.\d+\.\d+([.-][A-Za-z0-9]+)?$')
+}
+
+function Get-TaskVersionToken {
+    param([string]$TaskText)
+    if ($TaskText -match '^\s*(v\d+\.\d+\.\d+([.-][A-Za-z0-9]+)?)\b') { return $Matches[1] }
+    return ""
+}
+
+# Parse the markdown table under "## Tasks" in AI_SEQUENCE.md.
+function Get-SequenceTaskRows {
+    param([string[]]$SeqLines)
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $inTasks = $false
+    foreach ($line in $SeqLines) {
+        if ($line.TrimEnd() -eq "## Tasks") { $inTasks = $true; continue }
+        if ($inTasks -and $line -match "^##\s") { break }
+        if (-not $inTasks) { continue }
+        $t = $line.Trim()
+        if ($t -notmatch '^\|') { continue }
+        $cols = $t.Trim('|') -split '\|'
+        if ($cols.Count -lt 4) { continue }
+        $num = $cols[0].Trim(); $task = $cols[1].Trim(); $status = $cols[2].Trim(); $checkpoint = $cols[3].Trim()
+        if ($num -eq '#' -or $num -match '^[-: ]+$') { continue }     # header or separator
+        if ($num -eq '' -and $task -eq '') { continue }
+        $rows.Add([ordered]@{ Num = $num; Task = $task; Status = $status; Checkpoint = $checkpoint })
+    }
+    return $rows
+}
+
+# Validate the advance request. Always returns every key so callers can print safely.
+function Get-SequencePlan {
+    param([string]$RelVersion, [string]$RelCommit, [string]$RelTag, [string]$NextTaskText, [string]$Superseded)
+
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
+    $seqLines = @()
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $activeRow = $null
+    $nextRow = $null
+    $supersededRows = [System.Collections.Generic.List[object]]::new()
+
+    if ([string]::IsNullOrWhiteSpace($RelVersion)) { $ok = $false; $errors.Add("Missing -ReleasedVersion, for example -ReleasedVersion v0.19.1.1.") }
+    elseif (-not (Test-ReleaseVersionFormat $RelVersion)) { $ok = $false; $errors.Add("-ReleasedVersion must look like v0.19.1.1.") }
+    if ([string]::IsNullOrWhiteSpace($RelCommit)) { $ok = $false; $errors.Add("Missing -Commit, for example -Commit fc0ed49.") }
+    elseif (-not (Test-CommitFormat $RelCommit)) { $ok = $false; $errors.Add("-Commit must be a git commit SHA (7-40 hex characters).") }
+    if ([string]::IsNullOrWhiteSpace($RelTag)) { $ok = $false; $errors.Add("Missing -Tag, for example -Tag v0.19.1.1.") }
+    elseif (-not (Test-ReleaseVersionFormat $RelTag)) { $ok = $false; $errors.Add("-Tag must look like v0.19.1.1.") }
+
+    # Verify the released checkpoint exists in git (read-only).
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -eq $gitCmd) {
+        $ok = $false; $errors.Add("git is not available; cannot verify the release checkpoint.")
+    } elseif (-not [string]::IsNullOrWhiteSpace($RelCommit) -and -not [string]::IsNullOrWhiteSpace($RelTag)) {
+        & git rev-parse -q --verify "$RelCommit^{commit}" *> $null
+        $commitOk = ($LASTEXITCODE -eq 0)
+        if (-not $commitOk) { $ok = $false; $errors.Add("Commit $RelCommit could not be verified in this repository.") }
+        & git rev-parse -q --verify "refs/tags/$RelTag" *> $null
+        $tagOk = ($LASTEXITCODE -eq 0)
+        if (-not $tagOk) { $ok = $false; $errors.Add("Tag $RelTag does not exist in this repository.") }
+        if ($commitOk -and $tagOk) {
+            # Distinct local names: PowerShell variables are case-insensitive, so a
+            # local like $relCommit would alias the $RelCommit parameter and overwrite
+            # the user-supplied (short) SHA with the resolved full SHA.
+            $tagSha = (& git rev-parse -q --verify "$RelTag^{commit}" 2>$null)
+            $commitSha = (& git rev-parse -q --verify "$RelCommit^{commit}" 2>$null)
+            if ($tagSha -and $commitSha -and ($tagSha.Trim() -ne $commitSha.Trim())) {
+                $ok = $false; $errors.Add("Tag $RelTag does not point to commit $RelCommit.")
+            }
+        }
+    }
+
+    if (-not (Test-Path $seqPath)) {
+        $ok = $false; $errors.Add("AI_SEQUENCE.md not found; the Sequence Owner must create it before advancing.")
+    } else {
+        $seqLines = Get-Content -Path $seqPath
+        $rows = Get-SequenceTaskRows -SeqLines $seqLines
+        if ($rows.Count -eq 0) {
+            $ok = $false; $errors.Add("AI_SEQUENCE.md has no parseable Tasks table rows.")
+        } else {
+            $activeRows = @($rows | Where-Object { $_.Status -eq 'active' })
+            if ($activeRows.Count -ne 1) {
+                $ok = $false; $errors.Add("AI_SEQUENCE.md must have exactly one active task (found $($activeRows.Count)).")
+            } else {
+                $activeRow = $activeRows[0]
+                $activeToken = Get-TaskVersionToken $activeRow.Task
+                if (-not [string]::IsNullOrWhiteSpace($RelVersion) -and $activeToken -ne $RelVersion) {
+                    $ok = $false; $errors.Add("The active sequence task is '$($activeRow.Task)' (version '$activeToken'), not the released version $RelVersion.")
+                }
+            }
+
+            $pendingRows = @($rows | Where-Object { $_.Status -eq 'pending' })
+            if (-not [string]::IsNullOrWhiteSpace($NextTaskText)) {
+                $match = @($pendingRows | Where-Object { $_.Task -eq $NextTaskText.Trim() })
+                if ($match.Count -eq 1) { $nextRow = $match[0] }
+                elseif ($match.Count -eq 0) { $ok = $false; $errors.Add("-NextTask '$($NextTaskText.Trim())' does not match any pending task in AI_SEQUENCE.md.") }
+                else { $ok = $false; $errors.Add("-NextTask '$($NextTaskText.Trim())' matches multiple pending tasks; resolve the ambiguity in AI_SEQUENCE.md.") }
+            } else {
+                if ($pendingRows.Count -eq 1) { $nextRow = $pendingRows[0] }
+                elseif ($pendingRows.Count -eq 0) { $ok = $false; $errors.Add("No pending task to activate; update AI_SEQUENCE.md or finish the sequence.") }
+                else { $ok = $false; $errors.Add("Multiple pending tasks; specify -NextTask to choose the next active task unambiguously.") }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($Superseded)) {
+                foreach ($sv in ($Superseded -split ',')) {
+                    $svTrim = $sv.Trim()
+                    if ($svTrim -eq "") { continue }
+                    $svMatch = @($rows | Where-Object { (Get-TaskVersionToken $_.Task) -eq $svTrim })
+                    if ($svMatch.Count -eq 0) { $ok = $false; $errors.Add("Superseded version $svTrim not found in AI_SEQUENCE.md Tasks."); continue }
+                    foreach ($m in $svMatch) {
+                        if ($activeRow -and $m.Task -eq $activeRow.Task) { $ok = $false; $errors.Add("Superseded version $svTrim is the active task; it cannot also be superseded.") }
+                        elseif ($nextRow -and $m.Task -eq $nextRow.Task) { $ok = $false; $errors.Add("Superseded version $svTrim is the next task; it cannot be superseded.") }
+                        else { $supersededRows.Add($m) }
+                    }
+                }
+            }
+        }
+    }
+
+    return @{
+        Ok = $ok; Errors = $errors; SeqPath = $seqPath; SeqLines = $seqLines; Rows = $rows;
+        ActiveRow = $activeRow; NextRow = $nextRow; SupersededRows = $supersededRows;
+        ReleasedVersion = $RelVersion; Commit = $RelCommit; Tag = $RelTag
+    }
+}
+
+function Show-SequencePlan {
+    param([hashtable]$Plan)
+    Write-Host ""
+    Write-Host "Sequence advance plan"
+    Write-Host "Released version: $($Plan.ReleasedVersion)"
+    Write-Host "Commit:           $($Plan.Commit)"
+    Write-Host "Tag:              $($Plan.Tag)"
+    Write-Host "Sequence file:    AI_SEQUENCE.md (local, gitignored, never committed)"
+    Write-Host "Handoff file:     AI_HANDOFF.md (local, gitignored, never committed)"
+    Write-Host ""
+    if ($Plan.ActiveRow) {
+        Write-Host "Released task (active -> released): $($Plan.ActiveRow.Task)"
+        Write-Host "  checkpoint -> commit $($Plan.Commit) / tag $($Plan.Tag)"
+    } else {
+        Write-Host "Released task: (could not resolve a single active task)"
+    }
+    if ($Plan.SupersededRows.Count -gt 0) {
+        Write-Host "Superseded task(s) (-> released, bundled into $($Plan.ReleasedVersion)):"
+        foreach ($r in $Plan.SupersededRows) { Write-Host "  $($r.Task)" }
+    }
+    if ($Plan.NextRow) {
+        Write-Host "Next task (pending -> active): $($Plan.NextRow.Task)"
+    } else {
+        Write-Host "Next task: (could not resolve a single next task)"
+    }
+    Write-Host ""
+    Write-Host "AI_HANDOFF.md will be prepared for the next task:"
+    Write-Host "  State: NEEDS_ANALYSIS / Waiting For: Master"
+    Write-Host "  Task Actors: Implementer TBD / Reviewer TBD"
+    Write-Host ""
+    Write-Host "Local coordination only: never runs git add/commit/push/tag/deploy/db/secrets."
+    Write-Host ""
+}
+
+# Rebuild AI_SEQUENCE.md lines with the advanced statuses + an appended note.
+function New-SequenceLines {
+    param([hashtable]$Plan)
+    $date = (Get-Date).ToString("yyyy-MM-dd")
+    $activeCheckpoint = "commit $($Plan.Commit) / tag $($Plan.Tag)"
+    $supersededCheckpoint = "bundled into $($Plan.ReleasedVersion) (commit $($Plan.Commit) / tag $($Plan.Tag))"
+    $supersededTasks = @($Plan.SupersededRows | ForEach-Object { $_.Task })
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    $inTasks = $false
+    foreach ($line in $Plan.SeqLines) {
+        if ($line.TrimEnd() -eq "## Tasks") { $inTasks = $true; $result.Add($line); continue }
+        if ($inTasks -and $line -match "^##\s") { $inTasks = $false }
+        $emit = $line
+        if ($inTasks -and $line.Trim() -match '^\|') {
+            $cols = $line.Trim().Trim('|') -split '\|'
+            if ($cols.Count -ge 4) {
+                $num = $cols[0].Trim(); $task = $cols[1].Trim(); $status = $cols[2].Trim(); $checkpoint = $cols[3].Trim()
+                if ($num -ne '#' -and $num -notmatch '^[-: ]+$' -and -not ($num -eq '' -and $task -eq '')) {
+                    if ($Plan.ActiveRow -and $task -eq $Plan.ActiveRow.Task -and $status -eq 'active') {
+                        $status = 'released'; $checkpoint = $activeCheckpoint
+                    } elseif ($Plan.NextRow -and $task -eq $Plan.NextRow.Task -and $status -eq 'pending') {
+                        $status = 'active'
+                    } elseif ($supersededTasks -contains $task) {
+                        $status = 'released'; $checkpoint = $supersededCheckpoint
+                    }
+                    $emit = "| $num | $task | $status | $checkpoint |"
+                }
+            }
+        }
+        $result.Add($emit)
+    }
+
+    $result.Add("- $($Plan.ReleasedVersion) released on ${date}: commit $($Plan.Commit) / tag $($Plan.Tag). Next active task: $($Plan.NextRow.Task).")
+    if ($supersededTasks.Count -gt 0) {
+        $result.Add("- $($Plan.ReleasedVersion) bundled superseded task(s): $([string]::Join('; ', $supersededTasks)).")
+    }
+    return $result
+}
+
+# Prepare a fresh AI_HANDOFF.md for the next task (template conventions + Task Actors).
+function New-NextHandoffContent {
+    param([hashtable]$Plan)
+    $date = (Get-Date).ToString("yyyy-MM-dd")
+    $nextTask = $Plan.NextRow.Task
+    $supersededTasks = @($Plan.SupersededRows | ForEach-Object { $_.Task })
+    $supersededLine = ""
+    if ($supersededTasks.Count -gt 0) {
+        $supersededLine = "`n- Bundled superseded task(s): $([string]::Join('; ', $supersededTasks))."
+    }
+    $content = @"
+# AI Handoff
+
+## Status
+- State: NEEDS_ANALYSIS
+- Waiting For: Master
+- Last Updated By: Sequence Advance
+- Last Updated At: $date
+- Current Task: $nextTask
+
+## Last Update
+- Actor: Sequence Advance (local coordination via handoff.ps1 sequence-advance)
+- Date: $date
+- Task: Advanced the local sequence after the $($Plan.ReleasedVersion) release checkpoint (commit $($Plan.Commit) / tag $($Plan.Tag)) and opened the next task.
+
+## Task Actors
+- Implementer: TBD
+- Reviewer: TBD
+
+## Release Checkpoint (previous task)
+- $($Plan.ReleasedVersion) released: commit $($Plan.Commit) / tag $($Plan.Tag).$supersededLine
+
+## Done
+- None yet - this task has not started.
+
+## Changed Files
+- None yet
+
+## Verification
+- Commands Run: [list commands, or none for documentation-only changes]
+- Build: [result or not run]
+- Lint: [result or not run]
+- Tests: [result or not run]
+- Manual Check: [expected vs actual, or not applicable]
+
+## Dialogue / Open Questions
+- None
+
+## Open Issues
+- None.
+
+## Risks / Notes
+- AI_HANDOFF.md and AI_SEQUENCE.md are local and ignored by Git; never commit them.
+
+## Next Recommended Step
+- Master: analyze the next task '$nextTask' via the Decision Router, set the appropriate gate (READY_FOR_IMPLEMENTATION, NEEDS_INVESTIGATION, or PLAN_REQUIRED), and assign the Task Actors before implementation begins.
+"@
+    return $content
+}
+
+function Invoke-SequenceCheck {
+    $plan = Get-SequencePlan -RelVersion $ReleasedVersion -RelCommit $Commit -RelTag $Tag -NextTaskText $NextTask -Superseded $SupersededVersions
+    Show-SequencePlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "sequence-check: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed."
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "sequence-check: ready."
+    Write-Host "To apply, run:"
+    Write-Host "  handoff.ps1 sequence-advance -ReleasedVersion $ReleasedVersion -Commit $Commit -Tag $Tag -NextTask `"$($plan.NextRow.Task)`""
+    Write-Host ""
+}
+
+function Invoke-SequenceAdvance {
+    $plan = Get-SequencePlan -RelVersion $ReleasedVersion -RelCommit $Commit -RelTag $Tag -NextTaskText $NextTask -Superseded $SupersededVersions
+    Show-SequencePlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "sequence-advance: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed."
+        Write-Host ""
+        exit 1
+    }
+
+    $newSeq = New-SequenceLines -Plan $plan
+    Set-Content -Path $plan.SeqPath -Value ($newSeq -join "`n") -Encoding utf8 -ErrorAction Stop
+
+    $newHandoff = New-NextHandoffContent -Plan $plan
+    Set-Content -Path (Join-Path (Get-Location) "AI_HANDOFF.md") -Value $newHandoff -Encoding utf8 -ErrorAction Stop
+
+    Write-Host "sequence-advance: applied (local coordination files only)."
+    Write-Host "AI_SEQUENCE.md: '$($plan.ActiveRow.Task)' -> released (commit $($plan.Commit) / tag $($plan.Tag)); '$($plan.NextRow.Task)' -> active."
+    if ($plan.SupersededRows.Count -gt 0) {
+        Write-Host "AI_SEQUENCE.md: marked superseded/bundled: $([string]::Join('; ', @($plan.SupersededRows | ForEach-Object { $_.Task })))."
+    }
+    Write-Host "AI_HANDOFF.md: prepared for '$($plan.NextRow.Task)' (State: NEEDS_ANALYSIS / Waiting For: Master; Task Actors TBD)."
+    Write-Host ""
+    Write-Host "Next steps:"
+    Write-Host "  1. Master: analyze the next task via the Decision Router and assign the Task Actors."
+    Write-Host "  2. AI_SEQUENCE.md and AI_HANDOFF.md remain local and gitignored - do not commit them."
+    Write-Host "  3. This command made no git changes (no add/commit/push/tag) and no deploy/db/secrets actions."
+    Write-Host ""
+}
+
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
@@ -981,7 +1303,8 @@ function Invoke-Menu {
     Write-Host "6. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
     Write-Host "7. Show adapter status            - callable/manual automation status"
     Write-Host "8. Check authorized release       - dry-run release plan (release-check)"
-    Write-Host "9. Exit"
+    Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
+    Write-Host "10. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -997,7 +1320,8 @@ function Invoke-Menu {
         "6" { Invoke-Loop }
         "7" { Invoke-Adapters }
         "8" { Invoke-ReleaseCheck }
-        "9" { }
+        "9" { Invoke-SequenceCheck }
+        "10" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -1511,6 +1835,8 @@ switch ($Command) {
     "commit-check" { Invoke-CommitCheck }
     "release-check" { Invoke-ReleaseCheck }
     "release"      { Invoke-Release }
+    "sequence-check"   { Invoke-SequenceCheck }
+    "sequence-advance" { Invoke-SequenceAdvance }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -1531,6 +1857,10 @@ switch ($Command) {
             Write-Host "                            Dry-run the guarded release plan. Never mutates git."
             Write-Host "  release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""
             Write-Host "                            Run the authorized release executor after REVIEW_DONE."
+            Write-Host "  sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask `"<task>`"]"
+            Write-Host "                            Dry-run the local sequence advance. Edits no files."
+            Write-Host "  sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]"
+            Write-Host "                            Advance local AI_SEQUENCE.md/AI_HANDOFF.md after a release. Never runs git."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a callable adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"

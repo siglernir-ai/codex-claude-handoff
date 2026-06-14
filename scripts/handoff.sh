@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # handoff.sh - Codex-Claude Handoff operator (Bash version, v0.17.0)
 # Commands: status, adapters, next, start, commit-check
-# cycle, run-next, loop, release-check, and release require PowerShell; use handoff.ps1.
+# cycle, run-next, loop, release-check, release, sequence-check, and sequence-advance
+# require PowerShell; use handoff.ps1.
 
 set -euo pipefail
 
@@ -483,6 +484,21 @@ cmd_release_blocked() {
     exit 1
 }
 
+# sequence-check / sequence-advance are PowerShell-only (one path owns the local
+# coordination edits + checkpoint verification). Bash never mutates AI_SEQUENCE.md.
+cmd_sequence_blocked() {
+    local cmd_name="$1"
+    echo ""
+    echo "$cmd_name is not available in handoff.sh."
+    echo "The sequence advance command is implemented in PowerShell only so one path owns the local coordination edits and release-checkpoint verification."
+    echo "To dry-run:  pwsh scripts/handoff.ps1 sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z"
+    echo "To apply:    pwsh scripts/handoff.ps1 sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask \"<next task>\""
+    echo "It edits only local AI_SEQUENCE.md / AI_HANDOFF.md and never runs git add/commit/push/tag."
+    echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+    echo ""
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Init and dispatch
 # ---------------------------------------------------------------------------
@@ -498,6 +514,8 @@ case "$COMMAND" in
     commit-check) cmd_commit_check ;;
     release-check) cmd_release_blocked "release-check" ;;
     release)      cmd_release_blocked "release" ;;
+    sequence-check)   cmd_sequence_blocked "sequence-check" ;;
+    sequence-advance) cmd_sequence_blocked "sequence-advance" ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
     loop)         cmd_automation_blocked "loop" ;;
@@ -513,6 +531,8 @@ case "$COMMAND" in
         echo "  commit-check              Show whether a commit is allowed and what to commit."
         echo "  release-check             Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  release                   Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  sequence-check            Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  sequence-advance          Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."

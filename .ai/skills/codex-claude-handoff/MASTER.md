@@ -80,6 +80,13 @@ The Sequence Owner updates the local `AI_SEQUENCE.md` artifact (since v0.18.1):
 - never as a replacement for current-task handoff state - `AI_SEQUENCE.md` holds
   ordering and progress only, and is local, gitignored, and never committed.
 
+Since v0.19.2, the Sequence Owner may perform the post-release update with
+`handoff.ps1 sequence-advance` instead of editing the files by hand. It verifies the
+released commit/tag, marks the released (and any bundled superseded) task `released`
+with its checkpoint, sets the next task `active`, and prepares `AI_HANDOFF.md` for the
+next task. It only ever edits the local, gitignored `AI_SEQUENCE.md` and
+`AI_HANDOFF.md` and never runs git. Run `sequence-check` first for a dry run.
+
 ## Preparing a Task for the Implementer
 
 When preparing work for the Implementer:
@@ -395,6 +402,8 @@ The Master should not request capability status every session - only when it add
 | `adapters` | Show the current adapter status for each role: bound tool, callable yes/no, automatable states, manual reason, and next enablement step. |
 | `release-check -Version vX.Y.Z` | Dry-run the guarded release plan after REVIEW_DONE. Never mutates git. |
 | `release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"` | Execute the guarded release after REVIEW_DONE and explicit user authorization. Runs checks, commits only approved files, pushes, tags, then pushes the tag. |
+| `sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask "<task>"]` | Dry-run the local sequence advance after a release. Verifies the commit/tag and the active/next tasks; edits no files. |
+| `sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask "<task>" [-SupersededVersions "vA.B.C"]` | Advance local `AI_SEQUENCE.md` (released task + checkpoint, bundled supersedes, next task active) and prepare `AI_HANDOFF.md` for the next task. Local coordination only; never runs git. |
 | `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only), then prepare the Reviewer handoff and stop. Requires the Implementer to be bound to Claude Code, Reviewer != Implementer, a clean working tree, and explicit confirmation. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 | `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of callable adapter turns (currently the same Implementer turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares NEXT_TURN.md whenever the next actor is non-callable or the User. Writes a local HANDOFF_LOOP.log (never committed). |

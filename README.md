@@ -311,6 +311,36 @@ Bash does not implement the release executor. `bash scripts/handoff.sh
 release-check` and `bash scripts/handoff.sh release` print a PowerShell-required
 message and exit without running git mutations.
 
+### `sequence-check` and `sequence-advance`
+
+Advance local sequence coordination after a user-approved release, so the Master /
+Sequence Owner does not hand-edit `AI_SEQUENCE.md` and `AI_HANDOFF.md`.
+
+```powershell
+.\scripts\handoff.ps1 sequence-check -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1
+.\scripts\handoff.ps1 sequence-advance -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1 -NextTask "v0.19.2 - Sequence Advance Command"
+```
+
+`sequence-check` never changes any file. It prints the exact local changes that
+`sequence-advance` would make, then blocks unless: the `-ReleasedVersion`, `-Commit`,
+and `-Tag` are all present and verifiable in git read-only (the tag must point at the
+commit); `AI_SEQUENCE.md` has exactly one `active` task and it is the released
+version; and the next task is unambiguous (exactly one pending task, or a `-NextTask`
+that matches a pending task).
+
+`sequence-advance` runs the same checks, then edits only the local, gitignored
+`AI_SEQUENCE.md` and `AI_HANDOFF.md`: it marks the released task `released` with its
+`commit / tag` checkpoint, marks any `-SupersededVersions` bundled tasks `released`,
+sets the next task `active`, appends a dated sequence note, and prepares a fresh
+`AI_HANDOFF.md` for the next task (`State: NEEDS_ANALYSIS` / `Waiting For: Master`,
+with a `## Task Actors` section defaulted to `TBD`). It never runs `git`
+add/commit/push/tag, deploys, database, or secret actions, and it never edits tracked
+source or release files. Run `sequence-check` first to preview.
+
+Bash does not implement the sequence advance. `bash scripts/handoff.sh
+sequence-check` and `bash scripts/handoff.sh sequence-advance` print a
+PowerShell-required message and exit without changing any file.
+
 ### `cycle [-BudgetUsd N]`
 
 Run one bounded handoff cycle: at most one Claude Code Implementer turn, then prepare the

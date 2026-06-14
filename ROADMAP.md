@@ -312,6 +312,24 @@ release checkpoints.
 - Mark the released task and select the next active task without inventing
   `SEQUENCE_*` states.
 - Keep `AI_SEQUENCE.md` local and ignored.
+- PowerShell `sequence-check` (dry run) and `sequence-advance` (apply); Bash refuses
+  honestly and points to PowerShell.
+- Verify the released commit and tag in git read-only before advancing.
+
+**Does not include:**
+- Any git mutation (commit/push/tag), deploy, database, or secret action.
+- A new role, new protocol state, fake Codex-callable adapter, or editing tracked
+  source/release files.
+
+**Exit criteria:**
+- `sequence-check` prints the exact local changes and mutates nothing.
+- `sequence-advance` fails closed when the released version/commit/tag cannot be
+  verified, when the released version is not the single active task, or when the next
+  task is missing/ambiguous.
+- `sequence-advance` marks the released task `released` with its checkpoint, sets the
+  next task `active`, and prepares `AI_HANDOFF.md` (with `## Task Actors`) for it.
+- `AI_SEQUENCE.md` and `AI_HANDOFF.md` stay local/gitignored; no tracked source or
+  release file is changed by the command.
 
 ---
 

@@ -80,7 +80,7 @@ process.
 | Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
 | Review | READY_FOR_REVIEW -> Reviewer; Verification Gate |
 | Release | REVIEW_DONE (Reviewer attestation) -> user release authorization -> guarded operator commit/push/tag (Manual Approval Boundaries; since v0.19.1 this may use `handoff.ps1 release`) |
-| Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval |
+| Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval (since v0.19.2 the Sequence Owner may use `handoff.ps1 sequence-advance` for this local update) |
 
 Rule: if a future phase cannot be expressed as a mapping to existing machinery, it
 is out of scope for this specification and requires its own reviewed protocol
@@ -168,6 +168,15 @@ and the user supplies the exact release authorization token.
 
 The template ships at `templates/AI_SEQUENCE.md` and the installers copy it to the
 project root (no overwrite) and add the `.gitignore` rule.
+
+Since v0.19.2, the Sequence Owner may perform the post-release advance with the local
+`handoff.ps1 sequence-advance` command (dry run: `sequence-check`). It verifies the
+released commit/tag in git read-only, marks the released task (and any bundled
+superseded tasks) `released` with the checkpoint, sets the next task `active`, and
+prepares `AI_HANDOFF.md` for the next task. It edits only the local, gitignored
+`AI_SEQUENCE.md` and `AI_HANDOFF.md`, fails closed on any unverified or ambiguous
+input, and never runs git mutations. It does not advance past a REVIEW_DONE
+checkpoint without a supplied, verified release checkpoint.
 
 ## Non-Contradiction Rules
 
