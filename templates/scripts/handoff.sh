@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # handoff.sh - Codex-Claude Handoff operator (Bash version, v0.17.0)
 # Commands: status, adapters, next, start, commit-check
-# cycle, run-next, and loop require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
+# cycle, run-next, loop, release-check, and release require PowerShell; use handoff.ps1.
 
 set -euo pipefail
 
@@ -225,6 +225,15 @@ cmd_adapters() {
         echo "Enable next: $ADAPTER_NEXT"
         echo ""
     done
+    echo "Capability:  Authorized release executor"
+    echo "Callable:    no in Bash (PowerShell only)"
+    echo "States:      REVIEW_DONE with Waiting For: User"
+    echo "Invocation:  pwsh scripts/handoff.ps1 release-check -Version vX.Y.Z; pwsh scripts/handoff.ps1 release -Version vX.Y.Z -Message \"<msg>\" -Authorize \"I_AUTHORIZE_RELEASE_vX.Y.Z\""
+    echo "Safety:      Exact user authorization token; Reviewer != Implementer; Changed Files == git status; pre-release checks; commit before tag; no deploy/db/secrets/production-config actions."
+    echo "Stop:        Environment/Preflight in Bash; use PowerShell for the guarded executor."
+    echo "User auth:   yes, exact token required for execution"
+    echo "Enable next: Use PowerShell release-check for dry run; use release only after independent review has set REVIEW_DONE."
+    echo ""
 }
 
 cmd_next() {
@@ -462,6 +471,18 @@ cmd_automation_blocked() {
     exit 1
 }
 
+cmd_release_blocked() {
+    local cmd_name="$1"
+    echo ""
+    echo "$cmd_name is not available in handoff.sh."
+    echo "The guarded release executor is implemented in PowerShell only so one path owns the git mutation safety checks."
+    echo "To dry-run:  pwsh scripts/handoff.ps1 release-check -Version vX.Y.Z"
+    echo "To execute:  pwsh scripts/handoff.ps1 release -Version vX.Y.Z -Message \"<message>\" -Authorize \"I_AUTHORIZE_RELEASE_vX.Y.Z\""
+    echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+    echo ""
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Init and dispatch
 # ---------------------------------------------------------------------------
@@ -475,6 +496,8 @@ case "$COMMAND" in
     next)         cmd_next ;;
     start)        cmd_start ;;
     commit-check) cmd_commit_check ;;
+    release-check) cmd_release_blocked "release-check" ;;
+    release)      cmd_release_blocked "release" ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
     loop)         cmd_automation_blocked "loop" ;;
@@ -488,6 +511,8 @@ case "$COMMAND" in
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'
         echo "  commit-check              Show whether a commit is allowed and what to commit."
+        echo "  release-check             Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  release                   Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."

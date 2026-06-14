@@ -61,6 +61,11 @@ Current local status:
   files in non-interactive mode.
 - No adapter may commit, push, tag, deploy, alter databases, change secrets, or
   make product decisions without user authorization.
+- Since v0.19.1, the PowerShell release executor can perform the mechanical
+  commit/push/tag path only after `REVIEW_DONE`, exact scope checks, pre-release
+  checks, and an explicit authorization token from the user.
+- Since v0.19.1.1, release audit uses the current task's structured `Task Actors`
+  in `AI_HANDOFF.md`, not only the global role binding used for routing/adapters.
 
 Run:
 
@@ -272,6 +277,40 @@ Show whether a commit is allowed and which files to commit. Never runs git comma
 
 When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed files and prints suggested `git add`, `git commit`, and `git push` commands as text only. You run them yourself after confirming the list. This is the release-authorization step: the Reviewer has already attested technical readiness, so your part is approving the release and running the commands - not re-doing the verification.
 
+### `release-check` and `release`
+
+Dry-run or execute the guarded release path after Reviewer approval.
+
+```powershell
+.\scripts\handoff.ps1 release-check -Version v0.19.1
+.\scripts\handoff.ps1 release -Version v0.19.1 -Message "feat: add authorized release executor" -Authorize "I_AUTHORIZE_RELEASE_v0.19.1"
+```
+
+`release-check` never mutates git. It prints the exact files and commands that
+would run, then blocks unless the handoff is `State: REVIEW_DONE` / `Waiting For:
+User`, the actual task Reviewer and Implementer are present and different in
+`AI_HANDOFF.md` `Task Actors`, the tag does not already exist, and the handoff
+`Changed Files` list exactly matches `git status` after excluding local
+coordination files (`AI_HANDOFF.md`, `AI_SEQUENCE.md`, `NEXT_TURN.md`,
+`USER_REQUEST.md`, and `HANDOFF_LOOP.log`).
+
+`Task Actors` is separate from `.ai/roles/ROLE_ASSIGNMENT.md`: the global binding
+routes future turns and adapter decisions, while `Task Actors` records who actually
+implemented and reviewed the current task for release audit.
+
+`release` has the same gates, then requires the exact authorization token
+`I_AUTHORIZE_RELEASE_<version>`. After authorization it runs the pre-release checks
+(`git diff --check`, parser checks for changed PowerShell scripts, Bash syntax
+checks for changed shell scripts when Bash is available, and mirror checks), stages
+only the approved files, commits, pushes `HEAD`, creates the version tag, and pushes
+that tag. It stops on the first failed check or git command. It never deploys,
+touches databases, changes secrets, changes production configuration, or approves
+the release by itself.
+
+Bash does not implement the release executor. `bash scripts/handoff.sh
+release-check` and `bash scripts/handoff.sh release` print a PowerShell-required
+message and exit without running git mutations.
+
 ### `cycle [-BudgetUsd N]`
 
 Run one bounded handoff cycle: at most one Claude Code Implementer turn, then prepare the
@@ -286,7 +325,7 @@ is needed only if the package is not cached.
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
 compatibility).
 
-**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. In v0.19.0, only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
+**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. In v0.19.1, only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
@@ -351,7 +390,7 @@ clear reason.
 .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
 ```
 
-**What it automates:** only states the adapter registry marks callable. In v0.19.0 that
+**What it automates:** only states the adapter registry marks callable. In v0.19.1 that
 means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
 Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
 `MaxTurns` times with one upfront confirmation for the whole session.
@@ -579,7 +618,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Full Codex <-> Claude automation (as of v0.19.0 the adapter-driven `loop` exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no verified local callable adapter)
+- Full Codex <-> Claude automation (as of v0.19.1 the adapter-driven `loop` exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no verified local callable adapter)
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching

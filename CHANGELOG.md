@@ -3,6 +3,38 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.19.1.1 - Release Executor Actual Actor Audit Fix
+
+- Added structured `AI_HANDOFF.md` `Task Actors` support for release audit:
+  actual Implementer and actual Reviewer are now distinct from the global role
+  binding used for routing/adapters.
+- Updated PowerShell `release-check` / `release` to print actual task actors and
+  fail closed when the actual Implementer or Reviewer is missing, ambiguous, or
+  the same tool.
+- Updated docs and templates to describe `Task Actors` and the release audit
+  provenance rule.
+- Bumped `VERSION` to 0.19.1.1 (canonical and template mirror).
+
+## 0.19.1 - Authorized Release Executor
+
+- Added PowerShell `handoff.ps1 release-check -Version vX.Y.Z` to dry-run the
+  guarded release plan without mutating git.
+- Added PowerShell `handoff.ps1 release -Version vX.Y.Z -Message "<msg>"
+  -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"` to execute commit/push/tag only after
+  `REVIEW_DONE`, `Waiting For: User`, exact Changed Files scope validation,
+  Reviewer != Implementer, pre-release checks, and an exact user authorization
+  token.
+- Release execution stages only approved release files, excludes local coordination
+  files (`AI_HANDOFF.md`, `AI_SEQUENCE.md`, `NEXT_TURN.md`, `USER_REQUEST.md`,
+  `HANDOFF_LOOP.log`), commits before tagging, pushes the tag only after the commit
+  path succeeds, and stops on the first failed check or git command.
+- Bash `handoff.sh release-check` and `handoff.sh release` now refuse honestly and
+  point to the PowerShell executor; no Bash git mutation path was added.
+- Updated adapter/method docs, Master operator docs, README, roadmap, templates, and
+  mirrors for the authorized release executor. No Codex-callable adapter, new role,
+  new state, deploy/db/secrets automation, or sequence auto-advance was added.
+- Bumped `VERSION` to 0.19.1 (canonical and template mirror).
+
 ## 0.19.0 - Adapter Registry + Automation Harness
 
 - Added canonical `ADAPTERS.md` (+ template mirror): adapter contract, required

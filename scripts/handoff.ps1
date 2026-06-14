@@ -3,6 +3,9 @@ param(
     [string]$Command,
     [Parameter(Position = 1)]
     [string]$Request,
+    [string]$Version,
+    [string]$Message,
+    [string]$Authorize,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [decimal]$BudgetUsd = 2,
@@ -84,7 +87,7 @@ function Resolve-Actor {
 
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log")
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log")
 
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
@@ -209,6 +212,15 @@ function Invoke-Adapters {
         Write-Host "Enable next: $($adapter.NextStep)"
         Write-Host ""
     }
+    Write-Host "Capability:  Authorized release executor"
+    Write-Host "Callable:    yes (PowerShell only)"
+    Write-Host "States:      REVIEW_DONE with Waiting For: User"
+    Write-Host "Invocation:  release-check -Version vX.Y.Z; release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""
+    Write-Host "Safety:      Exact user authorization token; Reviewer != Implementer; Changed Files == git status; pre-release checks; commit before tag; no deploy/db/secrets/production-config actions."
+    Write-Host "Stop:        User Release Authorization until token is supplied; Environment/Preflight when unavailable."
+    Write-Host "User auth:   yes, exact token required for execution"
+    Write-Host "Enable next: Use release-check for dry run; use release only after independent review has set REVIEW_DONE."
+    Write-Host ""
 }
 
 # Stop-category label for printed stops (v0.18.2 controlled stop routing).
@@ -491,7 +503,7 @@ function Invoke-CommitCheck {
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
         # Parse handoff Changed Files. Only markdown bullet lines ("- path") are files;
         # skip group headings ("New (6):", "Modified (26):"), the "Total:" summary, and notes.
-        $localIgnored  = @("AI_HANDOFF.md", "NEXT_TURN.md", "USER_REQUEST.md")
+        $localIgnored  = $LocalHandoffFiles
         $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
         $commitFiles = [System.Collections.Generic.List[string]]::new()
         foreach ($line in $changedFilesLines) {
@@ -619,6 +631,338 @@ function Invoke-CommitCheck {
     Write-Host ""
 }
 
+function Get-ReleaseChangedFiles {
+    $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
+    $files = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $changedFilesLines) {
+        $trimmed = $line.Trim()
+        if ($trimmed -notmatch '^-\s+') { continue }
+        $entry = $trimmed -replace '^-\s+', '' -replace '`', ''
+        if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
+        $entry = $entry.Trim()
+        if ($entry -ne "" -and $entry -ne "None yet" -and ($LocalHandoffFiles -notcontains $entry)) {
+            $files.Add($entry)
+        }
+    }
+    return $files
+}
+
+function Get-GitChangedFilesForRelease {
+    $files = [System.Collections.Generic.List[string]]::new()
+    $ok = $false
+    try {
+        $gitLines = & git status --short --untracked-files=all 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $ok = $true
+            foreach ($gitLine in $gitLines) {
+                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
+                $filePart = $gitLine.Substring(3).Trim()
+                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }
+                if ($filePart -ne "" -and ($LocalHandoffFiles -notcontains $filePart)) {
+                    $files.Add($filePart)
+                }
+            }
+        }
+    } catch { }
+    return @{ Ok = $ok; Files = $files }
+}
+
+function Get-TaskActors {
+    $implementers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $reviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $taskActorLines = Get-SectionLines -Lines $Lines -Heading "Task Actors"
+    foreach ($line in $taskActorLines) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^-\s*Implementer:\s*(.+)$') {
+            $value = $Matches[1].Trim()
+            if ($value -ne "") { [void]$implementers.Add($value) }
+        }
+        if ($trimmed -match '^-\s*Reviewer:\s*(.+)$') {
+            $value = $Matches[1].Trim()
+            if ($value -ne "") { [void]$reviewers.Add($value) }
+        }
+    }
+    $implementer = if ($implementers.Count -eq 1) { @($implementers)[0] } else { "" }
+    $reviewer = if ($reviewers.Count -eq 1) { @($reviewers)[0] } else { "" }
+    return @{
+        Implementer = $implementer
+        Reviewer = $reviewer
+        ImplementerCount = $implementers.Count
+        ReviewerCount = $reviewers.Count
+    }
+}
+
+function Test-SameFileSet {
+    param([object[]]$Expected, [object[]]$Actual)
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$Expected, [System.StringComparer]::OrdinalIgnoreCase)
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$Actual, [System.StringComparer]::OrdinalIgnoreCase)
+    return $expectedSet.SetEquals($actualSet)
+}
+
+function Test-FileContentMatch {
+    param([string]$Left, [string]$Right)
+    if (-not (Test-Path $Left) -or -not (Test-Path $Right)) { return $false }
+    $leftHash = (Get-FileHash -Algorithm SHA256 -Path $Left).Hash
+    $rightHash = (Get-FileHash -Algorithm SHA256 -Path $Right).Hash
+    return $leftHash -eq $rightHash
+}
+
+function Invoke-ReleasePreflightChecks {
+    param([object[]]$ReleaseFiles)
+
+    Write-Host ""
+    Write-Host "Pre-release checks"
+
+    & git diff --check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "FAILED: git diff --check"
+        return $false
+    }
+    Write-Host "OK: git diff --check"
+
+    foreach ($file in $ReleaseFiles) {
+        if ($file -like "*.ps1" -and (Test-Path $file)) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+                Write-Host "FAILED: PowerShell parser $file"
+                foreach ($err in $errors) { Write-Host "  $($err.Message)" }
+                return $false
+            }
+            Write-Host "OK: PowerShell parser $file"
+        }
+    }
+
+    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+    foreach ($file in $ReleaseFiles) {
+        if ($file -like "*.sh" -and (Test-Path $file)) {
+            if ($null -eq $bashCmd) {
+                Write-Host "FAILED: bash is unavailable; cannot syntax-check $file"
+                return $false
+            }
+            & bash -n $file
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "FAILED: bash -n $file"
+                return $false
+            }
+            Write-Host "OK: bash -n $file"
+        }
+    }
+
+    $canonicalRoot = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff"
+    $templateRoot = Join-Path (Get-Location) "templates/.ai/skills/codex-claude-handoff"
+    if (Test-Path $canonicalRoot) {
+        foreach ($canonicalFile in (Get-ChildItem -Path $canonicalRoot -File)) {
+            $relative = $canonicalFile.Name
+            $templateFile = Join-Path $templateRoot $relative
+            if (-not (Test-FileContentMatch -Left $canonicalFile.FullName -Right $templateFile)) {
+                Write-Host "FAILED: mirror mismatch .ai/skills/codex-claude-handoff/$relative"
+                return $false
+            }
+        }
+        Write-Host "OK: canonical/template skill mirrors"
+    }
+
+    if ((Test-Path "scripts/handoff.ps1") -and (Test-Path "templates/scripts/handoff.ps1")) {
+        if (-not (Test-FileContentMatch -Left "scripts/handoff.ps1" -Right "templates/scripts/handoff.ps1")) {
+            Write-Host "FAILED: mirror mismatch scripts/handoff.ps1"
+            return $false
+        }
+        Write-Host "OK: scripts/handoff.ps1 mirror"
+    }
+    if ((Test-Path "scripts/handoff.sh") -and (Test-Path "templates/scripts/handoff.sh")) {
+        if (-not (Test-FileContentMatch -Left "scripts/handoff.sh" -Right "templates/scripts/handoff.sh")) {
+            Write-Host "FAILED: mirror mismatch scripts/handoff.sh"
+            return $false
+        }
+        Write-Host "OK: scripts/handoff.sh mirror"
+    }
+
+    return $true
+}
+
+function Get-ReleasePlan {
+    param([string]$RequestedVersion)
+
+    $releaseFiles = Get-ReleaseChangedFiles
+    $gitState = Get-GitChangedFilesForRelease
+    $taskActors = Get-TaskActors
+
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        $ok = $false
+        $errors.Add("Missing -Version, for example -Version v0.19.1.")
+    } elseif ($RequestedVersion -notmatch '^v\d+\.\d+\.\d+([.-][A-Za-z0-9]+)?$') {
+        $ok = $false
+        $errors.Add("Version must look like v0.19.1.")
+    }
+    if ($State -ne "REVIEW_DONE" -or $WaitingFor -ne "User") {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must be State: REVIEW_DONE and Waiting For: User before release execution.")
+    }
+    if ($taskActors.ImplementerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Implementer for release audit.")
+    }
+    if ($taskActors.ReviewerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer for release audit.")
+    }
+    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+        $ok = $false
+        $errors.Add("Release audit invariant violation: actual Reviewer must not equal actual Implementer.")
+    }
+    if (-not $gitState.Ok) {
+        $ok = $false
+        $errors.Add("Could not read git status.")
+    }
+    if ($releaseFiles.Count -eq 0) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files has no releasable files.")
+    }
+    if ($gitState.Ok -and -not (Test-SameFileSet -Expected $releaseFiles -Actual $gitState.Files)) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files.")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        & git rev-parse -q --verify "refs/tags/$RequestedVersion" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $ok = $false
+            $errors.Add("Tag $RequestedVersion already exists.")
+        }
+    }
+
+    return @{
+        Ok = $ok
+        Errors = $errors
+        ReleaseFiles = $releaseFiles
+        GitFiles = $gitState.Files
+        TaskActors = $taskActors
+    }
+}
+
+function Show-ReleasePlan {
+    param([string]$RequestedVersion, [string]$CommitMessage, [hashtable]$Plan)
+
+    Write-Host ""
+    Write-Host "Release plan"
+    Write-Host "Version:       $RequestedVersion"
+    Write-Host "Commit message: $(if ([string]::IsNullOrWhiteSpace($CommitMessage)) { '(required for release)' } else { $CommitMessage })"
+    Write-Host "State:         $State"
+    Write-Host "Waiting For:   $WaitingFor"
+    Write-Host "Current Task:  $CurrentTask"
+    Write-Host "Global binding Reviewer:    $($Binding.Reviewer)"
+    Write-Host "Global binding Implementer: $($Binding.Implementer)"
+    Write-Host "Actual Reviewer:            $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
+    Write-Host "Actual Implementer:         $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    Write-Host ""
+
+    Write-Host "Files from AI_HANDOFF.md Changed Files (local coordination files excluded):"
+    if ($Plan.ReleaseFiles.Count -eq 0) {
+        Write-Host "  (none)"
+    } else {
+        foreach ($f in $Plan.ReleaseFiles) { Write-Host "  $f" }
+    }
+    Write-Host ""
+    Write-Host "Git status files to release (local coordination files excluded):"
+    if ($Plan.GitFiles.Count -eq 0) {
+        Write-Host "  (none)"
+    } else {
+        foreach ($f in $Plan.GitFiles) { Write-Host "  $f" }
+    }
+    Write-Host ""
+
+    Write-Host "Exact mutating commands if authorized:"
+    Write-Host "  git add -- <files listed above>"
+    Write-Host "  git commit -m `"$CommitMessage`""
+    Write-Host "  git push origin HEAD"
+    Write-Host "  git tag -a $RequestedVersion -m $RequestedVersion"
+    Write-Host "  git push origin $RequestedVersion"
+    Write-Host ""
+}
+
+function Invoke-ReleaseCheck {
+    $plan = Get-ReleasePlan -RequestedVersion $Version
+    Show-ReleasePlan -RequestedVersion $Version -CommitMessage $Message -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "release-check: blocked."
+        foreach ($err in $plan.Errors) { Write-Host "Reason: $err" }
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "release-check: ready for explicit authorization."
+    Write-Host "To execute, run:"
+    Write-Host "  handoff.ps1 release -Version $Version -Message `"<message>`" -Authorize `"I_AUTHORIZE_RELEASE_$Version`""
+    Write-Host ""
+}
+
+function Invoke-Release {
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        Write-Host ""
+        Write-Host "release: blocked."
+        Write-Host "Reason: Missing -Message."
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    $expectedToken = "I_AUTHORIZE_RELEASE_$Version"
+    if ($Authorize -ne $expectedToken) {
+        Write-Host ""
+        Write-Host "release: blocked."
+        Write-Host "Reason: Missing exact authorization token."
+        Write-Host "Expected: -Authorize `"$expectedToken`""
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    $plan = Get-ReleasePlan -RequestedVersion $Version
+    Show-ReleasePlan -RequestedVersion $Version -CommitMessage $Message -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "release: blocked."
+        foreach ($err in $plan.Errors) { Write-Host "Reason: $err" }
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    $checksOk = Invoke-ReleasePreflightChecks -ReleaseFiles $plan.ReleaseFiles
+    if (-not $checksOk) {
+        Write-Host ""
+        Write-Host "release: blocked."
+        Write-Host "Reason: Pre-release checks failed."
+        Write-Host "No git mutations were run after the failed check."
+        Write-Host ""
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "Authorization accepted. Executing release."
+    $fileArray = [string[]]$plan.ReleaseFiles
+    & git add -- @fileArray
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git add"; exit 1 }
+    & git commit -m $Message
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git commit"; exit 1 }
+    & git push origin HEAD
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git push origin HEAD"; exit 1 }
+    & git tag -a $Version -m $Version
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git tag"; exit 1 }
+    & git push origin $Version
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git push origin $Version"; exit 1 }
+
+    Write-Host ""
+    Write-Host "release: complete."
+    Write-Host "Next state instructions:"
+    Write-Host "  Master / Sequence Owner: update local AI_SEQUENCE.md release checkpoint for $CurrentTask."
+    Write-Host "  Then prepare the next active task in AI_HANDOFF.md."
+    Write-Host "  Do not commit AI_HANDOFF.md, AI_SEQUENCE.md, NEXT_TURN.md, USER_REQUEST.md, or HANDOFF_LOOP.log."
+    Write-Host ""
+}
+
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
@@ -636,7 +980,8 @@ function Invoke-Menu {
     Write-Host "5. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
     Write-Host "6. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
     Write-Host "7. Show adapter status            - callable/manual automation status"
-    Write-Host "8. Exit"
+    Write-Host "8. Check authorized release       - dry-run release plan (release-check)"
+    Write-Host "9. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -651,7 +996,8 @@ function Invoke-Menu {
         "5" { Invoke-Cycle }
         "6" { Invoke-Loop }
         "7" { Invoke-Adapters }
-        "8" { }
+        "8" { Invoke-ReleaseCheck }
+        "9" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -1163,6 +1509,8 @@ switch ($Command) {
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
+    "release-check" { Invoke-ReleaseCheck }
+    "release"      { Invoke-Release }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -1179,6 +1527,10 @@ switch ($Command) {
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
+            Write-Host "  release-check -Version vX.Y.Z"
+            Write-Host "                            Dry-run the guarded release plan. Never mutates git."
+            Write-Host "  release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""
+            Write-Host "                            Run the authorized release executor after REVIEW_DONE."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a callable adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"

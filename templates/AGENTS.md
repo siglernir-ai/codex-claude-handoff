@@ -351,11 +351,17 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 | `start "<request>" [-Clip]` | Save a natural user request to `USER_REQUEST.md` and print a Master entry prompt. |
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
 | `adapters` | Show the current adapter status for each role: bound tool, callable yes/no, automatable states, manual reason, and next enablement step. |
+| `release-check -Version vX.Y.Z` | Dry-run the guarded release plan after REVIEW_DONE. Never mutates git. |
+| `release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"` | Execute the guarded release after REVIEW_DONE and explicit user authorization. Runs checks, commits only approved files, pushes, tags, then pushes the tag. |
 | `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn when the adapter registry marks the turn callable (currently READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 | `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of automated turns resolved through `ADAPTERS.md` (currently the same callable Implementer turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares `NEXT_TURN.md` whenever the next actor is non-callable or the User. Writes a local `HANDOFF_LOOP.log` (never committed). |
 
-`handoff.ps1` does not update `AI_HANDOFF.md` directly and never commits, pushes, or deploys. Its automation (`cycle` / `run-next` / `loop`) resolves callable/manual behavior through `.ai/skills/codex-claude-handoff/ADAPTERS.md`. In the default local registry it can trigger only approved Implementer turns in READY_FOR_IMPLEMENTATION with explicit user confirmation, then stops at the first non-callable actor; Master and Reviewer turns remain manual until a real local adapter exists. The Master remains the decision router.
+`handoff.ps1` does not update `AI_HANDOFF.md` directly and never deploys. Its turn automation (`cycle` / `run-next` / `loop`) resolves callable/manual behavior through `.ai/skills/codex-claude-handoff/ADAPTERS.md`. In the default local registry it can trigger only approved Implementer turns in READY_FOR_IMPLEMENTATION with explicit user confirmation, then stops at the first non-callable actor; Master and Reviewer turns remain manual until a real local adapter exists. The Master remains the decision router.
+
+The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
+
+The global role binding remains the routing/adapters source of truth. Release audit uses the current task's actual provenance instead, because a task may have an explicit one-off Implementer or Reviewer assignment.
 
 `USER_REQUEST.md` and `NEXT_TURN.md` are local ignored ephemeral files. `AI_HANDOFF.md` remains the source of truth. `AI_SEQUENCE.md` (since v0.18.1) is the local multi-task ordering artifact, maintained by the Master as Sequence Owner - also ignored and never committed.
 

@@ -278,9 +278,27 @@ after explicit user release authorization.
   operations.
 - Dry-run and scope verification before any mutating git command.
 - Clear refusal when Changed Files do not match `git status`.
+- PowerShell `release-check` and `release` commands; Bash reports the limitation
+  honestly and does not run release mutations.
+- Existing release checks before mutation: whitespace check, changed-script parser
+  checks, shell syntax checks when available, and canonical/template mirror checks.
+- Release audit uses the current handoff's structured `Task Actors` (actual
+  Implementer and Reviewer) rather than only the global role binding, so one-off
+  role assignments are audited correctly.
 
 **Does not include:**
 - Deploys, database work, secrets, production configuration, or automatic approval.
+- A new role, new protocol state, fake Codex-callable adapter, or automatic
+  sequence advancement.
+
+**Exit criteria:**
+- `release-check` prints the exact release plan without mutating git.
+- `release` refuses without the exact authorization token, refuses outside
+  `REVIEW_DONE` / `Waiting For: User`, and refuses when actual Task Actors are
+  missing, ambiguous, or not independent.
+- `release` stages only approved Changed Files, commits first, then creates/pushes
+  the version tag only after the commit succeeds.
+- Local coordination files stay excluded from release scope.
 
 ---
 

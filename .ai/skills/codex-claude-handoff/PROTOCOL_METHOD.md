@@ -79,7 +79,7 @@ process.
 | Current handoff | `AI_HANDOFF.md` - one task per cycle |
 | Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
 | Review | READY_FOR_REVIEW -> Reviewer; Verification Gate |
-| Release | REVIEW_DONE (Reviewer attestation) -> user release authorization -> operator commit/tag (Manual Approval Boundaries) |
+| Release | REVIEW_DONE (Reviewer attestation) -> user release authorization -> guarded operator commit/push/tag (Manual Approval Boundaries; since v0.19.1 this may use `handoff.ps1 release`) |
 | Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval |
 
 Rule: if a future phase cannot be expressed as a mapping to existing machinery, it
@@ -143,10 +143,14 @@ or automation-limitation stops.
 | Environment / Preflight | dirty tree, missing dependency, NEXT_TURN.md failure, invalid arguments, tool unavailable | Whoever controls the environment | No |
 | Non-callable Actor | next role's tool has no adapter, or the turn type is not automatable | Operator pastes the prepared prompt into the bound tool | No - automation limitation |
 
-Future automation model (NOT implemented in v0.18.2): Reviewer attestation ->
-User Release Authorization -> an authorized operator/adapter may execute the
+Release execution model (implemented in v0.19.1): Reviewer attestation ->
+User Release Authorization -> a guarded operator action may execute the
 commit/push/tag. The user remains the only authority for releases; the user is
-never the default technical verifier.
+never the default technical verifier. The guarded release executor must fail
+closed unless the handoff is `REVIEW_DONE`, the changed-file scope matches git
+status, the actual task Reviewer and actual task Implementer recorded in
+`AI_HANDOFF.md` `Task Actors` are present and different, pre-release checks pass,
+and the user supplies the exact release authorization token.
 
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 
@@ -177,8 +181,10 @@ Single authority per concern:
 | Source edits, investigation, and planning | The Implementer (`IMPLEMENTER.md`) |
 | Independent review | The Reviewer (`MASTER.md`; invariant in `ROLE_ASSIGNMENT.md`) |
 | Manual adapter actions | The Operator action category (this file) - performed by the user |
+| Authorized release execution | Guarded operator action after User Release Authorization; PowerShell `handoff.ps1 release` may execute commit/push/tag only after explicit token authorization |
 | Adapter capability and callable/manual status | `ADAPTERS.md` |
 | Automation stop semantics | This file, "Stop Routing": workflow scripts must print one of the defined stop categories. Exit codes remain script behavior and must not be redefined as the category system. |
+| Release audit provenance | `AI_HANDOFF.md` `Task Actors` for the current task; the global role binding is for routing/adapters, not one-off task provenance |
 
 - New vocabulary must map to existing machinery; this specification may not invent
   states, roles, or automation.

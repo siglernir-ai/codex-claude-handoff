@@ -12,6 +12,10 @@
 - Date: YYYY-MM-DD
 - Task: Installed the Codex-Claude handoff protocol files.
 
+## Task Actors
+- Implementer: TBD
+- Reviewer: TBD
+
 ## Done
 - Added `AGENTS.md`
 - Added `CLAUDE.md`

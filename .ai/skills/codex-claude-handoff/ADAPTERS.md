@@ -38,6 +38,16 @@ orchestrator exists.
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle` or `handoff.ps1 loop`. | Explicit `yes` confirmation; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | no | none | Run `handoff.ps1 next` or `handoff.sh next`, then paste the generated prompt into Codex. | Manual review only; independent-review invariant still applies; no release action without user authorization. | Non-callable Actor | no for paste; yes for release actions |
 
+## Release Execution Adapter
+
+Release execution is an authorized operator action, not a protocol role turn. It is
+documented here because it is a callable local capability with the same safety
+contract shape as role adapters.
+
+| Capability | Callable | Eligible state | Invocation | Safety limits | Stop category when unavailable or unauthorized | User authorization required |
+|---|---|---|---|---|---|---|
+| Authorized release executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 release-check -Version vX.Y.Z`. Execute: `handoff.ps1 release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files vs git status match, existing pre-release checks, explicit authorization token, commit before tag, and no deploy/db/secrets/production-config actions. | Environment/Preflight when PowerShell is unavailable; User Release Authorization until the token is supplied | yes, exact token required for execution |
+
 ## State-Specific Notes
 
 - `READY_FOR_IMPLEMENTATION` can be automated only when the Implementer is bound
@@ -49,6 +59,8 @@ orchestrator exists.
   bound tool exists and is verified.
 - Codex is not callable in this repository in v0.19.0. No Codex CLI, MCP adapter,
   API bridge, or external adapter is present in the local protocol files.
+- Since v0.19.1, `release-check` and `release` are PowerShell-only. Bash reports the
+  limitation honestly and does not run release git mutations.
 
 ## Script Contract
 
@@ -63,4 +75,21 @@ Workflow scripts must resolve automation through this adapter model:
    enablement step.
 
 The `adapters` command in `scripts/handoff.ps1` and `scripts/handoff.sh` prints
-the current resolved registry for the local project.
+the current resolved role registry plus the release-executor capability for the
+local project.
+
+Release execution is not a role turn and does not approve work. It is a guarded
+operator action after the Reviewer has attested technical readiness and the user
+has supplied the exact release authorization token.
+
+For release audit, the executor reads the current task's actual actors from
+`AI_HANDOFF.md`:
+
+```md
+## Task Actors
+- Implementer: Codex
+- Reviewer: Claude Code
+```
+
+The global role binding remains the routing/adapters source of truth. It is not
+enough for release audit when a task used an explicit one-off actor assignment.
