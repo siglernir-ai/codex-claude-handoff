@@ -237,13 +237,85 @@ roles, new states, or new automation.
 
 ---
 
+### v0.19.0 - Adapter Registry + Automation Harness
+
+**Goal:** Move automation decisions out of scattered hard-coded checks and into a
+small adapter capability model.
+
+**Includes:**
+- Canonical `ADAPTERS.md` (+ template mirror): adapter contract, required fields,
+  default local registry, and state-specific callable/manual limits.
+- `handoff.ps1 adapters` and `handoff.sh adapters`: print each role, bound tool,
+  callable yes/no, automatable states, manual/non-callable reason, safety limits,
+  stop category, user authorization, and next enablement step.
+- `cycle` and `loop` resolve callable turns through the adapter layer.
+- Honest default status: Implementer bound to Claude Code is callable only for
+  `READY_FOR_IMPLEMENTATION`; Codex-bound Master/Reviewer turns are manual until a
+  real local adapter exists; investigation/planning/question turns remain manual.
+
+**Does not include:**
+- A fake Codex adapter, MCP/API claims, new roles, new states, automatic commit,
+  push, tag, deploy, database, secrets, or product-decision automation.
+
+**Exit criteria:**
+- `adapters` command reports the resolved local registry.
+- `cycle` and `loop` no longer make callable/non-callable decisions through
+  scattered tool-name checks.
+- Canonical/template mirrors and installers ship `ADAPTERS.md`.
+- Documentation states clearly that Codex is non-callable unless a verified local
+  adapter exists.
+
+---
+
+### v0.19.1 - Authorized Release Executor
+
+**Goal:** Add a release-execution adapter that can perform commit/push/tag only
+after explicit user release authorization.
+
+**Includes:**
+- A command that consumes Reviewer-attested `REVIEW_DONE` state and exact Changed
+  Files, asks for explicit user authorization, then runs only the authorized git
+  operations.
+- Dry-run and scope verification before any mutating git command.
+- Clear refusal when Changed Files do not match `git status`.
+
+**Does not include:**
+- Deploys, database work, secrets, production configuration, or automatic approval.
+
+---
+
+### v0.19.2 - Sequence Advance Command
+
+**Goal:** Add a minimal command for advancing `AI_SEQUENCE.md` after user-approved
+release checkpoints.
+
+**Includes:**
+- Validate that the current handoff completed release authorization.
+- Mark the released task and select the next active task without inventing
+  `SEQUENCE_*` states.
+- Keep `AI_SEQUENCE.md` local and ignored.
+
+---
+
+### v0.20.0 - Protocol Test Harness
+
+**Goal:** Add repeatable protocol-level tests for state routing, adapter decisions,
+stop categories, mirror parity, and safety boundaries.
+
+**Includes:**
+- Scripted fixtures for key states and role bindings.
+- Assertions for no new roles/states, no unsafe automation, and consistent
+  PowerShell/Bash status behavior.
+
+---
+
 ### v1.0.0 - Stable Protocol Release
 
 **Goal:** Declare the protocol stable and ready for use in production projects with a
 commitment to backward compatibility.
 
 **Includes:**
-- All milestones through v0.18.x validated.
+- All milestones through v0.20.0 validated.
 - Full cross-platform support confirmed.
 - Any breaking changes from the 0.x line resolved and documented.
 - A migration guide if any protocol behavior changed incompatibly.

@@ -125,6 +125,92 @@ function Invoke-ClaudeTurn {
     return $LASTEXITCODE
 }
 
+function Get-AdapterProfile {
+    param([string]$Role, [string]$Tool)
+
+    $manual = "Run 'handoff.ps1 next' then paste the prompt into $Tool."
+    if ($Role -eq "User") {
+        return @{
+            Role = "User"; Tool = "User"; Callable = $false; SupportedStates = @();
+            Invocation = "See AI_HANDOFF.md and decide or authorize the next step.";
+            SafetyLimits = "User approval authority; no automation.";
+            StopCategory = "User Decision"; UserAuthorizationRequired = "yes";
+            Reason = "The protocol requires user authority for this turn.";
+            NextStep = "Read AI_HANDOFF.md."
+        }
+    }
+
+    if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
+        return @{
+            Role = $Role; Tool = $Tool; Callable = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
+            Invocation = "npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text";
+            SafetyLimits = "Explicit yes confirmation; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation.";
+            StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
+            Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
+            NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use next + paste for other Implementer states."
+        }
+    }
+
+    $reason = "$Tool has no verified local callable adapter for the $Role role."
+    if ($Tool -eq "Codex") {
+        $reason = "No Codex CLI, MCP adapter, API bridge, or other local callable adapter is present in this repository."
+    }
+    return @{
+        Role = $Role; Tool = $Tool; Callable = $false; SupportedStates = @();
+        Invocation = $manual;
+        SafetyLimits = "Manual prompt handoff only; no commit/push/tag/deploy/db/secrets automation.";
+        StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "no for paste; yes for protected actions";
+        Reason = $reason;
+        NextStep = "Add and verify a real local adapter before marking this role callable."
+    }
+}
+
+function Resolve-TurnAdapter {
+    param([string]$ForState, [string]$Role, [string]$Tool)
+    $adapter = Get-AdapterProfile -Role $Role -Tool $Tool
+    $stateSupported = $false
+    foreach ($s in $adapter.SupportedStates) {
+        if ($s -eq $ForState) { $stateSupported = $true; break }
+    }
+    $callableForState = [bool]($adapter.Callable -and $stateSupported)
+    $reason = $adapter.Reason
+    if ($adapter.Callable -and -not $stateSupported) {
+        $supported = if ($adapter.SupportedStates.Count -gt 0) { $adapter.SupportedStates -join ", " } else { "none" }
+        $reason = "$Role/$Tool adapter does not support state $ForState. Supported automated states: $supported."
+    }
+    return @{
+        Role = $Role; Tool = $Tool; Callable = $callableForState;
+        SupportedStates = $adapter.SupportedStates; Invocation = $adapter.Invocation;
+        SafetyLimits = $adapter.SafetyLimits; StopCategory = $adapter.StopCategory;
+        UserAuthorizationRequired = $adapter.UserAuthorizationRequired; Reason = $reason;
+        NextStep = $adapter.NextStep
+    }
+}
+
+function Invoke-Adapters {
+    Write-Host ""
+    Write-Host "Adapter status"
+    Write-Host "Contract: .ai/skills/codex-claude-handoff/ADAPTERS.md"
+    Write-Host ""
+    foreach ($role in @("Master", "Implementer", "Reviewer")) {
+        $tool = Resolve-Actor -Role $role -Binding $script:Binding
+        $adapter = Get-AdapterProfile -Role $role -Tool $tool
+        $callable = if ($adapter.Callable) { "yes" } else { "no" }
+        $states = if ($adapter.SupportedStates.Count -gt 0) { $adapter.SupportedStates -join ", " } else { "none" }
+        Write-Host "Role:        $role"
+        Write-Host "Tool:        $tool"
+        Write-Host "Callable:    $callable"
+        Write-Host "States:      $states"
+        Write-Host "Reason:      $($adapter.Reason)"
+        Write-Host "Invocation:  $($adapter.Invocation)"
+        Write-Host "Safety:      $($adapter.SafetyLimits)"
+        Write-Host "Stop:        $($adapter.StopCategory)"
+        Write-Host "User auth:   $($adapter.UserAuthorizationRequired)"
+        Write-Host "Enable next: $($adapter.NextStep)"
+        Write-Host ""
+    }
+}
+
 # Stop-category label for printed stops (v0.18.2 controlled stop routing).
 # Categories: see PROTOCOL_METHOD.md, "Stop Routing".
 function Get-StopCategoryLine {
@@ -244,6 +330,7 @@ function Invoke-Status {
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
     Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    Write-Host "Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status"
     Write-Host "Commit:       $CommitStatus"
     $skillAdapter = Join-Path (Get-Location) ".agents/skills/codex-claude-handoff/SKILL.md"
     if (Test-Path $skillAdapter) {
@@ -548,7 +635,8 @@ function Invoke-Menu {
     Write-Host "4. Check commit                   - verify whether commit is allowed"
     Write-Host "5. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
     Write-Host "6. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
-    Write-Host "7. Exit"
+    Write-Host "7. Show adapter status            - callable/manual automation status"
+    Write-Host "8. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -562,7 +650,8 @@ function Invoke-Menu {
         "4" { Invoke-CommitCheck }
         "5" { Invoke-Cycle }
         "6" { Invoke-Loop }
-        "7" { }
+        "7" { Invoke-Adapters }
+        "8" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -575,6 +664,7 @@ function Invoke-Cycle {
     param([string]$CommandLabel = "cycle")
 
     $implementerTool = $Binding.Implementer
+    $turnAdapter = Resolve-TurnAdapter -ForState $State -Role "Implementer" -Tool $implementerTool
 
     # Only READY_FOR_IMPLEMENTATION is eligible
     if ($State -ne "READY_FOR_IMPLEMENTATION") {
@@ -585,14 +675,14 @@ function Invoke-Cycle {
         $entry = $ActionMap[$State]
         $role  = if ($entry) { $entry.Role } else { "" }
         if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
-            Write-Host "Reason:      $CommandLabel does not automate investigation or planning turns in this version."
-            Write-Host "             The Claude Code CLI cannot safely restrict file edits to AI_HANDOFF.md only in these states."
-            Write-Host "Stop category: Non-callable Actor (automation limitation) - not a user decision."
+            Write-Host "Reason:      $($turnAdapter.Reason)"
+            Write-Host "Stop category: $($turnAdapter.StopCategory) (automation limitation) - not a user decision."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into the Implementer."
         } elseif ($role -eq "Master" -or $role -eq "Reviewer") {
             $t = Resolve-Actor -Role $role -Binding $Binding
-            Write-Host "Reason:      This turn is for the $role ($t). $CommandLabel cannot automate $role turns."
-            Write-Host "Stop category: Non-callable Actor ($t has no callable adapter) - not a user decision."
+            $blockedAdapter = Resolve-TurnAdapter -ForState $State -Role $role -Tool $t
+            Write-Host "Reason:      $($blockedAdapter.Reason)"
+            Write-Host "Stop category: $($blockedAdapter.StopCategory) ($t has no callable adapter) - not a user decision."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $t."
         } elseif ($role -eq "User") {
             Write-Host "Reason:      This turn requires user action."
@@ -619,15 +709,13 @@ function Invoke-Cycle {
         exit 1
     }
 
-    # READY_FOR_IMPLEMENTATION: cycle can only drive an Implementer bound to Claude Code
-    if ($implementerTool -ne "Claude Code") {
+    if (-not $turnAdapter.Callable) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
         Write-Host "Implementer: $implementerTool"
-        Write-Host "Reason:      $CommandLabel can only automate an Implementer bound to Claude Code."
-        Write-Host "             $implementerTool has no local CLI, so this turn must be run manually."
-        Write-Host "Stop category: Non-callable Actor (automation limitation) - not a user decision."
+        Write-Host "Reason:      $($turnAdapter.Reason)"
+        Write-Host "Stop category: $($turnAdapter.StopCategory) (automation limitation) - not a user decision."
         Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into $implementerTool."
         Write-Host ""
         exit 1
@@ -682,6 +770,7 @@ function Invoke-Cycle {
     Write-Host "Actor:        $implementerTool (Implementer)"
     Write-Host "Permission:   acceptEdits  (Bash explicitly disallowed)"
     Write-Host "Budget limit: `$$BudgetUsd"
+    Write-Host "Adapter:      callable via ADAPTERS.md contract"
     Write-Host ""
     Write-Host "Note: Tests and lint cannot run during this turn (Bash is blocked). Run them manually after."
     Write-Host ""
@@ -885,7 +974,7 @@ function Invoke-Loop {
     Write-Host "Max turns:          $MaxTurns"
     Write-Host "Per-turn budget:    `$$BudgetUsd (passed to --max-budget-usd)"
     Write-Host "Session budget cap: `$$SessionBudgetUsd (worst-case authorized spend this session: `$$worstCase)"
-    Write-Host "Callable turns:     READY_FOR_IMPLEMENTATION only, Implementer bound to Claude Code."
+    Write-Host "Callable turns:     Resolved through ADAPTERS.md; currently READY_FOR_IMPLEMENTATION only when Implementer is Claude Code."
     Write-Host "Never automated:    Master turns, Reviewer turns, User turns, commit/push/tag/deploy."
     Write-Host ""
     Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
@@ -945,9 +1034,8 @@ function Invoke-Loop {
             exit 6
         }
 
-        # Callable in v0.17.0: only an approved Implementer turn bound to Claude Code
-        $callable = ($script:State -eq "READY_FOR_IMPLEMENTATION") -and
-            ($role -eq "Implementer") -and ($tool -eq "Claude Code")
+        $turnAdapter = Resolve-TurnAdapter -ForState $script:State -Role $role -Tool $tool
+        $callable = $turnAdapter.Callable
 
         if (-not $callable) {
             try {
@@ -962,7 +1050,12 @@ function Invoke-Loop {
             Write-Host "loop: stop - next actor is not callable."
             Write-Host "State:      $($script:State)"
             Write-Host "Next actor: $tool ($role)"
-            Write-Host (Get-StopCategoryLine -ForState $script:State -ActorTool $tool -Automation $true)
+            if ($tool -eq "User") {
+                Write-Host (Get-StopCategoryLine -ForState $script:State -ActorTool $tool -Automation $true)
+            } else {
+                Write-Host "Reason:     $($turnAdapter.Reason)"
+                Write-Host "Stop category: $($turnAdapter.StopCategory) (automation limitation) - next step is an Operator Manual Action."
+            }
             if ($tool -ne "User") {
                 Write-Host "Paste:      Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
             }
@@ -993,7 +1086,7 @@ function Invoke-Loop {
         }
 
         # Per-turn re-checks: the binding or the tree may have changed since the session started
-        if ($Binding.Reviewer -eq $Binding.Implementer) {
+        if ($script:Binding.Reviewer -eq $script:Binding.Implementer) {
             Write-Host ""
             Write-Host "loop: blocked."
             Write-Host "Reason:      Role invariant violation detected mid-session (Reviewer == Implementer)."
@@ -1066,6 +1159,7 @@ function Invoke-Loop {
 
 switch ($Command) {
     "status"       { Invoke-Status }
+    "adapters"     { Invoke-Adapters }
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
@@ -1081,13 +1175,14 @@ switch ($Command) {
             Write-Host ""
             Write-Host "Commands:"
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
+            Write-Host "  adapters                  Show adapter callable/manual status for each role."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
-            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle: one Implementer turn, then prepare the Reviewer handoff (READY_FOR_IMPLEMENTATION; Implementer must be Claude Code)."
+            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a callable adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"
-            Write-Host "                            Run a bounded loop of automated Implementer turns; stops at any non-callable actor or hard stop. Writes HANDOFF_LOOP.log."
+            Write-Host "                            Run a bounded loop of callable adapter turns; stops at any non-callable actor or hard stop. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
     }

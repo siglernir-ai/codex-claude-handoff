@@ -11,6 +11,7 @@ This folder is the canonical shared protocol source for the `codex-claude-handof
 | `MASTER.md` | Master + Reviewer role protocol: decision router, gates, states, review, verification |
 | `IMPLEMENTER.md` | Implementer role protocol: investigation mode, planning mode, implementation rules |
 | `PROTOCOL_METHOD.md` | Protocol method specification: method layers, lifecycle mapping, vocabulary, precedence (since v0.18.0) |
+| `ADAPTERS.md` | Adapter registry and automation capability contract (since v0.19.0) |
 | `CODEX.md` | Codex entry pointer - resolves Codex's role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |

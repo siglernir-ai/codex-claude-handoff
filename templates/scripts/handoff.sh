@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # handoff.sh - Codex-Claude Handoff operator (Bash version, v0.17.0)
-# Commands: status, next, start, commit-check
+# Commands: status, adapters, next, start, commit-check
 # cycle, run-next, and loop require PowerShell; use handoff.ps1 or 'handoff.sh next' + paste manually.
 
 set -euo pipefail
@@ -163,6 +163,30 @@ _stop_category() {
     fi
 }
 
+_adapter_profile() {
+    local role="$1" tool="$2"
+    ADAPTER_CALLABLE="no"
+    ADAPTER_STATES="none"
+    ADAPTER_INVOCATION="Run 'handoff.sh next' then paste the generated prompt into $tool."
+    ADAPTER_SAFETY="Manual prompt handoff only; no commit/push/tag/deploy/db/secrets automation."
+    ADAPTER_STOP="Non-callable Actor"
+    ADAPTER_AUTH="no for paste; yes for protected actions"
+    ADAPTER_REASON="$tool has no verified local callable adapter for the $role role."
+    ADAPTER_NEXT="Add and verify a real local adapter before marking this role callable."
+
+    if [ "$role" = "Implementer" ] && [ "$tool" = "Claude Code" ]; then
+        ADAPTER_CALLABLE="yes"
+        ADAPTER_STATES="READY_FOR_IMPLEMENTATION"
+        ADAPTER_INVOCATION="PowerShell only: handoff.ps1 cycle or handoff.ps1 loop invokes npx --yes @anthropic-ai/claude-code with Bash disallowed, a budget cap, and no session persistence."
+        ADAPTER_SAFETY="Explicit yes confirmation in PowerShell; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation."
+        ADAPTER_AUTH="yes, before cycle or loop session"
+        ADAPTER_REASON="Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual."
+        ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use bash scripts/handoff.sh next + paste for other turns."
+    elif [ "$tool" = "Codex" ]; then
+        ADAPTER_REASON="No Codex CLI, MCP adapter, API bridge, or other local callable adapter is present in this repository."
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -173,10 +197,34 @@ cmd_status() {
     echo "Waiting For:  $WAITING_FOR"
     echo "Task:         $CURRENT_TASK"
     echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
+    echo "Adapters:     run 'bash scripts/handoff.sh adapters' for callable/manual automation status"
     echo "Commit:       $(_commit_status_text)"
     [ -f "$(pwd)/.agents/skills/codex-claude-handoff/SKILL.md" ] && \
         echo "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
     echo ""
+}
+
+cmd_adapters() {
+    echo ""
+    echo "Adapter status"
+    echo "Contract: .ai/skills/codex-claude-handoff/ADAPTERS.md"
+    echo ""
+    local role tool
+    for role in Master Implementer Reviewer; do
+        tool=$(_resolve_actor "$role")
+        _adapter_profile "$role" "$tool"
+        echo "Role:        $role"
+        echo "Tool:        $tool"
+        echo "Callable:    $ADAPTER_CALLABLE"
+        echo "States:      $ADAPTER_STATES"
+        echo "Reason:      $ADAPTER_REASON"
+        echo "Invocation:  $ADAPTER_INVOCATION"
+        echo "Safety:      $ADAPTER_SAFETY"
+        echo "Stop:        $ADAPTER_STOP"
+        echo "User auth:   $ADAPTER_AUTH"
+        echo "Enable next: $ADAPTER_NEXT"
+        echo ""
+    done
 }
 
 cmd_next() {
@@ -423,6 +471,7 @@ _get_role_binding
 
 case "$COMMAND" in
     status)       cmd_status ;;
+    adapters)     cmd_adapters ;;
     next)         cmd_next ;;
     start)        cmd_start ;;
     commit-check) cmd_commit_check ;;
@@ -435,6 +484,7 @@ case "$COMMAND" in
         echo ""
         echo "Commands:"
         echo "  status                    Show current handoff state, role binding, and commit status."
+        echo "  adapters                  Show adapter callable/manual status for each role."
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'
         echo "  commit-check              Show whether a commit is allowed and what to commit."

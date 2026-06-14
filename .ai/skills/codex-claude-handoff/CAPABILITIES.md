@@ -6,6 +6,7 @@ should hold which role. The role-to-tool binding itself lives in `.ai/roles/ROLE
 
 For the shared role model, see `SKILL.md`. For the Master + Reviewer protocol, see `MASTER.md`.
 For the Implementer protocol, see `IMPLEMENTER.md`.
+For callable/manual automation status, see `ADAPTERS.md`.
 
 ## Default Role Binding
 
@@ -57,6 +58,15 @@ The user is the final approval point and must never be bypassed.
 ## Additional Tools
 
 The protocol is forward-compatible with additional tools (for example an independent reviewer such as Gemini). A new tool becomes active only when the user assigns it a role in `.ai/roles/ROLE_ASSIGNMENT.md`. Until assigned, only Codex, Claude Code, and the User participate.
+
+## Automation Adapter Status
+
+Tool strengths here do not imply that a tool is callable by workflow automation.
+Since v0.19.0, callable/manual automation is resolved through `ADAPTERS.md`.
+In the default local registry, only the Implementer bound to Claude Code has a
+callable adapter, and only for `READY_FOR_IMPLEMENTATION`. Codex-bound Master and
+Reviewer turns are manual because no verified local Codex adapter exists in this
+repository.
 
 ## How the Master Uses This Profile
 

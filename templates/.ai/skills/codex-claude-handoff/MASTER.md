@@ -392,11 +392,12 @@ The Master should not request capability status every session - only when it add
 | `next [-Clip]` | Generate or refresh NEXT_TURN.md. Print which tool to open and what to paste. |
 | `start "<request>" [-Clip]` | Save a natural user request to USER_REQUEST.md and print a Master entry prompt. |
 | `commit-check` | Show whether a commit is allowed and list changed files. Never runs git commands automatically. |
+| `adapters` | Show the current adapter status for each role: bound tool, callable yes/no, automatable states, manual reason, and next enablement step. |
 | `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only), then prepare the Reviewer handoff and stop. Requires the Implementer to be bound to Claude Code, Reviewer != Implementer, a clean working tree, and explicit confirmation. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
-| `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of automated Implementer turns (same callable turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares NEXT_TURN.md whenever the next actor is the Master, the Reviewer, or the User. Writes a local HANDOFF_LOOP.log (never committed). |
+| `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of callable adapter turns (currently the same Implementer turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares NEXT_TURN.md whenever the next actor is non-callable or the User. Writes a local HANDOFF_LOOP.log (never committed). |
 
-The Master remains the decision router. `handoff.ps1` does not update AI_HANDOFF.md directly and never commits, pushes, or deploys. Its automation (`cycle` / `run-next` / `loop`) can trigger only approved Implementer turns in READY_FOR_IMPLEMENTATION with explicit user confirmation, then stops at the first non-callable actor. Master and Reviewer turns are never automated - they have no callable adapter.
+The Master remains the decision router. `handoff.ps1` does not update AI_HANDOFF.md directly and never commits, pushes, or deploys. Its automation (`cycle` / `run-next` / `loop`) resolves callable/manual behavior through `ADAPTERS.md`. In the default local registry it can trigger only approved Implementer turns in READY_FOR_IMPLEMENTATION with explicit user confirmation, then stops at the first non-callable actor. Master and Reviewer turns are manual because no verified local Codex adapter exists.
 
 ## Allowed States
 

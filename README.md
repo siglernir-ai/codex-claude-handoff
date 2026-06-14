@@ -40,6 +40,40 @@ project root.
 - It is local, ignored by Git, and never committed - exactly like `AI_HANDOFF.md`.
   The installer copies a starter template and adds the `.gitignore` rule.
 
+## Adapter Registry
+
+Since v0.19.0, automation capability is resolved through
+`.ai/skills/codex-claude-handoff/ADAPTERS.md`.
+
+An adapter record says which role is bound to which tool, whether that role/tool is
+callable, which existing states it can automate, the invocation command or manual
+instruction, safety limits, stop category when it is not callable, and whether user
+authorization is required.
+
+Current local status:
+
+- Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION`
+  through `handoff.ps1 cycle` / `handoff.ps1 loop`.
+- Master and Reviewer bound to Codex are manual because this repository has no
+  verified local Codex CLI, MCP adapter, API bridge, or external callable adapter.
+- Investigation, planning, and question turns remain manual because the current
+  automated Claude Code invocation cannot safely restrict edits to handoff-only
+  files in non-interactive mode.
+- No adapter may commit, push, tag, deploy, alter databases, change secrets, or
+  make product decisions without user authorization.
+
+Run:
+
+```powershell
+.\scripts\handoff.ps1 adapters
+```
+
+On macOS/Linux:
+
+```bash
+bash scripts/handoff.sh adapters
+```
+
 ## Files
 
 ```text
@@ -187,6 +221,23 @@ Waiting For:  User
 Task:         v0.9.1 - Encoding-safe handoff instructions
 Commit:       ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files.
 Roles:        Master=Codex, Reviewer=Codex, Implementer=Claude Code
+Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status
+```
+
+### `adapters`
+
+Print the current adapter status for each role: bound tool, callable yes/no,
+automatable states, manual/non-callable reason, safety limits, stop category, and
+next step for enabling more automation.
+
+```powershell
+.\scripts\handoff.ps1 adapters
+```
+
+On macOS/Linux:
+
+```bash
+bash scripts/handoff.sh adapters
 ```
 
 ### `next`
@@ -235,7 +286,7 @@ is needed only if the package is not cached.
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
 compatibility).
 
-**Eligible state:** `cycle` only automates `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
+**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. In v0.19.0, only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
@@ -251,7 +302,7 @@ compatibility).
 Investigation and planning states are blocked because the Claude Code CLI cannot safely restrict file edits to `AI_HANDOFF.md` only in non-interactive mode.
 
 **What cycle does:**
-1. Checks eligibility: state, turn ownership, Implementer bound to Claude Code, the
+1. Checks eligibility through the adapter registry: state, turn ownership, Implementer bound to Claude Code, the
    Reviewer != Implementer role invariant, and a clean working tree (tracked and untracked
    files; only the local handoff files `AI_HANDOFF.md`, `NEXT_TURN.md`, `USER_REQUEST.md`,
    and `HANDOFF_LOOP.log` are exempt).
@@ -279,7 +330,7 @@ invariant.
 
 **No automatic commit, push, or deploy.** `cycle` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
 
-**No Master automation.** The default Master (Codex) has no local CLI, so Master turns always remain manual. `cycle` only automates an Implementer bound to Claude Code.
+**No Master automation.** The default Master (Codex) has no verified local callable adapter, so Master turns always remain manual. `cycle` only automates turns that the adapter registry marks callable.
 
 **macOS/Linux.** `cycle` requires PowerShell (`handoff.ps1`). If you have `pwsh` on macOS/Linux, use `pwsh scripts/handoff.ps1 cycle`. Without `pwsh`, use `bash scripts/handoff.sh next` to generate `NEXT_TURN.md` and paste the prompt manually. `bash scripts/handoff.sh cycle` prints a blocked message and exits 1.
 
@@ -289,10 +340,10 @@ invariant.
 
 ### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]`
 
-Run a bounded loop of automated handoff turns until a hard stop. This is the v0.17.0
-autonomous-loop skeleton: it routes each turn by `State -> Role -> Tool`, runs only
-callable safe turns, re-reads `AI_HANDOFF.md` after every automated turn, writes a local
-turn log, and stops with a clear reason.
+Run a bounded loop of automated handoff turns until a hard stop. It routes each turn by
+`State -> Role -> Tool -> Adapter`, runs only callable safe turns, re-reads
+`AI_HANDOFF.md` after every automated turn, writes a local turn log, and stops with a
+clear reason.
 
 ```powershell
 .\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
@@ -300,12 +351,13 @@ turn log, and stops with a clear reason.
 .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
 ```
 
-**What it automates:** only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`
-turns where the Implementer is bound to Claude Code - the same callable turn as `cycle`,
-repeated up to `MaxTurns` times with one upfront confirmation for the whole session.
+**What it automates:** only states the adapter registry marks callable. In v0.19.0 that
+means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
+Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
+`MaxTurns` times with one upfront confirmation for the whole session.
 
 **What it cannot automate yet:** Master turns, Reviewer turns, and User decisions. Codex
-has no local callable adapter, so when the next actor is Codex (Master or Reviewer) the
+has no verified local callable adapter, so when the next actor is Codex (Master or Reviewer) the
 loop refreshes `NEXT_TURN.md`, prints the exact next actor and paste instruction, and
 stops with exit 0. Investigation (`NEEDS_INVESTIGATION`), planning (`PLAN_REQUIRED`), and
 `QUESTION_FOR_IMPLEMENTER` turns also remain manual - the Claude Code CLI turn cannot be
@@ -527,7 +579,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Full Codex <-> Claude automation (as of v0.17.0 the callable-agent `loop` skeleton exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no local callable adapter)
+- Full Codex <-> Claude automation (as of v0.19.0 the adapter-driven `loop` exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no verified local callable adapter)
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching
@@ -640,6 +692,7 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
   SKILL.md         shared protocol index and role model (skill entrypoint)
   MASTER.md        Master + Reviewer protocol: decision router, gates, states, review
   IMPLEMENTER.md   Implementer protocol: investigation mode, planning mode, implementation
+  ADAPTERS.md      adapter registry and automation capability contract
   CODEX.md         Codex entry pointer (resolves role -> MASTER.md or IMPLEMENTER.md)
   CLAUDE.md        Claude Code entry pointer (resolves role -> IMPLEMENTER.md or MASTER.md)
   CAPABILITIES.md  agent capability profile (tool strengths + default role binding)
@@ -659,6 +712,7 @@ The adapter files are small stubs. All protocol content lives in `.ai/skills/cod
 | `.ai/skills/codex-claude-handoff/SKILL.md` | Shared source of truth - protocol index and role model |
 | `.ai/skills/codex-claude-handoff/MASTER.md` | Master + Reviewer role protocol |
 | `.ai/skills/codex-claude-handoff/IMPLEMENTER.md` | Implementer role protocol |
+| `.ai/skills/codex-claude-handoff/ADAPTERS.md` | Adapter registry and automation capability contract |
 | `.ai/skills/codex-claude-handoff/CODEX.md` | Codex entry pointer - resolves Codex's role |
 | `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role |
 | `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter - points to `.ai/` |
@@ -779,6 +833,7 @@ AI_SEQUENCE.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
+.ai/skills/codex-claude-handoff/ADAPTERS.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
@@ -837,6 +892,7 @@ AI_SEQUENCE.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
+.ai/skills/codex-claude-handoff/ADAPTERS.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md
@@ -875,6 +931,7 @@ CLAUDE.md
 .ai/skills/codex-claude-handoff/MASTER.md
 .ai/skills/codex-claude-handoff/IMPLEMENTER.md
 .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md
+.ai/skills/codex-claude-handoff/ADAPTERS.md
 .ai/skills/codex-claude-handoff/CODEX.md
 .ai/skills/codex-claude-handoff/CLAUDE.md
 .ai/skills/codex-claude-handoff/CAPABILITIES.md

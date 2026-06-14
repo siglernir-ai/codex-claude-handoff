@@ -7,8 +7,9 @@ Scope boundaries: this file is normative for the method layers, the lifecycle
 mapping, the vocabulary, precedence, and the sequence contract. It is NOT normative
 for per-role behavior (see `MASTER.md` and `IMPLEMENTER.md`), the role-to-tool
 binding (see `.ai/roles/ROLE_ASSIGNMENT.md`), the safety model (see `ROADMAP.md`,
-"Safety Model for Autonomous Dialogue"), or the current task state (see
-`AI_HANDOFF.md`). It quotes those sources; it must never alter them.
+"Safety Model for Autonomous Dialogue"), adapter capability records (see
+`ADAPTERS.md`), or the current task state (see `AI_HANDOFF.md`). It quotes those
+sources; it must never alter them.
 
 ## Precedence
 
@@ -73,6 +74,7 @@ process.
 | Specification | the Master's task analysis and task writing (NEEDS_ANALYSIS -> a defined task in `AI_HANDOFF.md`) |
 | Architecture | Planning Gate output (PLAN_REQUIRED -> PLAN_READY_FOR_REVIEW) |
 | Tooling & Capability Plan | `CAPABILITIES.md` consultation plus a read-only NEEDS_INVESTIGATION pass |
+| Automation capability | `ADAPTERS.md` resolves role/tool/state to callable or manual behavior |
 | Sequence ownership | the Master's Sequence Owner duty (Layer 2): the numbered execution plan |
 | Current handoff | `AI_HANDOFF.md` - one task per cycle |
 | Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
@@ -119,6 +121,11 @@ change.
   to Codex), or the turn type cannot be safely automated. This is an automation
   limitation, not a user decision; the next step is an Operator Manual Action
   (paste the prepared prompt into the bound tool).
+- **Adapter** (since v0.19.0) - a local capability contract for a role/tool/turn:
+  whether it is callable, which existing states it supports, how it is invoked or
+  run manually, its safety limits, stop category, and whether user authorization is
+  required. Adapters do not add roles, states, or approval authority. See
+  `ADAPTERS.md`.
 
 ## Stop Routing (since v0.18.2)
 
@@ -170,6 +177,7 @@ Single authority per concern:
 | Source edits, investigation, and planning | The Implementer (`IMPLEMENTER.md`) |
 | Independent review | The Reviewer (`MASTER.md`; invariant in `ROLE_ASSIGNMENT.md`) |
 | Manual adapter actions | The Operator action category (this file) - performed by the user |
+| Adapter capability and callable/manual status | `ADAPTERS.md` |
 | Automation stop semantics | This file, "Stop Routing": workflow scripts must print one of the defined stop categories. Exit codes remain script behavior and must not be redefined as the category system. |
 
 - New vocabulary must map to existing machinery; this specification may not invent

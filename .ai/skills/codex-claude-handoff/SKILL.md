@@ -36,6 +36,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `MASTER.md` | Master + Reviewer role protocol: decision router, gates, states, review, verification |
 | `IMPLEMENTER.md` | Implementer role protocol: investigation mode, planning mode, implementation rules, states |
 | `PROTOCOL_METHOD.md` | Protocol method specification: method layers, lifecycle mapping, vocabulary, precedence (since v0.18.0) |
+| `ADAPTERS.md` | Adapter registry and automation capability contract (since v0.19.0) |
 | `CODEX.md` | Codex entry pointer - resolves Codex's current role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
@@ -59,6 +60,7 @@ When this protocol is active, expect these files in the project root:
 - `CLAUDE.md` - the operational entry file for Claude Code (resolves its role)
 - `AI_HANDOFF.md` - current state, which role acts next, changed files, verification, risks, and next step
 - `AI_SEQUENCE.md` - local multi-task ordering artifact (since v0.18.1): ordered task list, per-task status, release checkpoints. Local, gitignored, never committed; see `PROTOCOL_METHOD.md`
+- `.ai/skills/codex-claude-handoff/ADAPTERS.md` - adapter registry for callable/manual automation status (since v0.19.0)
 
 ## Encoding-Safe Handoff Rule
 

@@ -3,6 +3,25 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.19.0 - Adapter Registry + Automation Harness
+
+- Added canonical `ADAPTERS.md` (+ template mirror): adapter contract, required
+  fields, default local registry, and honest local status. Only Implementer bound
+  to Claude Code is callable, and only for `READY_FOR_IMPLEMENTATION`; Codex-bound
+  Master/Reviewer turns remain manual because no verified local Codex adapter
+  exists.
+- Added `handoff.ps1 adapters` and `handoff.sh adapters` to print each role's bound
+  tool, callable status, automatable states, manual/non-callable reason, safety
+  limits, stop category, user authorization, and next enablement step.
+- Refactored `cycle` and `loop` to resolve callable/manual automation through an
+  adapter resolver instead of scattered hard-coded assumptions. Behavior remains
+  intentionally narrow: no fake Codex adapter and no automation for investigation,
+  planning, question turns, commits, pushes, tags, deploys, databases, secrets, or
+  product decisions.
+- Updated protocol docs, role binding notes, README, installers, and roadmap to
+  describe adapter status and the remaining v0.19.x/v0.20.0 fast path.
+- Bumped `VERSION` to 0.19.0 (canonical and template mirror).
+
 ## 0.18.2.1 - Stop Routing Consistency Fix
 
 - Fixed the `PROTOCOL_METHOD.md` Non-Contradiction Rules table (+ mirror): the

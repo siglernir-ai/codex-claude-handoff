@@ -49,9 +49,14 @@ The User is always the approval point and is never one of these roles.
 
 ## Tooling Note
 
-- `scripts/handoff.ps1 cycle` (alias `run-next`) and `scripts/handoff.ps1 loop` can
-  only automate an Implementer bound to Claude Code, because only Claude Code has a
-  local CLI. If the Implementer is bound to a tool without a local CLI (for example
+- Automation capability is resolved through
+  `.ai/skills/codex-claude-handoff/ADAPTERS.md` (since v0.19.0). Role binding says
+  which tool holds each role; the adapter registry says whether that role/tool/turn
+  is callable.
+- `scripts/handoff.ps1 adapters` prints the current resolved adapter status.
+- In the default local registry, `cycle` (alias `run-next`) and `loop` can automate
+  only `READY_FOR_IMPLEMENTATION` for an Implementer bound to Claude Code. If the
+  Implementer is bound to a tool without a verified local adapter (for example
   Codex), these commands block and the Implementer turn must be run manually.
 - `cycle` and `loop` enforce the invariant above in their preflight: if the Reviewer
   and the Implementer resolve to the same tool, they block before any automation
