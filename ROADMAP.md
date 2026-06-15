@@ -396,6 +396,38 @@ exists.
 
 ---
 
+## Post-1.0 Milestones
+
+### v1.1.0 - Codex CLI Adapter Verification
+
+**Goal:** Determine, honestly and evidence-first, whether the local Codex CLI can serve
+as a safe protocol adapter - the first concrete step toward the deferred full
+autonomous loop without weakening any safety boundary.
+
+**Includes:**
+- A read-only verification record in `ADAPTERS.md` (+ template mirror): the candidate
+  `codex exec` invocation shape and the criteria a future verification turn must meet
+  before any Codex role/turn may be marked callable.
+- Refreshed adapter-status wording in `ADAPTERS.md` and README (discovery alone is not
+  sufficient).
+
+**Does not include:**
+- Marking Codex callable, automating Master/Reviewer turns, a Codex MCP/API bridge,
+  new roles, new states, or any script behavior change.
+
+**Exit criteria (honest status):**
+- The candidate `codex exec` invocation shape and the callability criteria are
+  recorded. MET.
+- VERIFIED: a read-only `codex exec` smoke test ran successfully (read `AI_HANDOFF.md`,
+  emitted JSONL, wrote `CODEX_READONLY_SMOKE_OK`, no git change), demonstrating
+  read-only safety and deterministic output for a manual run. The installed CLI does
+  not accept `--ask-for-approval`, so that flag was dropped from the candidate shape.
+- STILL `callable: no`: no protocol wrapper/adapter has been implemented and tested, so
+  the smoke test alone does not make Codex callable. A future turn must implement and
+  test a safe adapter (all four criteria) before any Codex adapter is marked callable.
+
+---
+
 ## Safety Model for Autonomous Dialogue
 
 These boundaries apply to any automated turn in v0.16.0 and especially v0.17.0. Every item

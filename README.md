@@ -64,7 +64,12 @@ Current local status:
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION`
   through `handoff.ps1 cycle` / `handoff.ps1 loop`.
 - Master and Reviewer bound to Codex are manual because this repository has no
-  verified local Codex CLI, MCP adapter, API bridge, or external callable adapter.
+  verified local Codex callable adapter. A Codex CLI binary may be discoverable on a
+  machine, and as of v1.1.0 a read-only `codex exec` smoke test has been run
+  successfully (read-only sandbox, deterministic JSON output, no git change) - but that
+  is not sufficient on its own: no protocol wrapper/adapter has been implemented and
+  tested, so Codex stays `callable: no`. No MCP adapter or API bridge is wired in. See
+  the "Codex CLI Verification" section of `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.

@@ -57,8 +57,10 @@ contract shape as role adapters.
   restricted to handoff-only edits in non-interactive mode.
 - Master and Reviewer turns remain manual until a real local adapter for the
   bound tool exists and is verified.
-- Codex is not callable in this repository. No Codex CLI, MCP adapter,
-  API bridge, or external adapter is present in the local protocol files.
+- Codex is not callable in this protocol. A discovered Codex CLI binary - even with a
+  passing read-only `codex exec` smoke test - is not sufficient on its own: no protocol
+  wrapper/adapter has been implemented and tested, and no MCP adapter or API bridge is
+  wired into the workflow scripts. See "Codex CLI Verification" below.
 - Since v0.19.1, `release-check` and `release` are PowerShell-only. Bash reports the
   limitation honestly and does not run release git mutations.
 
@@ -106,3 +108,42 @@ Actors `TBD`). They edit only the local, gitignored `AI_SEQUENCE.md` and
 `AI_HANDOFF.md`, fail closed on any missing/unverified/ambiguous input, and never run
 git add/commit/push/tag, deploys, database, or secret actions. They are
 PowerShell-only; Bash refuses honestly and points to PowerShell.
+
+## Codex CLI Verification (v1.1.0)
+
+A bundled Codex CLI may be present on a machine (an OpenAI Codex install exposing a
+`codex exec` non-interactive subcommand, plus `review` and `mcp-server` subcommands).
+Discovering such a binary does NOT make Codex callable in this protocol.
+
+Before any Codex role/turn may be recorded `callable: yes`, a verification turn must
+demonstrate, and this registry must record, all of the following:
+
+1. Read-only safety: a `codex exec` invocation, constrained by a read-only sandbox,
+   reads `AI_HANDOFF.md` / `NEXT_TURN.md` without writing or editing any file it was not
+   authorized to change.
+2. Determinism: the invocation produces structured, parseable output the workflow
+   scripts can consume (for example via `--output-last-message` and/or `--json`).
+3. Bounded approval: the path never requires
+   `--dangerously-bypass-approvals-and-sandbox` or danger-full-access.
+4. Reviewer independence: a Codex Reviewer adapter is admissible only when Codex is
+   not also that task's Implementer. The invariant in `.ai/roles/ROLE_ASSIGNMENT.md`
+   and the `Task Actors` release audit continue to apply unchanged.
+
+Status as of v1.1.0: a read-only `codex exec` smoke test has been run successfully.
+Using `codex exec --cd <repo> --sandbox read-only --ephemeral --json
+--output-last-message <tempfile> <prompt>`, the CLI read `AI_HANDOFF.md`, emitted JSONL
+events, wrote the expected final message `CODEX_READONLY_SMOKE_OK`, and left `git
+status` unchanged. That demonstrates criteria 1-2 (read-only safety; deterministic,
+parseable output) for a one-off manual run, executed under a read-only sandbox with no
+bypass flag (criterion 3).
+
+Codex nonetheless remains `callable: no` for all roles and all states, exactly as in
+the Default Local Registry, because a successful manual smoke test is necessary but not
+sufficient: no protocol wrapper/adapter has been implemented and tested. Nothing wires a
+per-turn Codex invocation into the workflow scripts with enforced read-only sandboxing,
+output capture, and Reviewer independence (criterion 4). The verified candidate
+invocation shape above is recorded for that future adapter turn. Note: the installed CLI
+does NOT accept `--ask-for-approval`, so that flag is not part of the shape; a
+config-based approval mechanism may be recorded later only if directly verified. Until a
+tested adapter records passing evidence for all four criteria, no Codex adapter may be
+marked callable.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Protocol Test Harness (Bash companion) - codex-claude-handoff v1.0.0
+# Protocol Test Harness (Bash companion) - codex-claude-handoff v1.1.0
 #
 # The protocol test harness is PowerShell-first: scripts/protocol-tests.ps1 holds the
 # full fixture-driven suite (state routing, adapter decisions, stop categories, release

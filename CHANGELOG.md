@@ -3,6 +3,37 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.1.0 - Codex CLI Adapter Verification
+
+- First post-1.0 task: verified whether the local Codex CLI can serve as a safe
+  protocol adapter. Outcome: a Codex CLI binary is discoverable on the machine
+  (an OpenAI Codex install exposing `codex exec`, `review`, and `mcp-server`), and a
+  read-only `codex exec` smoke test was run successfully (it read `AI_HANDOFF.md`,
+  emitted JSONL events, wrote the final message `CODEX_READONLY_SMOKE_OK`, and left
+  `git status` unchanged). Codex nonetheless remains `callable: no` for all roles and
+  all states, because no protocol wrapper/adapter has been implemented and tested: a
+  successful manual smoke test is necessary but not sufficient to mark a role callable.
+- Added a "Codex CLI Verification (v1.1.0)" section to `ADAPTERS.md` (+ template
+  mirror) recording the verified candidate `codex exec` invocation shape (`--cd`, a
+  read-only `--sandbox`, `--ephemeral`, `--output-last-message`, `--json`; the installed
+  CLI does NOT accept `--ask-for-approval`, so that flag is not used) and the four
+  criteria a future verification turn must demonstrate and record before any Codex
+  role/turn may be marked callable: read-only safety, deterministic parseable output,
+  bounded approval (never `--dangerously-bypass-approvals-and-sandbox` or
+  danger-full-access), and preserved Reviewer independence (Codex Reviewer admissible
+  only when Codex is not also that task's Implementer).
+- Refreshed the stale `ADAPTERS.md` State-Specific Note and the README Adapter Registry
+  status: "no Codex CLI present" became "a discovered Codex CLI binary - even with a
+  passing read-only smoke test - is not sufficient on its own without an implemented and
+  tested protocol adapter." The independent-review invariant and `Task Actors` release
+  audit are unchanged.
+- No new role, no new protocol state, no script behavior change, and no fake
+  MCP/API/Codex-callable adapter. No commit/push/tag/deploy/db/secret automation was
+  added; the Default Local Registry decisions (Codex non-callable) are unchanged and
+  remain covered by the existing protocol-test harness adapter checks.
+- Bumped `VERSION` to 1.1.0 (canonical and template mirror) and the protocol-test
+  harness header stamps to v1.1.0 (canonical and template mirror).
+
 ## 1.0.0 - Stable Protocol Release
 
 - Declares the codex-claude-handoff protocol stable. This is a packaging and
