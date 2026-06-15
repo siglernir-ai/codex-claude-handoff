@@ -457,6 +457,39 @@ push, tag, deploy, database, or secret automation; `cycle` and `run-next` are un
 
 ---
 
+## Protocol Test Harness
+
+Since v0.20.0, a repeatable protocol-level test harness verifies the handoff scripts
+without touching your real coordination files.
+
+```powershell
+.\scripts\protocol-tests.ps1
+```
+
+On macOS/Linux:
+
+```bash
+bash scripts/protocol-tests.sh
+```
+
+`scripts/protocol-tests.ps1` is the full, PowerShell-first suite. Each test builds a
+disposable fixture project in a temp directory and runs the real `handoff.ps1` against
+it as a child process, asserting on exit codes and printed output. It covers state
+routing, turn-ownership mismatch routing, adapter decisions, stop categories, the
+release-executor guards, the sequence-advance guards, mirror parity, and the safety
+boundaries (dry-run commands change no files and run no git mutations). It never reads
+or mutates the real `AI_HANDOFF.md` / `AI_SEQUENCE.md`. Exit code `0` means all checks
+passed; `1` means one or more failed.
+
+`scripts/protocol-tests.sh` is an honest Bash companion (Bash is not the executor host
+for `release`/`sequence-advance`). It verifies the Bash-side behavior `handoff.sh` is
+responsible for - that the PowerShell-only executors are refused honestly and change no
+files, and that the canonical/template script mirrors are in sync - and points to the
+PowerShell suite for the full coverage. The harness runs no `git` mutations and adds no
+deploy/database/secret behavior.
+
+---
+
 ## Quick Prompts
 
 Use these short prompts to run the handoff workflow without rewriting the protocol each time.
@@ -879,7 +912,7 @@ bash scripts/install.sh ~/projects/my-project
 After install, mark the Bash scripts executable:
 
 ```bash
-chmod +x /path/to/your-project/scripts/handoff.sh /path/to/your-project/scripts/next-step.sh
+chmod +x /path/to/your-project/scripts/handoff.sh /path/to/your-project/scripts/next-step.sh /path/to/your-project/scripts/protocol-tests.sh
 ```
 
 ### What the installer does
@@ -921,6 +954,8 @@ scripts/handoff.ps1
 scripts/next-step.ps1
 scripts/handoff.sh
 scripts/next-step.sh
+scripts/protocol-tests.ps1
+scripts/protocol-tests.sh
 ```
 
 It also creates or updates:
@@ -976,6 +1011,8 @@ scripts/handoff.ps1
 scripts/next-step.ps1
 scripts/handoff.sh
 scripts/next-step.sh
+scripts/protocol-tests.ps1
+scripts/protocol-tests.sh
 ```
 
 This prevents accidental loss of project-specific instructions, customized skill adapters, or customized workflow scripts.
@@ -1011,6 +1048,8 @@ scripts/handoff.ps1
 scripts/next-step.ps1
 scripts/handoff.sh
 scripts/next-step.sh
+scripts/protocol-tests.ps1
+scripts/protocol-tests.sh
 ```
 
 `AI_HANDOFF.md` should not appear in `git status`, because it should remain local and ignored by Git. Same for `NEXT_TURN.md`, `USER_REQUEST.md`, `HANDOFF_LOOP.log`, and `AI_SEQUENCE.md`.

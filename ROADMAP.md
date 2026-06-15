@@ -342,6 +342,22 @@ stop categories, mirror parity, and safety boundaries.
 - Scripted fixtures for key states and role bindings.
 - Assertions for no new roles/states, no unsafe automation, and consistent
   PowerShell/Bash status behavior.
+- PowerShell-first `scripts/protocol-tests.ps1` (full suite, black-box against the real
+  `handoff.ps1` using disposable temp fixtures) and a Bash companion
+  `scripts/protocol-tests.sh` (honest Bash-side checks + mirror parity).
+- Template mirrors of both scripts and installer enumeration.
+
+**Does not include:**
+- Any git mutation, deploy, database, or secret action; new role; or new protocol state.
+- Reading or mutating the real `AI_HANDOFF.md` / `AI_SEQUENCE.md`.
+
+**Exit criteria:**
+- `scripts/protocol-tests.ps1` runs the suite and exits 0 when the protocol is healthy,
+  1 on any failure, using only temporary fixtures.
+- `scripts/protocol-tests.sh` verifies the Bash refusals and mirror parity and exits 0.
+- Tests assert fail-closed behavior for the release and sequence guards and confirm
+  dry-run commands change no files and run no git mutations.
+- Canonical/template mirrors and installers ship both harness scripts.
 
 ---
 

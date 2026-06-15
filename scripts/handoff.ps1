@@ -571,14 +571,10 @@ function Invoke-CommitCheck {
             return
         }
 
-        # Compare sets to detect mismatch
+        # Compare sets to detect mismatch (Test-SameFileSet is null-safe for empty lists)
         $mismatch = $false
         if ($actualTracked.Count -gt 0) {
-            $handoffSet = [System.Collections.Generic.HashSet[string]]::new(
-                [string[]]$commitFiles, [System.StringComparer]::OrdinalIgnoreCase)
-            $actualSet  = [System.Collections.Generic.HashSet[string]]::new(
-                [string[]]$actualTracked, [System.StringComparer]::OrdinalIgnoreCase)
-            $mismatch = -not $handoffSet.SetEquals($actualSet)
+            $mismatch = -not (Test-SameFileSet -Expected $commitFiles -Actual $actualTracked)
             # Also warn if NS explicitly says commit only AI_HANDOFF.md while real files changed
             if (-not $mismatch -and $nsHasStaleGuidance) { $mismatch = $true }
         }
@@ -699,8 +695,13 @@ function Get-TaskActors {
 
 function Test-SameFileSet {
     param([object[]]$Expected, [object[]]$Actual)
-    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$Expected, [System.StringComparer]::OrdinalIgnoreCase)
-    $actualSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$Actual, [System.StringComparer]::OrdinalIgnoreCase)
+    # Build sets defensively: an empty collection binds as $null to an [object[]]
+    # parameter, and HashSet's (IEnumerable, comparer) constructor throws
+    # "Value cannot be null" on a null source. foreach over $null is a no-op.
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($e in $Expected) { [void]$expectedSet.Add([string]$e) }
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($a in $Actual) { [void]$actualSet.Add([string]$a) }
     return $expectedSet.SetEquals($actualSet)
 }
 

@@ -79,6 +79,8 @@ WORKFLOW_SCRIPTS=(
     "scripts/next-step.ps1"
     "scripts/handoff.sh"
     "scripts/next-step.sh"
+    "scripts/protocol-tests.ps1"
+    "scripts/protocol-tests.sh"
 )
 
 for rel in "${WORKFLOW_SCRIPTS[@]}"; do
@@ -118,4 +120,4 @@ echo "   PowerShell (Windows / pwsh):  .\\scripts\\handoff.ps1 status"
 echo "   Bash (macOS / Linux):         bash scripts/handoff.sh status"
 echo ""
 echo "On macOS/Linux, mark scripts executable after install:"
-echo "   chmod +x scripts/handoff.sh scripts/next-step.sh"
+echo "   chmod +x scripts/handoff.sh scripts/next-step.sh scripts/protocol-tests.sh"

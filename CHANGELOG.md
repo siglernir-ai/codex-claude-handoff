@@ -3,6 +3,34 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 0.20.0 - Protocol Test Harness
+
+- Added `scripts/protocol-tests.ps1`: a PowerShell-first, black-box protocol test
+  harness. Each test builds a disposable fixture project in a temp directory and runs
+  the real `handoff.ps1` against it as a child process, asserting on exit codes and
+  output. Coverage: state routing, turn-ownership mismatch routing, adapter decisions,
+  stop categories, release-executor guards (fail closed), sequence-advance guards (fail
+  closed), mirror parity, and safety boundaries (dry runs change no files / run no git
+  mutations). It never reads or mutates the real `AI_HANDOFF.md` / `AI_SEQUENCE.md`.
+  Exit 0 = all passed, 1 = any failure.
+- Added `scripts/protocol-tests.sh`: an honest Bash companion that verifies the
+  Bash-side behavior `handoff.sh` owns (the PowerShell-only `release`/`sequence`
+  executors are refused honestly and change no files) plus canonical/template mirror
+  parity, and points to the PowerShell suite for full coverage.
+- The harness found and this release fixes a latent crash in `handoff.ps1`: the
+  release/commit scope comparison built a `HashSet` directly from a possibly-empty
+  collection, which PowerShell binds as `$null`, throwing "Value cannot be null"
+  instead of failing closed cleanly. `Test-SameFileSet` is now null-safe and
+  `commit-check` routes through it. No behavior change for non-empty inputs.
+- Added template mirrors `templates/scripts/protocol-tests.ps1` and
+  `templates/scripts/protocol-tests.sh`, and added both scripts to the PowerShell and
+  Bash installers' workflow-script lists (and the macOS/Linux `chmod +x` hint).
+- Updated README (new "Protocol Test Harness" section + install file lists) and ROADMAP
+  (v0.20.0 exit criteria). No new role, no new protocol state, no fake
+  MCP/API/Codex-callable adapter, and no commit/push/tag/deploy/db/secret automation
+  was added; git mutations remain only in the guarded release executor.
+- Bumped `VERSION` to 0.20.0 (canonical and template mirror).
+
 ## 0.19.2 - Sequence Advance Command
 
 - Added PowerShell `handoff.ps1 sequence-check` (dry run) and `sequence-advance`

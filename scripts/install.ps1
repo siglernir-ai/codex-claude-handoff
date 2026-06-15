@@ -139,7 +139,9 @@ $WorkflowScripts = @(
     "scripts/handoff.ps1",
     "scripts/next-step.ps1",
     "scripts/handoff.sh",
-    "scripts/next-step.sh"
+    "scripts/next-step.sh",
+    "scripts/protocol-tests.ps1",
+    "scripts/protocol-tests.sh"
 )
 
 foreach ($RelPath in $WorkflowScripts) {
