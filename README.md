@@ -4,6 +4,15 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 
 The goal is to avoid copy-pasting long context between tools.
 
+> **Stable (v1.0.0).** The role model, states, gates, adapter contract, workflow
+> scripts, and safety boundaries are frozen with a commitment to backward compatibility.
+> 1.0.0 is a packaging release with no breaking changes from the 0.x line and no
+> migration steps. The automation it stabilizes is intentionally bounded: only the
+> Claude Code Implementer turn is callable, the release executor and sequence advance are
+> guarded and user-authorized, and Master/Reviewer (Codex) turns remain manual because no
+> verified local Codex adapter exists. Full autonomous Codex <-> Claude dialogue is
+> post-1.0 work. See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
+
 ## Concept
 
 The protocol is organized around three roles, bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`:
@@ -355,7 +364,7 @@ is needed only if the package is not cached.
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
 compatibility).
 
-**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. In v0.19.1, only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
+**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. Only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
@@ -420,8 +429,8 @@ clear reason.
 .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
 ```
 
-**What it automates:** only states the adapter registry marks callable. In v0.19.1 that
-means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
+**What it automates:** only states the adapter registry marks callable - that means
+`State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
 Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
 `MaxTurns` times with one upfront confirmation for the whole session.
 

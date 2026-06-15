@@ -364,22 +364,35 @@ stop categories, mirror parity, and safety boundaries.
 ### v1.0.0 - Stable Protocol Release
 
 **Goal:** Declare the protocol stable and ready for use in production projects with a
-commitment to backward compatibility.
+commitment to backward compatibility, around the bounded-automation model that actually
+exists.
 
 **Includes:**
-- All milestones through v0.20.0 validated.
-- Full cross-platform support confirmed.
-- Any breaking changes from the 0.x line resolved and documented.
-- A migration guide if any protocol behavior changed incompatibly.
+- All milestones through v0.20.0 validated with the protocol test harness and the README
+  release checklist.
+- Cross-platform support confirmed: PowerShell is the executor host; the Bash scripts
+  cover status/next/start/commit-check/adapters and refuse the PowerShell-only executors
+  honestly.
+- Breaking changes from the 0.x line resolved and documented. There are none: 1.0.0 is a
+  packaging release.
+- Migration notes: no migration steps required (see CHANGELOG 1.0.0).
 - README, CHANGELOG, and ROADMAP consistent with the released state.
 
 **Does not include:**
 - New feature additions (those go in post-1.0 releases).
+- Full autonomous Codex <-> Claude dialogue (requires a verified local Codex callable
+  adapter; deferred to post-1.0).
 
-**Exit criteria:**
-- The protocol has been used in at least one real project through a full autonomous loop.
-- All safety model guarantees hold in practice.
-- No known unresolved issues from the 0.x line.
+**Exit criteria (honest status):**
+- All milestones through v0.20.0 validated and the safety model boundaries enforced and
+  test-covered (release/sequence guards fail closed; dry runs change no files and run no
+  git mutations). MET.
+- No known unresolved issues from the 0.x line. MET.
+- DEFERRED (intentionally not met): "used in at least one real project through a full
+  autonomous loop." A full autonomous loop is not possible with the implemented
+  automation - Master and Reviewer turns (Codex by default) are non-callable because no
+  verified local Codex adapter exists. v1.0.0 declares the bounded-automation protocol
+  stable; full autonomy remains future work and does not gate this stability release.
 
 ---
 

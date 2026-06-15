@@ -53,11 +53,11 @@ contract shape as role adapters.
 - `READY_FOR_IMPLEMENTATION` can be automated only when the Implementer is bound
   to Claude Code and the local Claude Code CLI path is available.
 - `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`, and `QUESTION_FOR_IMPLEMENTER` remain
-  manual in v0.19.0. The current Claude Code CLI invocation cannot be safely
+  manual. The current Claude Code CLI invocation cannot be safely
   restricted to handoff-only edits in non-interactive mode.
 - Master and Reviewer turns remain manual until a real local adapter for the
   bound tool exists and is verified.
-- Codex is not callable in this repository in v0.19.0. No Codex CLI, MCP adapter,
+- Codex is not callable in this repository. No Codex CLI, MCP adapter,
   API bridge, or external adapter is present in the local protocol files.
 - Since v0.19.1, `release-check` and `release` are PowerShell-only. Bash reports the
   limitation honestly and does not run release git mutations.

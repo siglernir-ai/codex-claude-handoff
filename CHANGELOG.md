@@ -3,6 +3,40 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.0.0 - Stable Protocol Release
+
+- Declares the codex-claude-handoff protocol stable. This is a packaging and
+  consistency release: it freezes the role model, states, gates, adapter contract,
+  workflow scripts, and safety boundaries built through v0.20.0. No new role, state,
+  automation path, or adapter capability was added.
+- Validated all milestones through v0.20.0 with the protocol test harness
+  (`scripts/protocol-tests.ps1` / `scripts/protocol-tests.sh`) and the README release
+  checklist (VERSION mirror parity, canonical/template script parity, changelog entry).
+- Documented the actual autonomy model honestly. The implemented automation is bounded:
+  `cycle`/`loop` automate only the `READY_FOR_IMPLEMENTATION` Implementer turn bound to
+  Claude Code; the guarded PowerShell release executor performs commit/push/tag only
+  after `REVIEW_DONE`, exact-scope checks, and an explicit user authorization token; and
+  `sequence-advance` updates only the local, gitignored coordination files. Master and
+  Reviewer turns (Codex by default) remain non-callable because this repository has no
+  verified local Codex CLI, MCP adapter, or API bridge. Investigation, planning, and
+  question turns remain manual.
+- Compatibility / migration: there are no incompatible breaking changes from the 0.x
+  line. A project already on any 0.1x version upgrades to 1.0.0 by bumping the `VERSION`
+  file (canonical and template mirror); no handoff state, role binding, script command,
+  exit code, or `.gitignore` rule changed. No migration steps are required.
+- Honest scope note: the original ROADMAP v1.0.0 exit criterion "used in at least one
+  real project through a full autonomous loop" is intentionally NOT met and is deferred
+  to post-1.0 work. Full autonomous Codex <-> Claude dialogue requires a verified local
+  Codex callable adapter, which does not exist. v1.0.0 declares the bounded-automation
+  protocol stable, not full autonomy. See ROADMAP.md.
+- Preserved all safety boundaries: user release authorization, actual `Task Actors`
+  release audit, no deploy/database/secrets/production-config automation, and no fake
+  MCP/API/Codex adapter claims.
+- Cleaned stale version pins in `ADAPTERS.md` State-Specific Notes (now present-tense
+  current status) and bumped the protocol-test harness header stamps to v1.0.0
+  (canonical and template mirror).
+- Bumped `VERSION` to 1.0.0 (canonical and template mirror).
+
 ## 0.20.0 - Protocol Test Harness
 
 - Added `scripts/protocol-tests.ps1`: a PowerShell-first, black-box protocol test
