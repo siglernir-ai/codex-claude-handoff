@@ -53,8 +53,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md`nCODEX_REVIEW.jsonl`nCODEX_REVIEW_LAST.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, and CODEX_REVIEW_LAST.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -87,10 +87,20 @@ else {
         $addedRules.Add("AI_SEQUENCE.md")
     }
 
+    if ($lines -notcontains "CODEX_REVIEW.jsonl") {
+        Add-Content -Path $GitignorePath -Value "CODEX_REVIEW.jsonl"
+        $addedRules.Add("CODEX_REVIEW.jsonl")
+    }
+
+    if ($lines -notcontains "CODEX_REVIEW_LAST.md") {
+        Add-Content -Path $GitignorePath -Value "CODEX_REVIEW_LAST.md"
+        $addedRules.Add("CODEX_REVIEW_LAST.md")
+    }
+
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, and CODEX_REVIEW_LAST.md"
     }
 }
 

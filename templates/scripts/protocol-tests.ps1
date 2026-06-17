@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.1.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.2.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -91,6 +91,26 @@ function New-Fixture {
         } finally { Pop-Location }
     }
     return $dir
+}
+
+# Commit the current fixture tree so that only files created AFTER this call show up as
+# changes. Lets a review/release scope test match the handoff's Changed Files exactly
+# (otherwise the fixture's own .ai/roles/ROLE_ASSIGNMENT.md counts as an extra change).
+function Initialize-FixtureGitBaseline {
+    param([string]$Dir)
+    Push-Location $Dir
+    # Native git can write a CRLF warning to stderr; under the harness's
+    # ErrorActionPreference=Stop that would become terminating. Tolerate it locally and
+    # disable autocrlf so `git add` stays quiet.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & git -c core.autocrlf=false -c core.safecrlf=false add -A 2>$null | Out-Null
+        & git -c core.autocrlf=false commit -q -m "fixture baseline" 2>$null | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevEap
+        Pop-Location
+    }
 }
 
 # Build an AI_HANDOFF.md body from a small set of fields.
@@ -259,6 +279,215 @@ foreach ($pair in @(
         Check "mirror: $($pair[0])" (Test-FileHashMatch -Left $l -Right $rr)
     }
 }
+
+# === 9. Codex Reviewer POC guards (review-check / review-run, fail closed) ===
+Write-Host "[9] Codex Reviewer POC guards (review-check / review-run)"
+
+# Force a deterministic, unresolvable Codex CLI for these child processes so the POC
+# behavior does not depend on whether a real codex binary is on PATH in the test env.
+$env:CODEX_CLI = Join-Path $FixtureRoot "no-such-codex-cli.exe"
+
+# Happy path: READY_FOR_REVIEW / Reviewer with Codex reviewer and matching scope must
+# pass the protocol guards and stop only on the (forced) missing CLI - not on a guard.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+# Commit the baseline so only the reviewed file shows as a change (scope must match exactly).
+Initialize-FixtureGitBaseline -Dir $fx
+# Add a Changed Files entry that matches a real (untracked) file in the fixture tree.
+New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check passes protocol guards (stops only on missing Codex CLI)" (($r.Out -match "protocol guards pass, but no runnable Codex CLI is available") -and ($r.Out -notmatch "must be State: READY_FOR_REVIEW"))
+
+# Wrong state: review-check must block before any Codex resolution.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check blocks unless State is READY_FOR_REVIEW / Waiting For: Reviewer" (($r.Code -eq 1) -and ($r.Out -match "must be State: READY_FOR_REVIEW"))
+
+# Approved scope requires Waiting For: Reviewer exactly - the bound tool name (Codex) is
+# NOT accepted, even at READY_FOR_REVIEW.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Codex"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check requires Waiting For: Reviewer exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: READY_FOR_REVIEW and Waiting For: Reviewer"))
+
+# Bound Reviewer is not Codex: this POC only invokes Codex.
+$nonCodexRoles = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Codex |
+| Reviewer | Gemini |
+| Implementer | Claude Code |
+"@
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check blocks when the bound Reviewer is not Codex" (($r.Code -eq 1) -and ($r.Out -match "bound Reviewer tool must be Codex"))
+
+# Independent-review invariant: actual Reviewer must not equal actual Implementer.
+$badHandoff = New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
+$badHandoff = $badHandoff -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "actual task Reviewer must be Codex|must not equal the actual Implementer"))
+
+# Changed Files must match git status (here: empty / no reviewable files).
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "review-check blocks when Changed Files has no reviewable files" (($r.Code -eq 1) -and ($r.Out -match "no reviewable files"))
+
+# A PATH alias that resolves to `codex` but is not actually runnable for `exec --help`
+# must NOT be treated as ready. Force PATH to a fake failing codex.cmd and hide any
+# real local Codex install by pointing LOCALAPPDATA at an empty temp directory.
+$fakeBrokenPathDir = Join-Path $FixtureRoot "fake-codex-path"
+New-Item -ItemType Directory -Path $fakeBrokenPathDir -Force | Out-Null
+@'
+@echo off
+exit /b 1
+'@ | Set-Content -Path (Join-Path $fakeBrokenPathDir "codex.cmd") -Encoding ascii
+$emptyLocalAppData = Join-Path $FixtureRoot "empty-localappdata"
+New-Item -ItemType Directory -Path $emptyLocalAppData -Force | Out-Null
+$prevPath = $env:PATH
+$hadLocalAppData = Test-Path Env:\LOCALAPPDATA
+$prevLocalAppData = $env:LOCALAPPDATA
+try {
+    $env:PATH = "$fakeBrokenPathDir;$prevPath"
+    $env:LOCALAPPDATA = $emptyLocalAppData
+    Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+    Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+    $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+    Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+    Check "review-check blocks when PATH exposes a non-runnable Codex CLI alias" (($r.Code -eq 1) -and ($r.Out -match "no runnable Codex CLI is available") -and ($r.Out -notmatch "ready for operator-confirmed review-run"))
+} finally {
+    $env:PATH = $prevPath
+    if ($hadLocalAppData) {
+        $env:LOCALAPPDATA = $prevLocalAppData
+    } else {
+        Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue
+    }
+}
+
+# review-run fails closed with Environment/Preflight when the Codex CLI is unavailable,
+# and runs no Codex invocation.
+$env:CODEX_CLI = Join-Path $FixtureRoot "no-such-codex-cli.exe"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx
+try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-run blocks (exit 3) when the Codex CLI is unavailable" (($r.Code -eq 3) -and ($r.Out -match "Environment/Preflight") -and ($r.Out -match "No Codex invocation was run"))
+Check "review-run does not modify AI_HANDOFF.md when blocked" ($before -eq $after)
+Push-Location $fx
+try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "review-run creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+# review-run fails closed on a HANGING Codex: a fake CLI that answers `exec --help` but
+# then sleeps must be killed at the timeout, leaving no verdict and no git/handoff change.
+$fakeCodex = Join-Path $FixtureRoot "fake-codex-hang.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+ping -n 30 127.0.0.1 >nul
+exit /b 0
+'@ | Set-Content -Path $fakeCodex -Encoding ascii
+$env:CODEX_CLI = $fakeCodex
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx
+try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run", "-Yes", "-TimeoutSeconds", "2")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-run times out and fails closed (exit 4)" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "NO final verdict"))
+Check "review-run timeout writes no final verdict file" (-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md")))
+Check "review-run timeout does not modify AI_HANDOFF.md" ($before -eq $after)
+Push-Location $fx
+try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "review-run timeout creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# review-run must deliver the multi-word prompt through ONE channel (stdin), not as split
+# argv tokens. A fake Codex records its stdin and its argv: the multi-word prompt must
+# appear in stdin and NOT in argv (whose final token is the `-` stdin sentinel). If the
+# prompt were passed as arguments, stdin would be empty and this fails.
+$fakeEcho = Join-Path $FixtureRoot "fake-codex-echo.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > FAKE_STDIN.txt
+echo %* > FAKE_ARGV.txt
+echo VERDICT: APPROVED stdin-delivery-ok> CODEX_REVIEW_LAST.md
+:done
+'@ | Set-Content -Path $fakeEcho -Encoding ascii
+$env:CODEX_CLI = $fakeEcho
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run", "-Yes")
+$stdinFile = Join-Path $fx "FAKE_STDIN.txt"
+$argvFile  = Join-Path $fx "FAKE_ARGV.txt"
+$stdinContent = if (Test-Path $stdinFile) { Get-Content -Raw -Path $stdinFile } else { "" }
+$argvContent  = if (Test-Path $argvFile)  { Get-Content -Raw -Path $argvFile }  else { "" }
+Check "review-run delivers the multi-word prompt via stdin intact" ($stdinContent -match "Inspect ONLY these sources")
+Check "review-run does not pass the prompt as argv tokens" (($argvContent -notmatch "Inspect ONLY these sources") -and ($argvContent -match "-\s*$"))
+# Codex exited 0 AND wrote a verdict -> review-run succeeds (exit 0) and captures it. This
+# also proves the process ExitCode is read correctly (0, not a null that looks non-zero).
+Check "review-run succeeds (exit 0) and captures the verdict on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md")))
+
+# review-run must FAIL CLOSED if Codex exits 0 but writes NO final verdict (no false
+# success). A fake that emits a JSONL line but never writes the verdict file must block.
+$fakeNoVerdict = Join-Path $FixtureRoot "fake-codex-noverdict.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+echo {"type":"item"}
+:done
+exit /b 0
+'@ | Set-Content -Path $fakeNoVerdict -Encoding ascii
+$env:CODEX_CLI = $fakeNoVerdict
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $h -Encoding utf8
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-run fails closed (exit 6) when Codex exits 0 but captures no verdict" (($r.Code -eq 6) -and ($r.Out -match "no review verdict was captured"))
+Check "review-run no-verdict path leaves no verdict file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md"))) -and ($before -eq $after))
+
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
 # --- Summary ---
 Write-Host ""

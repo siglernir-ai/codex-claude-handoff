@@ -3,6 +3,91 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.2.0 - Codex Reviewer Adapter Proof of Concept
+
+- Added a narrow, conservative Codex Reviewer proof of concept to `scripts/handoff.ps1`:
+  `review-check` (dry run) and `review-run` (read-only execution after an explicit `yes`
+  confirmation). They are eligible only during `State: READY_FOR_REVIEW` /
+  `Waiting For: Reviewer`. This is the first per-turn Codex invocation wired into the
+  workflow scripts, building on the v1.1.0 verified read-only `codex exec` shape.
+- Fail-closed guards (shared `Get-ReviewPlan`): the bound Reviewer must be Codex; the
+  handoff `Task Actors` must have exactly one Implementer and one Reviewer; the actual
+  Reviewer must be Codex and must differ from the actual Implementer (the independent-
+  review invariant is unchanged); and the `Changed Files` list must match `git status`
+  after excluding local coordination files. The Changed Files / git comparison reuses the
+  release-grade parser and `Test-SameFileSet`.
+- Safe Codex CLI resolution: prefer the `CODEX_CLI` environment override, then probe a
+  local install under `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`, then `codex` on
+  `PATH`; only candidates that pass `exec --help` are accepted, so a PATH alias that
+  exists but is not runnable is refused honestly. No user-specific path is hardcoded in
+  scripts, docs, or templates. Codex is invoked only as
+  `exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message <file>
+  <prompt>`; never `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or
+  danger-full-access.
+- Capture-only by design: `review-run` saves the `--json` event stream to
+  `CODEX_REVIEW.jsonl` and the Codex final verdict to `CODEX_REVIEW_LAST.md` (both local
+  and gitignored), and then stops. It runs no git command and does NOT transition
+  `AI_HANDOFF.md`. A human or the Master applies the actual `REVIEW_DONE` /
+  `READY_FOR_IMPLEMENTATION` transition from the captured verdict; automating that is
+  deferred to v1.3.0.
+- Honest status: this is a POC, not a callable Reviewer adapter. The Default Local
+  Registry in `ADAPTERS.md` keeps Reviewer/Codex `callable: no`, unchanged. Added a "Codex
+  Reviewer POC (v1.2.0)" section to `ADAPTERS.md` (+ template mirror) and a note in
+  `PROTOCOL_METHOD.md` (+ mirror) recording the POC as a guarded Operator Manual Action,
+  not a callable role turn.
+- Added the two capture artifacts to `.gitignore`, `templates/gitignore-snippet.txt`, both
+  installers' gitignore handling, and the PowerShell clean-tree / release-scope exemption
+  list, so they are never committed and never trip the `cycle`/`loop`/`release` guards.
+- Bash `handoff.sh review-check` / `review-run` refuse honestly and point to the PowerShell
+  POC; no Bash Codex-invocation path was added.
+- Added protocol tests: `scripts/protocol-tests.ps1` covers the guard matrix (wrong state,
+  non-Codex bound Reviewer, actual Reviewer == Implementer, no reviewable files, the
+  protocol-guards-pass path) and that `review-run` fails closed with Environment/Preflight
+  when the Codex CLI is unavailable, changes no `AI_HANDOFF.md`, and creates no commit;
+  `scripts/protocol-tests.sh` covers the Bash refusals. Both harness header stamps bumped
+  to v1.2.0.
+- Robust prompt delivery (review follow-up fix): `review-run` now feeds the review
+  prompt to Codex on stdin (`codex exec ... -`) instead of as a command-line argument.
+  `Start-Process -ArgumentList` does not robustly quote a multi-word element, so the
+  prompt was being split into separate argv tokens (real smoke: Codex `error: unexpected
+  argument 'exactly' found`). The prompt is written to a temp file and supplied via
+  `-RedirectStandardInput`; stderr is now captured and printed on non-zero exit / timeout
+  for explainable failures. Added a protocol test with a fake Codex that records its
+  stdin and argv, proving the multi-word prompt arrives intact on stdin and never as
+  argv tokens.
+- Bounded-runtime review prompt (review follow-up fix): the generated review prompt is
+  now tightly scoped so the read-only review reliably finishes and writes
+  `CODEX_REVIEW_LAST.md` within the timeout. It tells Codex to be fast and minimal, NOT
+  to load AGENTS.md / CLAUDE.md / the codex-claude-handoff skill or other protocol/skill
+  files, to inspect only `AI_HANDOFF.md`, `git status --short`, and `git diff --` of the
+  Changed Files, to use `rg -- <pattern>` for ripgrep patterns beginning with `--`, and
+  to end with exactly one line `VERDICT: APPROVED` or `VERDICT: BLOCKED` plus a one-line
+  reason. (Previously the broad prompt led Codex to explore the whole protocol and time
+  out.) Capture-only semantics, stdin delivery, and the timeout/cleanup path are
+  unchanged.
+- review-run reliability fixes proven by a real local Codex run (88s/57s, well under the
+  timeout): (1) cache the `Start-Process -PassThru` process handle so `$proc.ExitCode` is
+  read reliably - without it a SUCCESSFUL run reported a null exit code that looked like a
+  non-zero failure; (2) fail closed (exit 6) if Codex exits 0 but writes no
+  `CODEX_REVIEW_LAST.md`, so "success" always means a verdict was actually captured (no
+  false success); (3) tighten review eligibility to `Waiting For: Reviewer` exactly, to
+  match the approved scope (the bound tool-name form is no longer accepted). Added
+  protocol tests for the clean-exit capture, the no-verdict fail-closed path, and the
+  Waiting-For requirement.
+- Bounded `review-run` with a fail-closed timeout (review follow-up fix): added
+  `-TimeoutSeconds` (default 180) and ran Codex as a tracked child process via
+  `Start-Process -PassThru`. On timeout `review-run` terminates the Codex process tree
+  (`taskkill /T` + `Kill()`), preserves any partial `CODEX_REVIEW.jsonl` labelled
+  incomplete, removes any partial `CODEX_REVIEW_LAST.md` so no incomplete output is read
+  as a verdict, makes no git or `AI_HANDOFF.md` change, and exits non-zero (exit 4). Added
+  a `-Yes` switch to skip the interactive confirmation for automation/tests (read-only
+  capture-only regardless), and removed shell metacharacters from the review prompt so it
+  passes safely as a single process argument. Added a protocol test (fake hanging Codex)
+  proving the timeout kills the process, writes no verdict, and changes no git/handoff.
+- No new role, no new protocol state, no MCP/API claim, and no commit/push/tag/deploy/db/
+  secret automation; `review-run` reuses the existing exit-code vocabulary (4 for the
+  bounded timeout). Bumped `VERSION` to 1.2.0 (canonical and template mirror).
+
 ## 1.1.0 - Codex CLI Adapter Verification
 
 - First post-1.0 task: verified whether the local Codex CLI can serve as a safe

@@ -428,6 +428,39 @@ autonomous loop without weakening any safety boundary.
 
 ---
 
+### v1.2.0 - Codex Reviewer Adapter Proof of Concept
+
+**Goal:** Build the first real, guarded bridge from the verified read-only smoke test
+into a per-turn Codex invocation wired into the workflow scripts - without weakening any
+safety boundary or pretending full autonomy exists.
+
+**Includes:**
+- PowerShell `handoff.ps1 review-check` (dry run) and `review-run` (read-only execution
+  after an explicit `yes` confirmation) for the Reviewer turn during `READY_FOR_REVIEW`.
+- Fail-closed guards: bound Reviewer is Codex; exactly one Task Actors Implementer and
+  Reviewer; actual Reviewer is Codex and != actual Implementer; Changed Files match git
+  status after excluding local coordination files.
+- Safe Codex CLI resolution (`CODEX_CLI` override, then PATH) verified with
+  `exec --help`; invocation only via the v1.1.0-verified read-only shape (no
+  `--ask-for-approval`, no bypass flags).
+- Local, gitignored capture artifacts (`CODEX_REVIEW.jsonl`, `CODEX_REVIEW_LAST.md`).
+- Bash refuses honestly and points to PowerShell.
+- Adapter/method/README docs, protocol tests, templates, and mirrors updated.
+
+**Does not include:**
+- Automatic `AI_HANDOFF.md` state transitions from the verdict (deferred to v1.3.0).
+- Marking any Codex role callable; automating Master turns; an MCP/API bridge; new
+  roles or states; any git/commit/push/tag/deploy/db/secret action.
+
+**Exit criteria (honest status):**
+- `review-check` prints the plan and mutates nothing; `review-run` runs Codex read-only,
+  captures the verdict locally, and changes no git state and no `AI_HANDOFF.md`. MET.
+- Guards fail closed and are test-covered; Bash refuses honestly; mirrors are in sync. MET.
+- STILL `callable: no`: this is a capture-only POC, not an end-to-end callable Reviewer
+  role turn. The Default Local Registry keeps Reviewer/Codex non-callable.
+
+---
+
 ## Safety Model for Autonomous Dialogue
 
 These boundaries apply to any automated turn in v0.16.0 and especially v0.17.0. Every item

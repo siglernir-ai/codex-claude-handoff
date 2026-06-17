@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Protocol Test Harness (Bash companion) - codex-claude-handoff v1.1.0
+# Protocol Test Harness (Bash companion) - codex-claude-handoff v1.2.0
 #
 # The protocol test harness is PowerShell-first: scripts/protocol-tests.ps1 holds the
 # full fixture-driven suite (state routing, adapter decisions, stop categories, release
@@ -124,6 +124,14 @@ check "release-check is honestly refused in Bash" $?
 run_handoff "$fx" sequence-check
 echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
 check "sequence-check is honestly refused in Bash" $?
+
+run_handoff "$fx" review-check
+echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
+check "review-check is honestly refused in Bash" $?
+
+run_handoff "$fx" review-run
+echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
+check "review-run is honestly refused in Bash" $?
 
 # Refusal must not create a git commit or mutate the handoff file.
 # Fail closed: require a real hash tool and a non-empty hash, so two empty strings

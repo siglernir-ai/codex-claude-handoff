@@ -152,6 +152,16 @@ status, the actual task Reviewer and actual task Implementer recorded in
 `AI_HANDOFF.md` `Task Actors` are present and different, pre-release checks pass,
 and the user supplies the exact release authorization token.
 
+Codex Reviewer POC (since v1.2.0): the `review-check` / `review-run` commands invoke
+Codex read-only during `READY_FOR_REVIEW` and capture a review verdict to local,
+gitignored artifacts. This is a guarded Operator Manual Action (an explicit `yes`
+confirmation runs the read-only Codex CLI), not a callable role turn: it performs no
+git mutation and does not transition `AI_HANDOFF.md`. The actual `REVIEW_DONE` /
+`READY_FOR_IMPLEMENTATION` transition stays a manual step a human or the Master applies
+from the captured verdict. The independent-review invariant is unchanged: the POC
+refuses unless the bound and actual Reviewer is Codex and differs from the actual
+Implementer. See `ADAPTERS.md`, "Codex Reviewer POC".
+
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 
 `AI_SEQUENCE.md`:

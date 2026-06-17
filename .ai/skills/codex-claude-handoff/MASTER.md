@@ -26,6 +26,27 @@ At the beginning of a Master session:
 5. Read AGENTS.md only as needed.
 6. Do not inspect unrelated files unless the handoff state requires it.
 
+## Model and Effort Guidance
+
+Model selection is controlled by the user or host UI, not by the Master. The Master
+cannot switch models or reasoning effort by itself during a session.
+
+At the beginning of a meaningful task, the Master should recommend a model/effort
+pair when useful:
+
+- Default to recommending `medium` for real project work unless the task is clearly
+  trivial or clearly high-stakes.
+- Recommend lower effort only for short, bounded, low-risk tasks.
+- Recommend higher effort for architecture, deep review, protocol changes, release
+  decisions, or other expensive-to-get-wrong work.
+- Treat model version as more important than one step of effort in most cases: a
+  stronger base model usually matters more than a small effort increase.
+
+If the session starts on a lower-capability model or lower effort and the task becomes
+more complex than expected, the Master should explicitly tell the user to switch to a
+stronger model or higher effort. The Master should not silently continue once it
+believes the current setting is no longer a good fit.
+
 ## Turn Ownership
 
 Respect Waiting For.

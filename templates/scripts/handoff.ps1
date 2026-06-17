@@ -11,6 +11,8 @@ param(
     [string]$Tag,
     [string]$NextTask,
     [string]$SupersededVersions,
+    [int]$TimeoutSeconds = 180,
+    [switch]$Yes,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [decimal]$BudgetUsd = 2,
@@ -90,9 +92,13 @@ function Resolve-Actor {
     return $Role
 }
 
+# Local Codex Reviewer POC artifacts (v1.2.0). Local, gitignored, never committed.
+$ReviewJsonlName = "CODEX_REVIEW.jsonl"
+$ReviewLastName  = "CODEX_REVIEW_LAST.md"
+
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log")
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName)
 
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
@@ -1286,6 +1292,433 @@ function Invoke-SequenceAdvance {
     Write-Host ""
 }
 
+# --- Codex Reviewer POC (v1.2.0): read-only review capture, never git mutation ---
+
+# Verify the resolved CLI actually supports the read-only exec subcommand shape.
+# Returns @{ Ok; Error; Output } so preflight failures are explainable.
+function Test-CodexExecHelp {
+    param([string]$CodexPath)
+    try {
+        $output = & $CodexPath exec --help 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return @{ Ok = $true; Error = ""; Output = $output }
+        }
+        $firstLine = @($output -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+        $detail = if ($firstLine.Count -gt 0) { $firstLine[0].Trim() } else { "exit code $exitCode" }
+        return @{ Ok = $false; Error = "'$CodexPath' failed 'exec --help': $detail"; Output = $output }
+    } catch {
+        return @{ Ok = $false; Error = "'$CodexPath' threw while running 'exec --help': $($_.Exception.Message)"; Output = "" }
+    }
+}
+
+function Add-CodexCliCandidate {
+    param(
+        [System.Collections.Generic.List[hashtable]]$Candidates,
+        [hashtable]$Seen,
+        [string]$Path,
+        [string]$Source
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    $resolved = $Path
+    try {
+        $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    } catch {
+        $resolved = $Path
+    }
+    $key = $resolved.ToLowerInvariant()
+    if (-not $Seen.ContainsKey($key)) {
+        $Seen[$key] = $true
+        $Candidates.Add(@{ Path = $resolved; Source = $Source }) | Out-Null
+    }
+}
+
+# Resolve a RUNNABLE Codex CLI: prefer an explicit CODEX_CLI environment override, then a
+# local install under %LOCALAPPDATA%\OpenAI\Codex\bin, then PATH. Every candidate is
+# verified with `exec --help` before it is accepted.
+function Resolve-CodexCli {
+    $override = $env:CODEX_CLI
+    if (-not [string]::IsNullOrWhiteSpace($override)) {
+        if (-not (Test-Path -LiteralPath $override)) {
+            return @{ Ok = $false; Path = $override; Source = "CODEX_CLI environment override"; Error = "CODEX_CLI points to a path that does not exist: $override" }
+        }
+        $resolvedOverride = (Resolve-Path -LiteralPath $override).Path
+        $overrideProbe = Test-CodexExecHelp -CodexPath $resolvedOverride
+        if ($overrideProbe.Ok) {
+            return @{ Ok = $true; Path = $resolvedOverride; Source = "CODEX_CLI environment override"; Error = "" }
+        }
+        return @{ Ok = $false; Path = $resolvedOverride; Source = "CODEX_CLI environment override"; Error = "CODEX_CLI is set, but the pointed Codex CLI is not runnable for 'exec --help'. $($overrideProbe.Error)" }
+    }
+
+    $candidates = [System.Collections.Generic.List[hashtable]]::new()
+    $seen = @{}
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localCodexRoot = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin"
+        if (Test-Path -LiteralPath $localCodexRoot) {
+            $localExecutables = @(Get-ChildItem -Path $localCodexRoot -Recurse -Filter codex.exe -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTimeUtc -Descending)
+            foreach ($exe in $localExecutables) {
+                Add-CodexCliCandidate -Candidates $candidates -Seen $seen -Path $exe.FullName -Source "LOCALAPPDATA OpenAI Codex install"
+            }
+        }
+    }
+
+    foreach ($cmd in @(Get-Command codex -All -ErrorAction SilentlyContinue)) {
+        if ($null -ne $cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+            Add-CodexCliCandidate -Candidates $candidates -Seen $seen -Path $cmd.Source -Source "PATH"
+        }
+    }
+
+    if ($candidates.Count -eq 0) {
+        return @{ Ok = $false; Path = ""; Source = "none"; Error = "No runnable Codex CLI found. Set `$env:CODEX_CLI to the codex executable, or install Codex so it is available under `%LOCALAPPDATA%\OpenAI\Codex\bin` or on PATH." }
+    }
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in $candidates) {
+        $probe = Test-CodexExecHelp -CodexPath $candidate.Path
+        if ($probe.Ok) {
+            return @{ Ok = $true; Path = $candidate.Path; Source = $candidate.Source; Error = "" }
+        }
+        $failures.Add("$($candidate.Source): $($probe.Error)")
+    }
+
+    return @{
+        Ok = $false
+        Path = $candidates[0].Path
+        Source = $candidates[0].Source
+        Error = "Found Codex CLI candidate(s), but none were runnable for 'exec --help'. Tried: $([string]::Join(' | ', $failures)). Set `$env:CODEX_CLI to a runnable codex executable if needed."
+    }
+}
+
+# Validate the Codex Reviewer POC request. Always returns every key so callers can
+# print a plan even when blocked. Reuses the release-grade Changed Files parser and
+# git-status comparison so review scope is verified exactly like a release.
+function Get-ReviewPlan {
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+
+    $reviewFiles = Get-ReleaseChangedFiles
+    $gitState = Get-GitChangedFilesForRelease
+    $taskActors = Get-TaskActors
+    $boundReviewer = Resolve-Actor -Role "Reviewer" -Binding $Binding
+    $boundImplementer = Resolve-Actor -Role "Implementer" -Binding $Binding
+
+    # The approved scope requires eligibility only at Waiting For: Reviewer (the role
+    # name), so match it exactly rather than also accepting the bound tool name.
+    if ($State -ne "READY_FOR_REVIEW" -or $WaitingFor -ne "Reviewer") {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must be State: READY_FOR_REVIEW and Waiting For: Reviewer for the Codex Reviewer POC.")
+    }
+    if ($boundReviewer -ne "Codex") {
+        $ok = $false
+        $errors.Add("The bound Reviewer tool must be Codex (found: $boundReviewer). This POC only invokes Codex as Reviewer.")
+    }
+    if ($taskActors.ImplementerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Implementer.")
+    }
+    if ($taskActors.ReviewerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer.")
+    }
+    if ($taskActors.Reviewer -ne "" -and $taskActors.Reviewer -ne "Codex") {
+        $ok = $false
+        $errors.Add("The actual task Reviewer must be Codex (found: $($taskActors.Reviewer)).")
+    }
+    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+        $ok = $false
+        $errors.Add("Independent-review invariant: the actual Reviewer must not equal the actual Implementer.")
+    }
+    if (-not $gitState.Ok) {
+        $ok = $false
+        $errors.Add("Could not read git status.")
+    }
+    if ($reviewFiles.Count -eq 0) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files has no reviewable files.")
+    }
+    if ($gitState.Ok -and -not (Test-SameFileSet -Expected $reviewFiles -Actual $gitState.Files)) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files.")
+    }
+
+    $cli = Resolve-CodexCli
+
+    return @{
+        Ok = $ok
+        Errors = $errors
+        ReviewFiles = $reviewFiles
+        GitFiles = $gitState.Files
+        TaskActors = $taskActors
+        BoundReviewer = $boundReviewer
+        BoundImplementer = $boundImplementer
+        Cli = $cli
+    }
+}
+
+function Show-ReviewPlan {
+    param([hashtable]$Plan)
+    $repoRoot = (Get-Location).Path
+    Write-Host ""
+    Write-Host "Codex Reviewer POC plan (read-only; capture only)"
+    Write-Host "State:               $State"
+    Write-Host "Waiting For:         $WaitingFor"
+    Write-Host "Current Task:        $CurrentTask"
+    Write-Host "Bound Reviewer:      $($Plan.BoundReviewer)"
+    Write-Host "Bound Implementer:   $($Plan.BoundImplementer)"
+    Write-Host "Actual Reviewer:     $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
+    Write-Host "Actual Implementer:  $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    Write-Host ""
+    Write-Host "Files to review (from AI_HANDOFF.md Changed Files; local coordination files excluded):"
+    if ($Plan.ReviewFiles.Count -eq 0) { Write-Host "  (none)" } else { foreach ($f in $Plan.ReviewFiles) { Write-Host "  $f" } }
+    Write-Host ""
+    Write-Host "Codex CLI resolution:"
+    if ($Plan.Cli.Ok) {
+        Write-Host "  Resolved: $($Plan.Cli.Path)"
+        Write-Host "  Source:   $($Plan.Cli.Source)"
+    } else {
+        Write-Host "  Not resolved: $($Plan.Cli.Error)"
+    }
+    Write-Host ""
+    Write-Host "Read-only invocation shape (review-run, after explicit confirmation):"
+    Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (review prompt via stdin)"
+    Write-Host "Captured artifacts (local, gitignored, never committed):"
+    Write-Host "  $ReviewJsonlName  (JSONL events)"
+    Write-Host "  $ReviewLastName  (Codex final message)"
+    Write-Host ""
+    Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change (capture only)."
+    Write-Host ""
+}
+
+function Invoke-ReviewCheck {
+    $plan = Get-ReviewPlan
+    Show-ReviewPlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "review-check: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed and no Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $plan.Cli.Ok) {
+        Write-Host "review-check: protocol guards pass, but no runnable Codex CLI is available."
+        Write-Host "Reason: $($plan.Cli.Error)"
+        Write-Host "Stop category: Environment/Preflight - resolve the Codex CLI before review-run."
+        Write-Host "No files were changed and no Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "review-check: ready for operator-confirmed review-run."
+    Write-Host "To run the read-only Codex review, run:"
+    Write-Host "  handoff.ps1 review-run"
+    Write-Host "Stop category: Operator Manual Action - review-run requires an explicit 'yes' confirmation."
+    Write-Host "No files were changed and no Codex invocation was run."
+    Write-Host ""
+}
+
+function Invoke-ReviewRun {
+    if ($TimeoutSeconds -lt 1) {
+        Write-Host ""
+        Write-Host "review-run: blocked."
+        Write-Host "Reason: -TimeoutSeconds must be at least 1 (got: $TimeoutSeconds)."
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    $plan = Get-ReviewPlan
+    Show-ReviewPlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "review-run: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $plan.Cli.Ok) {
+        Write-Host "review-run: blocked."
+        Write-Host "Reason: $($plan.Cli.Error)"
+        Write-Host "Stop category: Environment/Preflight (Codex CLI unavailable) - not a user decision."
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 3
+    }
+    $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
+    if (-not $execHelp.Ok) {
+        Write-Host "review-run: blocked."
+        Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
+        Write-Host "Resolved: $($plan.Cli.Path)"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Write-Host "No Codex review invocation was run."
+        Write-Host ""
+        exit 3
+    }
+
+    $repoRoot = (Get-Location).Path
+    $jsonlPath = Join-Path $repoRoot $ReviewJsonlName
+    $lastPath  = Join-Path $repoRoot $ReviewLastName
+
+    Write-Host ""
+    Write-Host "WARNING: This invokes the Codex CLI in a read-only sandbox to review the files above."
+    Write-Host "         It captures Codex output locally and makes NO changes to git or AI_HANDOFF.md."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; proceeding without an interactive prompt (read-only capture only)."
+    } else {
+        # Fail closed: only an explicit, non-null "yes" proceeds.
+        $confirm = Read-Host 'Type "yes" to run the read-only Codex review, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            Write-Host "No Codex invocation was run."
+            exit 2
+        }
+    }
+
+    # Build a single-line prompt and deliver it via STDIN (codex exec -). Start-Process
+    # -ArgumentList does NOT robustly quote a multi-word element, so passing the prompt as
+    # an argument splits it into separate argv tokens (codex: "unexpected argument ...").
+    # stdin delivers the whole prompt as one channel and avoids that entirely.
+    # Tightly scoped prompt so the review finishes in bounded time: tell Codex not to load
+    # broad skill/protocol context and to inspect only the handoff, git status, and the
+    # changed files' diffs. Keep it free of shell metacharacters; it is delivered on stdin.
+    $reviewFileList = [string]::Join("; ", @($plan.ReviewFiles))
+    $reviewPrompt = "Read-only code review. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
+        "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files. " +
+        "Inspect ONLY these sources: AI_HANDOFF.md for the current task and approved scope; the output of git status --short; and git diff -- for each of these Changed Files: $reviewFileList . " +
+        "Decide only whether those changed files match the task and approved scope described in AI_HANDOFF.md. Do not modify any file. " +
+        "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
+        "Finish quickly and end your reply with exactly one final line: VERDICT: APPROVED or VERDICT: BLOCKED followed by a one-line reason."
+
+    Write-Host ""
+    Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
+    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (prompt via stdin)"
+    Write-Host ""
+
+    # Clear any stale capture artifacts so old/partial output is never mistaken for this run.
+    Remove-Item $jsonlPath, $lastPath -Force -ErrorAction SilentlyContinue
+
+    # Run Codex as a tracked child process with a hard timeout. The prompt is written to a
+    # temp file and fed to StandardInput (codex exec -), so a multi-word prompt is never
+    # split into argv tokens. Capture stdout/stderr to temp files so partial output and
+    # diagnostics survive a kill. Start-Process -PassThru gives the real PID so a hung
+    # Codex (and its children) can be terminated - a bare job cannot.
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $promptFile -Value $reviewPrompt -Encoding utf8 -ErrorAction SilentlyContinue
+    $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+    $timedOut = $false
+    $codexExit = -1
+    try {
+        $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
+            -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+    } catch {
+        Write-Host "review-run: blocked."
+        Write-Host "Reason: Failed to start the Codex CLI: $_"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+        exit 3
+    }
+    # Cache the process handle now so $proc.ExitCode is reliably available after exit. A
+    # Start-Process -PassThru object that never had its handle accessed returns a null
+    # ExitCode, which would make a successful run look like a non-zero failure.
+    try { $null = $proc.Handle } catch { }
+
+    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+        $codexExit = $proc.ExitCode
+    } else {
+        $timedOut = $true
+        # Terminate the whole Codex process tree; a child can outlive a bare Kill().
+        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
+        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        try { $proc.WaitForExit(5000) | Out-Null } catch { }
+    }
+
+    # Preserve partial stdout (JSONL) and capture stderr for diagnostics, regardless of outcome.
+    $partial = ""
+    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (-not [string]::IsNullOrEmpty($partial)) {
+        Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+    }
+    $stderrText = ""
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+
+    Write-Host ""
+    if ($timedOut) {
+        Write-Host "review-run: TIMED OUT after $TimeoutSeconds seconds."
+        Write-Host "The Codex process (and its children) were terminated. NO final verdict was captured."
+        if (Test-Path $jsonlPath) {
+            Write-Host "Partial, INCOMPLETE Codex output was preserved (NOT a verdict): $ReviewJsonlName"
+        }
+        # A partial/empty last-message file must never be mistaken for a completed verdict.
+        if (Test-Path $lastPath) { Remove-Item $lastPath -Force -ErrorAction SilentlyContinue }
+        Write-Host "No $ReviewLastName final verdict exists for this run."
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr (partial, before termination):"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (Codex review timed out) - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host "Re-run with a larger -TimeoutSeconds if the review legitimately needs more time."
+        Write-Host ""
+        exit 4
+    }
+
+    # Fail closed if Codex exited 0 but produced no final message: the POC's purpose is to
+    # CAPTURE a verdict, so "success" must always mean a verdict file exists. Reporting
+    # "complete" without one would be a false success. Treat a missing/unreadable ExitCode
+    # the same way when there is no verdict file: still no captured review result.
+    $hasVerdict = Test-Path $lastPath
+    if (-not $hasVerdict -and ($null -eq $codexExit -or $codexExit -eq 0)) {
+        Write-Host "review-run: blocked."
+        if ($null -eq $codexExit) {
+            Write-Host "Reason: Codex wrote no final message ($ReviewLastName), and no reliable process exit code was available; no review verdict was captured."
+        } else {
+            Write-Host "Reason: Codex exited 0 but wrote no final message ($ReviewLastName); no review verdict was captured."
+        }
+        Write-Host "Captured JSONL (if any): $ReviewJsonlName"
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr:"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (no verdict captured) - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 6
+    }
+
+    if ($codexExit -ne 0) {
+        Write-Host "review-run: Codex exited with a non-zero code ($codexExit)."
+        Write-Host "Captured JSONL (if any): $ReviewJsonlName"
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr:"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight - inspect the captured output."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 5
+    }
+
+    Write-Host "review-run: complete (read-only capture)."
+    Write-Host "Captured artifacts (local, gitignored - do not commit):"
+    Write-Host "  $ReviewJsonlName"
+    Write-Host "  $ReviewLastName"
+    Write-Host ""
+    Write-Host "Codex final message:"
+    Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
+    Write-Host ""
+    Write-Host "This POC captured the review only. It made no git changes and did not modify AI_HANDOFF.md."
+    Write-Host "A human or the Master applies the actual REVIEW_DONE / READY_FOR_IMPLEMENTATION transition from this output."
+    Write-Host "Stop category: Operator Manual Action - apply the protocol state transition manually."
+    Write-Host ""
+}
+
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
@@ -1305,7 +1738,8 @@ function Invoke-Menu {
     Write-Host "7. Show adapter status            - callable/manual automation status"
     Write-Host "8. Check authorized release       - dry-run release plan (release-check)"
     Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
-    Write-Host "10. Exit"
+    Write-Host "10. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
+    Write-Host "11. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -1322,7 +1756,8 @@ function Invoke-Menu {
         "7" { Invoke-Adapters }
         "8" { Invoke-ReleaseCheck }
         "9" { Invoke-SequenceCheck }
-        "10" { }
+        "10" { Invoke-ReviewCheck }
+        "11" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -1838,6 +2273,8 @@ switch ($Command) {
     "release"      { Invoke-Release }
     "sequence-check"   { Invoke-SequenceCheck }
     "sequence-advance" { Invoke-SequenceAdvance }
+    "review-check" { Invoke-ReviewCheck }
+    "review-run"   { Invoke-ReviewRun }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -1862,6 +2299,9 @@ switch ($Command) {
             Write-Host "                            Dry-run the local sequence advance. Edits no files."
             Write-Host "  sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]"
             Write-Host "                            Advance local AI_SEQUENCE.md/AI_HANDOFF.md after a release. Never runs git."
+            Write-Host "  review-check              Dry-run the Codex Reviewer POC plan for READY_FOR_REVIEW. Mutates nothing."
+            Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
+            Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a callable adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"

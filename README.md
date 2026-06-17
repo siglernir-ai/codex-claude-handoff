@@ -70,6 +70,12 @@ Current local status:
   is not sufficient on its own: no protocol wrapper/adapter has been implemented and
   tested, so Codex stays `callable: no`. No MCP adapter or API bridge is wired in. See
   the "Codex CLI Verification" section of `ADAPTERS.md`.
+- Since v1.2.0 a read-only **Codex Reviewer POC** (`handoff.ps1 review-check` /
+  `review-run`) wires a guarded per-turn Codex invocation into the scripts during
+  `READY_FOR_REVIEW`. It captures a review verdict to local, gitignored artifacts but is
+  capture-only: it runs no git command and does not transition `AI_HANDOFF.md`, so the
+  Reviewer stays `callable: no`. A human or the Master applies the actual state
+  transition. See the "Codex Reviewer POC" section of `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.
@@ -354,6 +360,61 @@ source or release files. Run `sequence-check` first to preview.
 Bash does not implement the sequence advance. `bash scripts/handoff.sh
 sequence-check` and `bash scripts/handoff.sh sequence-advance` print a
 PowerShell-required message and exit without changing any file.
+
+### `review-check` and `review-run` (Codex Reviewer POC, since v1.2.0)
+
+A narrow, conservative proof of concept for invoking Codex as Reviewer during
+`READY_FOR_REVIEW`. It is **capture-only**: it runs Codex in a read-only sandbox and
+saves the review verdict to local artifacts. It never runs git and never changes
+`AI_HANDOFF.md`, so it does not make the Reviewer callable.
+
+```powershell
+.\scripts\handoff.ps1 review-check
+.\scripts\handoff.ps1 review-run
+```
+
+`review-check` never invokes Codex. It prints the review plan and the exact read-only
+invocation shape, then blocks unless: the handoff is `State: READY_FOR_REVIEW` /
+`Waiting For: Reviewer`; the bound Reviewer is Codex; `AI_HANDOFF.md` `Task Actors`
+has exactly one Implementer and one Reviewer; the actual Reviewer is Codex and differs
+from the actual Implementer (the independent-review invariant); and the `Changed Files`
+list matches `git status` after excluding local coordination files. It also reports
+whether a runnable Codex CLI is available for `exec --help`.
+
+`review-run` runs the same guards, resolves the Codex CLI (preferring the `CODEX_CLI`
+environment override, then a local install under
+`%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`, then `codex` on `PATH`; candidates are
+accepted only if `exec --help` succeeds), and -
+after an explicit `yes` confirmation (or `-Yes` for automation) - invokes:
+
+```
+codex exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message CODEX_REVIEW_LAST.md -    # review prompt delivered on stdin
+```
+
+The review prompt is delivered on Codex's standard input (the trailing `-`), not as a
+command-line argument, so a multi-word prompt is never split into separate argv tokens.
+The prompt is tightly scoped so the review finishes within the timeout: it tells Codex to
+be fast, not to load `AGENTS.md` / `CLAUDE.md` / the skill or other protocol files, to
+inspect only `AI_HANDOFF.md`, `git status`, and the Changed Files' diffs, and to end with
+exactly one line `VERDICT: APPROVED` or `VERDICT: BLOCKED` plus a one-line reason.
+It never uses `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or
+danger-full-access. It captures the `--json` event stream to `CODEX_REVIEW.jsonl` and
+the final verdict to `CODEX_REVIEW_LAST.md` (both local and gitignored), then stops.
+The actual `REVIEW_DONE` / `READY_FOR_IMPLEMENTATION` transition remains a manual step
+a human or the Master applies from the captured verdict. Automating that transition is
+deferred to v1.3.0.
+
+`review-run` is bounded by `-TimeoutSeconds` (default 180). It runs Codex as a tracked
+child process; if Codex does not finish in time, `review-run` **fails closed**: it
+terminates the Codex process (and its children), preserves any partial
+`CODEX_REVIEW.jsonl` clearly labelled as incomplete, removes any partial
+`CODEX_REVIEW_LAST.md` so no incomplete output is mistaken for a verdict, makes no git
+or `AI_HANDOFF.md` change, and exits non-zero (exit 4). Raise `-TimeoutSeconds` for a
+review that legitimately needs longer.
+
+Bash does not implement the POC. `bash scripts/handoff.sh review-check` and
+`bash scripts/handoff.sh review-run` print a PowerShell-required message and exit
+without invoking Codex.
 
 ### `cycle [-BudgetUsd N]`
 
