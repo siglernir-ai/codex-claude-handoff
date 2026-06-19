@@ -74,10 +74,13 @@ Current local status:
 - Since v1.3.0 the **Reviewer/Codex `READY_FOR_REVIEW` turn is callable end-to-end** via the
   explicit two-step `handoff.ps1 review-run` (read-only Codex capture) + `handoff.ps1
   review-apply` (apply the captured verdict's local `AI_HANDOFF.md` transition, fail-closed).
-  This is callable **only via those explicit commands**: it is never auto-run by `loop` or
-  `cycle` (the adapter is `callable: yes` but `Auto-loop: no`). `review-run` runs no git and
-  never transitions `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex
-  remains `callable: no`. See the "Automated Reviewer Turn" section of `ADAPTERS.md`.
+  This is callable **only via those explicit commands** and is not auto-run by `loop`/`cycle`
+  by default (the adapter is `callable: yes` but `Auto-loop: no`). Since v1.4.0 the operator may
+  opt this exact turn into one loop session with `loop -IncludeReviewer` (per-session opt-in,
+  `cycle` never does, `Auto-loop` stays `no`). `review-run` runs no git and never transitions
+  `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex remains
+  `callable: no`. See "Automated Reviewer Turn" and "Opt-in Reviewer Loop Integration" in
+  `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.
@@ -559,7 +562,7 @@ invariant.
 
 **Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
 
-### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]`
+### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-IncludeReviewer]`
 
 Run a bounded loop of automated handoff turns until a hard stop. It routes each turn by
 `State -> Role -> Tool -> Adapter`, runs only callable safe turns, re-reads
@@ -570,19 +573,35 @@ clear reason.
 .\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
 .\scripts\handoff.ps1 loop -MaxTurns 2
 .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
+.\scripts\handoff.ps1 loop -IncludeReviewer                     # also auto-run the Codex Reviewer turn (opt-in)
 ```
 
-**What it automates:** only states the adapter registry marks callable - that means
-`State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
+**What it automates:** by default, only states the adapter registry marks `AutoLoopEligible` -
+that means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
 Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
 `MaxTurns` times with one upfront confirmation for the whole session.
 
-**What it cannot automate yet:** Master turns, Reviewer turns, and User decisions. Codex
-has no verified local callable adapter, so when the next actor is Codex (Master or Reviewer) the
-loop refreshes `NEXT_TURN.md`, prints the exact next actor and paste instruction, and
-stops with exit 0. Investigation (`NEEDS_INVESTIGATION`), planning (`PLAN_REQUIRED`), and
-`QUESTION_FOR_IMPLEMENTER` turns also remain manual - the Claude Code CLI turn cannot be
-safely restricted to handoff-only edits.
+**Opt-in Reviewer turn (since v1.4.0):** with `-IncludeReviewer`, the loop also auto-runs the
+**Codex Reviewer's `READY_FOR_REVIEW` turn** in-session instead of stopping at it. It runs the
+already-proven, guarded `review-run` (read-only Codex capture) then `review-apply` (consume the
+captured verdict, edit only `AI_HANDOFF.md`), forcing their non-interactive path because you
+authorized the loop session. `APPROVED` stops the loop at `REVIEW_DONE` / `Waiting For: User`
+(release authorization stays yours); `BLOCKED` returns to `READY_FOR_IMPLEMENTATION` /
+`Waiting For: Implementer` and the loop continues under `MaxTurns`/budget. A Reviewer turn
+counts against `-MaxTurns`. This is a per-session opt-in only: the adapter stays
+`callable: yes` / `Auto-loop: no`, `cycle` never auto-runs a Reviewer turn, and any guard
+violation or malformed/stale/missing verdict fails closed with no transition. The session-start
+clean-tree gate is relaxed whenever the session begins directly at the Codex Reviewer's
+`READY_FOR_REVIEW` turn (the working tree carries the changes under review) - in both modes;
+without `-IncludeReviewer` the loop just stops cleanly there, and with it
+`review-run`/`review-apply` still enforce Changed Files == git status.
+
+**What it cannot automate:** Master turns and User decisions are never automated. Without
+`-IncludeReviewer`, Reviewer turns are not automated either: when the next actor is the Codex
+Reviewer the loop refreshes `NEXT_TURN.md`, prints the exact next actor and paste instruction,
+and stops with exit 0. Master/Codex has no callable loop adapter. Investigation
+(`NEEDS_INVESTIGATION`), planning (`PLAN_REQUIRED`), and `QUESTION_FOR_IMPLEMENTER` turns also
+remain manual - the Claude Code CLI turn cannot be safely restricted to handoff-only edits.
 
 **Hard stops:** `REVIEW_DONE`, `WAITING_FOR_USER`, `BLOCKED`, `IMPLEMENTED`, unrecognized
 state, `Waiting For` mismatch, Reviewer == Implementer, dirty working tree (tracked or

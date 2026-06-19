@@ -161,11 +161,18 @@ a guarded Operator Manual Action requiring an explicit `yes`; `review-run` perfo
 mutation and never transitions `AI_HANDOFF.md`, and `review-apply` edits ONLY `AI_HANDOFF.md`
 (no git, no release action) and fails closed on any missing/malformed/stale verdict or failed
 guard. Together they make the Reviewer/Codex `READY_FOR_REVIEW` turn callable end-to-end, but
-ONLY via these explicit commands - the turn is never auto-run by `loop`/`cycle` (the adapter's
-`AutoLoopEligible` flag is false). The independent-review invariant is unchanged: both
-commands refuse unless the bound and actual Reviewer is Codex and differs from the actual
-Implementer. The user's release authorization at `REVIEW_DONE` is also unchanged. See
-`ADAPTERS.md`, "Automated Reviewer Turn".
+ONLY via these explicit commands - by default the turn is never auto-run by `loop`/`cycle` (the
+adapter's `AutoLoopEligible` flag is false). Since v1.4.0 the operator may explicitly opt the
+Reviewer turn into a single `loop` session with `loop -IncludeReviewer`, which runs this same
+guarded `review-run` + `review-apply` sequence in-session (forcing their non-interactive path
+because the loop session was authorized) and routes the verdict the same way: `APPROVED` stops
+the loop at `REVIEW_DONE` / `Waiting For: User`, `BLOCKED` returns to
+`READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` and the loop continues under
+`MaxTurns`/budget. This opt-in does not change `AutoLoopEligible` (Reviewer/Codex stays
+`Auto-loop: no`), and `cycle` still never auto-runs a Reviewer turn. The independent-review
+invariant is unchanged: both commands refuse unless the bound and actual Reviewer is Codex and
+differs from the actual Implementer. The user's release authorization at `REVIEW_DONE` is also
+unchanged. See `ADAPTERS.md`, "Automated Reviewer Turn" and "Opt-in Reviewer Loop Integration".
 
 Codex Master capture POC (since v1.3.1): the `master-check` / `master-run` commands invoke
 Codex read-only as the Master decision router during `NEEDS_ANALYSIS` and capture a structured

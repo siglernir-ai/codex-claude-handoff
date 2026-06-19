@@ -13,6 +13,7 @@ param(
     [string]$SupersededVersions,
     [int]$TimeoutSeconds = 180,
     [switch]$Yes,
+    [switch]$IncludeReviewer,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [decimal]$BudgetUsd = 2,
@@ -173,14 +174,15 @@ function Get-AdapterProfile {
     # review-run (read-only capture) + review-apply (apply the captured verdict's local
     # AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose: "callable" here means
     # "has a verified end-to-end command path", NOT "may be auto-run inside loop/cycle".
-    # Reviewer turns are never invoked automatically by loop or cycle in v1.3.0.
+    # Reviewer turns are not loop-eligible by default. Since v1.4.0, only
+    # `loop -IncludeReviewer` may opt this exact turn into a single loop session; cycle never does.
     if ($Role -eq "Reviewer" -and $Tool -eq "Codex") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
             Invocation = "Capture: handoff.ps1 review-run (read-only Codex review, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
-            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only, no --ask-for-approval / --dangerously-bypass / danger-full-access; review-apply edits only AI_HANDOFF.md; never loop/cycle automated; no commit/push/tag/deploy/db/secrets; no release action.";
+            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only, no --ask-for-approval / --dangerously-bypass / danger-full-access; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
             StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; release stays a separate User authorization";
-            Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end, read-only and fail-closed. Callable via these explicit commands only - never inside loop or cycle.";
+            Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end, read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeReviewer; cycle never does.";
             NextStep = "Run review-run to capture a verdict, then review-apply to set REVIEW_DONE (approved) or READY_FOR_IMPLEMENTATION (blocked)."
         }
     }
@@ -1732,7 +1734,13 @@ function Invoke-ReviewRun {
         exit 6
     }
 
-    if ($codexExit -ne 0) {
+    # A TRUE non-zero process exit is a failure. A null/unavailable exit code is NOT treated
+    # as non-zero here: PowerShell's ($null -ne 0) is $true, which would otherwise make a
+    # captured-verdict run look like a non-zero failure. When a final verdict file WAS captured,
+    # capture success is what matters - review-apply immediately performs the strict verdict
+    # schema parse and all review guards. The no-capture + null/0 case already failed closed
+    # above (exit 6), so reaching here with a null exit means a verdict file exists.
+    if ($null -ne $codexExit -and $codexExit -ne 0) {
         Write-Host "review-run: Codex exited with a non-zero code ($codexExit)."
         Write-Host "Captured JSONL (if any): $ReviewJsonlName"
         if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
@@ -1873,7 +1881,8 @@ function Show-ReviewApplyPlan {
     }
     Write-Host ""
     Write-Host "Safety: edits only AI_HANDOFF.md (local, gitignored); no git add/commit/push/tag;"
-    Write-Host "        no deploy/db/secrets; no release action; never auto-run by loop or cycle."
+    Write-Host "        no deploy/db/secrets; no release action; not auto-run by loop/cycle by default."
+    Write-Host "        PowerShell loop may invoke it only when the operator passed -IncludeReviewer."
     Write-Host ""
 }
 
@@ -2609,6 +2618,22 @@ function Invoke-Loop {
     }
 
     # --- Session preflight: clean working tree ---
+    # v1.4.0: when the session begins directly at the Codex Reviewer's READY_FOR_REVIEW turn,
+    # the working tree is EXPECTED to carry the changes under review, so the clean-tree session
+    # gate does not apply to that first turn - in BOTH modes:
+    #   - default (no -IncludeReviewer): the loop simply STOPS cleanly at this non-auto-loop
+    #     Reviewer turn (exit 0, Operator Manual Action). There is no automated turn for the
+    #     gate to protect, so blocking here on the very changes under review would be wrong -
+    #     it would turn a clean stop into a spurious Environment/Preflight failure.
+    #   - -IncludeReviewer: the opt-in Reviewer handler runs review-run/review-apply, which
+    #     enforce the stricter scope guard (Changed Files must equal git status) on those exact
+    #     changes. That opt-in path checks $IncludeReviewer itself, so this gate does not.
+    # The clean-tree requirement is unchanged for every normal (Implementer-first) session and
+    # for the per-iteration recheck before each automated Implementer turn.
+    $startsAtReviewerTurn = ($State -eq "READY_FOR_REVIEW") -and
+        (($WaitingFor -eq "Reviewer") -or ($WaitingFor -eq (Resolve-Actor -Role "Reviewer" -Binding $Binding))) -and
+        ((Resolve-Actor -Role "Reviewer" -Binding $Binding) -eq "Codex")
+
     $tree = Get-WorkingTreeState
     if (-not $tree.Ok) {
         Write-Host ""
@@ -2619,7 +2644,7 @@ function Invoke-Loop {
         Write-Host ""
         exit 1
     }
-    if ($tree.Files.Count -gt 0) {
+    if ($tree.Files.Count -gt 0 -and -not $startsAtReviewerTurn) {
         Write-Host ""
         Write-Host "loop: blocked."
         Write-Host "Working tree is not clean."
@@ -2642,7 +2667,13 @@ function Invoke-Loop {
     Write-Host "Per-turn budget:    `$$BudgetUsd (passed to --max-budget-usd)"
     Write-Host "Session budget cap: `$$SessionBudgetUsd (worst-case authorized spend this session: `$$worstCase)"
     Write-Host "Callable turns:     Resolved through ADAPTERS.md; currently READY_FOR_IMPLEMENTATION only when Implementer is Claude Code."
-    Write-Host "Never automated:    Master turns, Reviewer turns, User turns, commit/push/tag/deploy."
+    if ($IncludeReviewer) {
+        Write-Host "Reviewer mode:      -IncludeReviewer ON - the Codex Reviewer's READY_FOR_REVIEW turn will be auto-run in-session (read-only review-run capture + review-apply). APPROVED stops at REVIEW_DONE / Waiting For: User; BLOCKED returns to READY_FOR_IMPLEMENTATION and the loop continues under MaxTurns/budget."
+        Write-Host "Never automated:    Master turns, User turns, commit/push/tag/deploy/db/secrets (Reviewer release authorization is still the User's)."
+    } else {
+        Write-Host "Reviewer mode:      -IncludeReviewer OFF (default) - loop stops at the Reviewer turn and every other non-Implementer turn."
+        Write-Host "Never automated:    Master turns, Reviewer turns, User turns, commit/push/tag/deploy."
+    }
     Write-Host ""
     Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
     Write-Host ""
@@ -2708,8 +2739,55 @@ function Invoke-Loop {
         $turnAdapter = Resolve-TurnAdapter -ForState $script:State -Role $role -Tool $tool
         # Gate on AutoLoopEligible, NOT Callable. A turn that is callable only via an
         # explicit command (e.g. Reviewer/Codex via review-run + review-apply) must make the
-        # loop STOP, never auto-run. This keeps loop from ever invoking a Reviewer turn.
+        # loop STOP, never auto-run. This keeps loop from ever invoking a Reviewer turn unless
+        # the operator explicitly opted in with -IncludeReviewer (handled just below).
         $loopEligible = $turnAdapter.AutoLoopEligible
+
+        # --- v1.4.0: opt-in in-session Reviewer automation ---
+        # Reviewer/Codex stays AutoLoopEligible:$false, so by default the next block stops the
+        # loop here exactly as in v1.3.0. ONLY when the operator passed -IncludeReviewer AND the
+        # next turn is the Codex Reviewer's READY_FOR_REVIEW turn do we run the already-proven
+        # review-run + review-apply sequence in-session instead of stopping. This opt-in path is
+        # the single exception, and only for Codex: review-run/review-apply re-validate every
+        # protocol guard (bound + actual Reviewer is Codex and != actual Implementer; Changed
+        # Files == git status; strict captured-verdict schema) and fail closed (they exit the
+        # process), so a malformed/stale/missing verdict or any guard violation stops the loop
+        # with no handoff transition. They edit only AI_HANDOFF.md and run no git.
+        if (-not $loopEligible -and $IncludeReviewer -and
+            ($script:State -eq "READY_FOR_REVIEW") -and ($role -eq "Reviewer") -and ($tool -eq "Codex")) {
+
+            # A Reviewer turn counts against MaxTurns like any other automated turn.
+            if ($turnsRun -ge $MaxTurns) {
+                Write-Host ""
+                Write-Host "loop: stop - MaxTurns ($MaxTurns) reached before the Reviewer turn."
+                Write-Host "Stop category: Operator Manual Action - re-run loop to continue if desired; no user decision required."
+                Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+                Write-LoopLog "turn=$turnsRun stop reason=max-turns-before-reviewer exit=0"
+                Write-Host ""
+                exit 0
+            }
+
+            $turnNo = $turnsRun + 1
+            Write-Host ""
+            Write-Host "loop: turn $turnNo of $MaxTurns - opt-in automated Codex Reviewer turn (read-only review-run capture + review-apply)..."
+            Write-LoopLog "turn=$turnNo action=automated-reviewer-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=Codex(Reviewer)"
+            $turnsRun = $turnNo
+
+            # review-run / review-apply gate their own confirmation on the script-level -Yes.
+            # The operator already authorized this loop session, so force their non-interactive
+            # path regardless of whether -Yes was passed to loop. Each fails closed by exiting
+            # the whole process on any guard/capture/verdict error (no handoff transition).
+            $script:Yes = $true
+            Invoke-ReviewRun
+            Invoke-ReviewApply
+
+            Write-LoopLog "turn=$turnNo reviewer-applied"
+            # Loop continues: the next iteration re-reads AI_HANDOFF.md. APPROVED ->
+            # REVIEW_DONE / Waiting For: User stops as a non-loop-eligible User turn; BLOCKED ->
+            # READY_FOR_IMPLEMENTATION / Waiting For: Implementer continues under MaxTurns/budget.
+            # Neither path involves the user in this loop step.
+            continue
+        }
 
         if (-not $loopEligible) {
             try {
@@ -2880,14 +2958,14 @@ switch ($Command) {
             Write-Host "  review-check              Dry-run the Codex Reviewer POC plan for READY_FOR_REVIEW. Mutates nothing."
             Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
-            Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; never auto-run by loop/cycle."
+            Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeReviewer."
             Write-Host "  master-check              Dry-run the Codex Master capture POC plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
             Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run. Master/Codex stays callable: no."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-Yes]"
-            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor (including explicit-only callable turns like Reviewer/Codex) or hard stop. Writes HANDOFF_LOOP.log."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-IncludeReviewer] [-Yes]"
+            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor (including explicit-only callable turns like Reviewer/Codex) or hard stop. With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed): APPROVED stops at REVIEW_DONE/User; BLOCKED returns to READY_FOR_IMPLEMENTATION and continues under MaxTurns/budget. Master/User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
     }

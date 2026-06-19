@@ -3,6 +3,43 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.4.0 - Human Intervention Minimization (opt-in Reviewer loop)
+
+- Added an opt-in Reviewer automation mode to `handoff.ps1 loop`: `loop -IncludeReviewer`.
+  Without the flag, `loop` behaves exactly as in v1.3.0 - it stops at the Reviewer turn (and
+  every other non-Implementer turn). With the flag, and ONLY when the bound and actual next
+  actor is the Codex Reviewer at `READY_FOR_REVIEW`, `loop` runs the already-proven, guarded
+  Reviewer sequence in-session instead of stopping: `review-run` (read-only Codex capture)
+  then `review-apply` (consume the captured verdict, edit only `AI_HANDOFF.md`), forcing their
+  non-interactive path because the operator authorized the loop session.
+- Verdict routing inside the loop: `APPROVED` -> `REVIEW_DONE` / `Waiting For: User`, and the
+  loop stops at that non-loop-eligible User turn (release authorization stays the User's);
+  `BLOCKED` -> `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, and the loop continues
+  under the existing `MaxTurns`/budget rules without involving the user. A Reviewer turn counts
+  against `-MaxTurns` like any automated turn.
+- **Adapter truth unchanged:** Reviewer/Codex stays `callable: yes` / `Auto-loop: no` in the
+  `adapters` view. `-IncludeReviewer` is a per-session operator opt-in, not a change to
+  `AutoLoopEligible`. `cycle` still never auto-runs a Reviewer turn, and Master/Codex remains
+  `callable: no` / `Auto-loop: no` with no `master-apply` and no loop/cycle integration.
+- The session-start clean-tree gate is relaxed whenever a `loop` session begins directly at the
+  Codex Reviewer's `READY_FOR_REVIEW` turn (the working tree is expected to carry the changes
+  under review) - in both modes. Without `-IncludeReviewer` the loop just stops cleanly at that
+  non-loop-eligible Reviewer turn (exit 0), so there is no automated turn for the gate to protect;
+  with `-IncludeReviewer`, `review-run`/`review-apply` still enforce Changed Files == git status.
+  The clean-tree requirement is unchanged for every normal Implementer-first session and the
+  per-iteration Implementer recheck.
+- All fail-closed guards reused: any `review-run`/`review-apply` guard violation, or a
+  malformed/stale/missing verdict, stops the loop with no handoff transition. No git
+  add/commit/push/tag, no deploy/db/secrets, no bypass/danger sandbox flags; local artifacts
+  stay gitignored. PowerShell-only; Bash `loop` refuses honestly and points to PowerShell.
+- Tests: `protocol-tests.ps1` adds section 12 (default `loop` still stops at the Reviewer turn
+  even with a runnable fake Codex present; opt-in APPROVED -> `REVIEW_DONE`/User then stop;
+  opt-in BLOCKED -> `READY_FOR_IMPLEMENTATION`/Implementer then stop on MaxTurns without
+  involving the user or running Claude; malformed verdict fails closed; none create a git
+  commit; `cycle` still refuses a Reviewer turn) - 14 new checks (expected 93 PowerShell and
+  13 Bash checks total once run). Bumped `VERSION` to 1.4.0 (canonical and template mirror);
+  updated `ADAPTERS.md` and `PROTOCOL_METHOD.md` (+ mirrors).
+
 ## 1.3.1 - Codex Master Capture POC (master-check / master-run)
 
 - Added a narrow, conservative Codex Master capture proof of concept to

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.3.1
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.4.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -12,9 +12,12 @@
     stop categories, release executor guards, sequence advance guards, mirror parity,
     safety boundaries (dry runs change no files and run no git mutations), the Codex
     Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
-    transitions fail-closed; loop stops rather than auto-running a Reviewer turn), and the
+    transitions fail-closed; loop stops rather than auto-running a Reviewer turn), the
     v1.3.1 Codex Master capture POC (master-check/master-run guards, capture-only, fail
-    closed; Master/Codex stays callable: no).
+    closed; Master/Codex stays callable: no), and the v1.4.0 opt-in Reviewer loop integration
+    (loop -IncludeReviewer runs review-run + review-apply in-session: APPROVED -> REVIEW_DONE/
+    User, BLOCKED -> READY_FOR_IMPLEMENTATION and continues under MaxTurns; default loop still
+    stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer).
 
     Usage:  pwsh -File scripts/protocol-tests.ps1
     Exit:   0 = all passed, 1 = one or more failures or a harness error.
@@ -776,6 +779,112 @@ $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "master-run fails closed (exit 6) when Codex exits 0 but captures no recommendation" (($r.Code -eq 6) -and ($r.Out -match "no recommendation was captured"))
 Check "master-run no-capture path leaves no capture file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md"))) -and ($before -eq $after))
+
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+# === 12. Opt-in Reviewer loop integration (loop -IncludeReviewer, v1.4.0) ===
+Write-Host "[12] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
+
+# The fake Codex CLIs below answer `exec --help` (exit 0) and, on the real run, write ONLY
+# CODEX_REVIEW_LAST.md (a local, gitignored, clean-tree-exempt artifact) so the in-loop
+# review-apply's Changed Files == git status guard still matches the single untracked
+# scripts/handoff.ps1. The TASK line matches the fixture's Current Task verbatim.
+$loopTask = "v1.4.0 - Loop Reviewer Test"
+
+$fakeApprove = Join-Path $FixtureRoot "fake-codex-loop-approve.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+echo VERDICT: APPROVED> CODEX_REVIEW_LAST.md
+echo REVIEWER: Codex>> CODEX_REVIEW_LAST.md
+echo TASK: v1.4.0 - Loop Reviewer Test>> CODEX_REVIEW_LAST.md
+echo REASON: scope matches the approved task>> CODEX_REVIEW_LAST.md
+exit /b 0
+'@ | Set-Content -Path $fakeApprove -Encoding ascii
+
+$fakeBlock = Join-Path $FixtureRoot "fake-codex-loop-block.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+echo VERDICT: BLOCKED> CODEX_REVIEW_LAST.md
+echo REVIEWER: Codex>> CODEX_REVIEW_LAST.md
+echo TASK: v1.4.0 - Loop Reviewer Test>> CODEX_REVIEW_LAST.md
+echo REASON: needs a fix before approval>> CODEX_REVIEW_LAST.md
+exit /b 0
+'@ | Set-Content -Path $fakeBlock -Encoding ascii
+
+$fakeMalformed = Join-Path $FixtureRoot "fake-codex-loop-malformed.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+echo this is not a verdict block> CODEX_REVIEW_LAST.md
+exit /b 0
+'@ | Set-Content -Path $fakeMalformed -Encoding ascii
+
+# Default OFF: without -IncludeReviewer, loop still STOPS at the Reviewer turn even when a
+# runnable fake Codex is present - it must not capture a verdict or transition the handoff.
+$env:CODEX_CLI = $fakeApprove
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop without -IncludeReviewer still stops at the Reviewer turn (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "callable only via an explicit command, not inside loop"))
+Check "loop without -IncludeReviewer captures no verdict and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md"))) -and ($before -eq $after))
+Check "loop without -IncludeReviewer creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# Opt-in APPROVED: loop -IncludeReviewer runs review-run + review-apply, applies APPROVED, and
+# stops at REVIEW_DONE / Waiting For: User. No git commit; the reviewed file is untouched.
+$env:CODEX_CLI = $fakeApprove
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$reviewedPath = Join-Path $fx "scripts/handoff.ps1"
+$reviewedBefore = (Get-FileHash -Algorithm SHA256 -Path $reviewedPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeReviewer", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+$reviewedAfter = (Get-FileHash -Algorithm SHA256 -Path $reviewedPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop -IncludeReviewer runs the Reviewer turn and applies APPROVED -> REVIEW_DONE / User (exit 0)" (($r.Code -eq 0) -and ($h -match "State:\s+REVIEW_DONE") -and ($h -match "Waiting For:\s+User"))
+Check "loop -IncludeReviewer APPROVED then stops at the non-loop-eligible User turn" ($r.Out -match "Next actor: User")
+Check "loop -IncludeReviewer APPROVED changes no file other than AI_HANDOFF.md" ($reviewedBefore -eq $reviewedAfter)
+Check "loop -IncludeReviewer APPROVED creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# Opt-in BLOCKED: loop -IncludeReviewer applies BLOCKED -> READY_FOR_IMPLEMENTATION /
+# Implementer, then stops on MaxTurns WITHOUT involving the user and WITHOUT running Claude.
+$env:CODEX_CLI = $fakeBlock
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeReviewer", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop -IncludeReviewer applies BLOCKED -> READY_FOR_IMPLEMENTATION / Implementer (exit 0)" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
+Check "loop -IncludeReviewer BLOCKED stops on MaxTurns without involving the user" (($r.Out -match "MaxTurns") -and ($r.Out -notmatch "automated Claude Code Implementer turn"))
+Check "loop -IncludeReviewer BLOCKED creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# Opt-in malformed verdict: review-apply fails closed (non-zero exit), the loop stops, and the
+# handoff stays READY_FOR_REVIEW with no transition. No git commit.
+$env:CODEX_CLI = $fakeMalformed
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeReviewer", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop -IncludeReviewer fails closed on a malformed verdict (non-zero exit)" ($r.Code -ne 0)
+Check "loop -IncludeReviewer malformed verdict makes no handoff transition (stays READY_FOR_REVIEW)" (($before -eq $after) -and ($h -match "State:\s+READY_FOR_REVIEW") -and ($h -notmatch "State:\s+REVIEW_DONE"))
+Check "loop -IncludeReviewer malformed verdict creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# cycle still refuses a Reviewer turn (the v1.4.0 opt-in is loop-only; cycle is unchanged).
+$env:CODEX_CLI = $fakeApprove
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle")
+Check "cycle still refuses a Reviewer turn (no -IncludeReviewer opt-in for cycle)" (($r.Code -eq 1) -and ($r.Out -match "cycle: blocked"))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 

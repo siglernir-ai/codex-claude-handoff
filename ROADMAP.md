@@ -532,6 +532,48 @@ callable.
 
 ---
 
+### v1.4.0 - Human Intervention Minimization (opt-in Reviewer loop)
+
+**Goal:** Reduce the number of human handoffs after implementation by letting `loop`
+optionally run the already-proven Reviewer/Codex path (`review-run` + `review-apply`) inside
+one explicitly authorized loop session, without automating Master, User, release, or any
+git/deploy action.
+
+**Includes:**
+- A `loop -IncludeReviewer` opt-in flag. Default behavior is unchanged: without the flag,
+  `loop` still stops at `READY_FOR_REVIEW` exactly as in v1.3.0.
+- With the flag, when the bound and actual next actor is the Codex Reviewer at
+  `READY_FOR_REVIEW`, `loop` runs `review-run` (read-only capture, forced `-Yes` because the
+  loop session was authorized) then `review-apply` (consume the captured verdict, edit only
+  `AI_HANDOFF.md`). `APPROVED` stops the loop at `REVIEW_DONE` / `Waiting For: User`; `BLOCKED`
+  returns to `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` and the loop continues
+  under the existing `MaxTurns`/budget rules. A Reviewer turn counts against `-MaxTurns`.
+- All existing fail-closed review guards reused (state, bound + actual Reviewer is Codex and !=
+  actual Implementer, exactly one Task Actors Implementer + Reviewer, Changed Files == git
+  status, strict captured-verdict schema with matching `TASK:`); any violation stops the loop
+  with no transition.
+- The session-start clean-tree gate is relaxed whenever the session begins directly at the Codex
+  Reviewer's `READY_FOR_REVIEW` turn (both modes): without `-IncludeReviewer` the loop just stops
+  cleanly there, and with it `review-run`/`review-apply` still enforce Changed Files == git status.
+- Adapter/method/README docs, protocol tests (section 12), templates, and mirrors updated.
+
+**Does not include:**
+- Making the Reviewer turn `AutoLoopEligible` (it stays `Auto-loop: no`); an `-IncludeReviewer`
+  mode for `cycle` (cycle still refuses Reviewer turns); making Master callable; `master-apply`
+  or any Master loop/cycle integration; an MCP/API bridge; new roles or states; any
+  git/commit/push/tag/rebase/amend/deploy/db/secret action or bypass/danger sandbox flag.
+
+**Exit criteria (honest status):**
+- Default `loop` still stops at the Reviewer turn; `loop -IncludeReviewer` captures + applies a
+  verdict in-session and routes APPROVED -> `REVIEW_DONE`/User (stop) and BLOCKED ->
+  `READY_FOR_IMPLEMENTATION`/Implementer (continue) without involving the user. MET (pending
+  Reviewer-run tests).
+- Malformed/stale/missing verdicts and any guard violation fail closed with no transition; no
+  test path creates a git commit; `cycle` still refuses Reviewer turns; Master/Codex stays
+  `callable: no` / `Auto-loop: no`. MET (pending Reviewer-run tests).
+
+---
+
 ## Safety Model for Autonomous Dialogue
 
 These boundaries apply to any automated turn in v0.16.0 and especially v0.17.0. Every item

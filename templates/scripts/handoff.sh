@@ -193,7 +193,7 @@ _adapter_profile() {
         ADAPTER_AUTOLOOP="no"
         ADAPTER_STATES="READY_FOR_REVIEW"
         ADAPTER_INVOCATION="PowerShell only: pwsh scripts/handoff.ps1 review-run (capture) then pwsh scripts/handoff.ps1 review-apply (apply the captured verdict's local AI_HANDOFF.md transition)."
-        ADAPTER_SAFETY="Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only; review-apply edits only AI_HANDOFF.md; never loop/cycle automated; no commit/push/tag/deploy/db/secrets; no release action."
+        ADAPTER_SAFETY="Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only; review-apply edits only AI_HANDOFF.md; not auto-run by default; only PowerShell loop -IncludeReviewer may opt in; Bash/cycle never do; no commit/push/tag/deploy/db/secrets; no release action."
         ADAPTER_STOP="Operator Manual Action"
         ADAPTER_AUTH="yes, explicit yes before review-run and review-apply"
         ADAPTER_REASON="review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end (PowerShell only); callable via these explicit commands only - never inside loop or cycle."
