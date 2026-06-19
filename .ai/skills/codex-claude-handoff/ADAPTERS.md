@@ -36,7 +36,7 @@ orchestrator exists.
 |---|---|---|---|---|---|---|---|
 | Master | Codex | no | none | Run `handoff.ps1 next` or `handoff.sh next`, then paste the generated prompt into Codex. | Manual turn only; no source edits unless the user explicitly asks; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor | no for paste; yes for protected actions |
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle` or `handoff.ps1 loop`. | Explicit `yes` confirmation; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
-| Reviewer | Codex | no | none | Run `handoff.ps1 next` or `handoff.sh next`, then paste the generated prompt into Codex. A read-only review-output capture POC exists (`handoff.ps1 review-check` / `review-run`, since v1.2.0) but does NOT make Reviewer callable - see "Codex Reviewer POC" below. | Manual review only; independent-review invariant still applies; no release action without user authorization. | Non-callable Actor | no for paste; yes for release actions |
+| Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; NEVER auto-run by `loop`/`cycle` (callable != loop-eligible); no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; release stays a separate User authorization |
 
 ## Release Execution Adapter
 
@@ -55,17 +55,25 @@ contract shape as role adapters.
 - `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`, and `QUESTION_FOR_IMPLEMENTER` remain
   manual. The current Claude Code CLI invocation cannot be safely
   restricted to handoff-only edits in non-interactive mode.
-- Master and Reviewer turns remain manual until a real local adapter for the
-  bound tool exists and is verified.
-- Codex is not callable in this protocol. A discovered Codex CLI binary - even with a
-  passing read-only `codex exec` smoke test - is not sufficient on its own: no protocol
-  wrapper/adapter has been implemented and tested, and no MCP adapter or API bridge is
-  wired into the workflow scripts. See "Codex CLI Verification" below. Since v1.2.0 a
-  read-only Codex Reviewer POC (`review-check` / `review-run`) wires a guarded per-turn
-  Codex invocation into the scripts, but it is capture-only and does NOT make any Codex
-  role callable. See "Codex Reviewer POC" below.
+- Master turns remain manual until a real local adapter for the bound tool exists and is
+  verified. Since v1.3.0 the Reviewer/Codex `READY_FOR_REVIEW` turn IS callable, but only
+  via the explicit `review-run` + `review-apply` commands - see "Automated Reviewer Turn"
+  below. It is deliberately NOT loop/cycle eligible.
+- `callable` is not the same as `loop`/`cycle` eligible. The adapter model carries a
+  separate `AutoLoopEligible` flag: `loop` and `cycle` gate on `AutoLoopEligible`, never on
+  `callable`, so an explicit-command-only adapter (Reviewer/Codex) makes `loop` STOP rather
+  than auto-run a turn. Only `READY_FOR_IMPLEMENTATION` / Implementer / Claude Code is
+  `AutoLoopEligible` in v1.3.0.
+- Codex was not callable through v1.2.0: a discovered Codex CLI binary - even with a passing
+  read-only `codex exec` smoke test - was not sufficient on its own, and the v1.2.0
+  `review-check` / `review-run` POC was capture-only. Since v1.3.0, the Reviewer/Codex
+  `READY_FOR_REVIEW` turn is callable end-to-end via `review-run` + `review-apply` (read-only
+  capture then a fail-closed local `AI_HANDOFF.md` transition). All other Codex roles/states,
+  including Master/Codex, remain `callable: no`. See "Codex CLI Verification", "Codex Reviewer
+  POC", and "Automated Reviewer Turn" below.
 - Since v0.19.1, `release-check` and `release` are PowerShell-only. Bash reports the
-  limitation honestly and does not run release git mutations.
+  limitation honestly and does not run release git mutations. `review-apply` (v1.3.0) is
+  likewise PowerShell-only; Bash refuses honestly.
 
 ## Script Contract
 
@@ -168,10 +176,10 @@ POC demonstrates a wired, guarded, read-only Codex invocation that captures a re
 verdict to local artifacts; it does NOT complete the Reviewer's protocol responsibility
 end-to-end:
 
-- It does not transition `AI_HANDOFF.md` (no automatic `REVIEW_DONE` or
-  `READY_FOR_IMPLEMENTATION`). A human or the Master reads the captured verdict and
-  applies the state transition manually. Automating that transition from a structured
-  Codex verdict is deferred to v1.3.0.
+- `review-run` itself does not transition `AI_HANDOFF.md` (no automatic `REVIEW_DONE` or
+  `READY_FOR_IMPLEMENTATION`); it only captures. Since v1.3.0 the separate `review-apply`
+  command reads the captured verdict and applies the state transition fail-closed - see
+  "Automated Reviewer Turn" below. `review-run` stays strictly capture-only.
 - It satisfies criterion 4 (Reviewer independence) of the v1.1.0 callability criteria by
   refusing unless the bound and actual Reviewer is Codex and the actual Reviewer differs
   from the actual Implementer, but a verdict capture is not the same as a tested,
@@ -188,8 +196,10 @@ hardcoded in the scripts, docs, or templates.
 command-line argument, so a multi-word prompt is never split into separate argv tokens.
 The prompt is tightly scoped for bounded runtime: Codex is told to be fast, to NOT load
 AGENTS.md / CLAUDE.md / the skill or other protocol files, to inspect only AI_HANDOFF.md,
-`git status`, and the Changed Files' diffs, and to end with one line `VERDICT: APPROVED`
-or `VERDICT: BLOCKED` plus a one-line reason.
+`git status`, and the Changed Files' diffs. Since v1.3.0 the prompt asks Codex to end with
+a strict four-line verdict block (`VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:`
+the current task verbatim, `REASON:` one line) so the captured verdict is machine-parseable
+by `review-apply`.
 `review-run` is bounded by `-TimeoutSeconds` (default 180) and runs Codex as a tracked
 child process. If Codex does not finish in time it fails closed: it terminates the Codex
 process tree, preserves any partial `CODEX_REVIEW.jsonl` labelled as incomplete, removes
@@ -202,3 +212,42 @@ Captured artifacts are local and gitignored, never committed: `CODEX_REVIEW.json
 `--json` event stream) and `CODEX_REVIEW_LAST.md` (the Codex final message via
 `--output-last-message`). Both are in the clean-tree exemption list and the `.gitignore`
 rules.
+
+## Automated Reviewer Turn (v1.3.0)
+
+Since v1.3.0, `handoff.ps1 review-apply` completes the Reviewer's `READY_FOR_REVIEW` turn by
+applying the verdict captured by `review-run`. With the two commands together, the
+Reviewer/Codex `READY_FOR_REVIEW` turn is **callable end-to-end** (read approved scope ->
+produce a verdict -> apply the correct local handoff transition), fail-closed. This is the
+first Codex-held role turn recorded `callable: yes` in the Default Local Registry, and it is
+narrowly scoped.
+
+| Capability | Callable | Auto-loop eligible | Eligible state | Invocation | Safety limits | Stop category when blocked | User authorization required |
+|---|---|---|---|---|---|---|---|
+| Automated Reviewer turn (capture + apply) | yes, explicit-command only | no | `READY_FOR_REVIEW` with `Waiting For: Reviewer` | Capture: `handoff.ps1 review-run` (explicit `yes`). Apply: `handoff.ps1 review-apply` (explicit `yes`, or `-Yes` for automation). | All `review-run` guards re-checked at apply time (bound + actual Reviewer is Codex and != actual Implementer; exactly one Task Actors Implementer + Reviewer; Changed Files == git status); the captured verdict must parse to exactly one strict block (one `VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:` matching the current task, non-empty `REASON:`); `review-apply` edits ONLY `AI_HANDOFF.md`; no Codex re-invocation; no git add/commit/push/tag; no deploy/db/secrets; no release action; never auto-run by `loop`/`cycle`. | Protocol guard / Environment-Preflight (no usable verdict) - not a user decision; Protocol Repair when a required handoff section is missing. | yes, explicit `yes` (or `-Yes`) before `review-apply`; release stays a separate User authorization |
+
+State transitions applied by `review-apply`:
+
+- `VERDICT: APPROVED` -> `State: REVIEW_DONE`, `Waiting For: User`. The Reviewer attests
+  technical readiness; the user still grants release authorization. `review-apply` performs
+  NO release action.
+- `VERDICT: BLOCKED` -> `State: READY_FOR_IMPLEMENTATION`, `Waiting For: Implementer`, with
+  the captured `REASON` recorded under Last Update so the Implementer sees why.
+
+`review-apply` rewrites only the Status, Last Update, and Next Recommended Step sections of
+`AI_HANDOFF.md` (every other section, including Task Actors and Changed Files, is preserved)
+and fails closed without writing if any of those required sections is missing.
+
+Why `callable: yes` but `AutoLoopEligible: no`: the adapter model separates "has a verified
+end-to-end command path" (`callable`) from "may be auto-run inside `loop`/`cycle`"
+(`AutoLoopEligible`). `loop` and `cycle` gate on `AutoLoopEligible`, so the Reviewer/Codex
+turn makes `loop` STOP and never runs unattended. Integrating Reviewer turns into `loop` is
+deferred to v1.4.0. Master/Codex remains `callable: no` (no Master automation in v1.3.0; a
+capture-only Master POC may be planned as v1.3.1).
+
+Tested fail-closed conditions (see `protocol-tests.ps1`, section 10): missing capture file;
+malformed / missing / multiple / unknown-token `VERDICT`; empty `REASON`; `REVIEWER` not
+Codex; stale `TASK` mismatch; wrong State / `Waiting For`; Changed Files != git status;
+actual Reviewer == actual Implementer. Each blocks with no transition and no `AI_HANDOFF.md`
+change. `loop` stops at a Reviewer turn instead of auto-running it, and `cycle` refuses it.
+`review-apply` is PowerShell-only; Bash refuses honestly and points to PowerShell.

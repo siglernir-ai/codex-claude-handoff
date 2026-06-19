@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v1.2.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.0)
 # Commands: status, adapters, next, start, commit-check
 # cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
-# review-check, and review-run require PowerShell; use handoff.ps1.
+# review-check, review-run, and review-apply require PowerShell; use handoff.ps1.
 
 set -euo pipefail
 
@@ -167,6 +167,7 @@ _stop_category() {
 _adapter_profile() {
     local role="$1" tool="$2"
     ADAPTER_CALLABLE="no"
+    ADAPTER_AUTOLOOP="no"
     ADAPTER_STATES="none"
     ADAPTER_INVOCATION="Run 'handoff.sh next' then paste the generated prompt into $tool."
     ADAPTER_SAFETY="Manual prompt handoff only; no commit/push/tag/deploy/db/secrets automation."
@@ -177,14 +178,27 @@ _adapter_profile() {
 
     if [ "$role" = "Implementer" ] && [ "$tool" = "Claude Code" ]; then
         ADAPTER_CALLABLE="yes"
+        ADAPTER_AUTOLOOP="yes"
         ADAPTER_STATES="READY_FOR_IMPLEMENTATION"
         ADAPTER_INVOCATION="PowerShell only: handoff.ps1 cycle or handoff.ps1 loop invokes npx --yes @anthropic-ai/claude-code with Bash disallowed, a budget cap, and no session persistence."
         ADAPTER_SAFETY="Explicit yes confirmation in PowerShell; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation."
         ADAPTER_AUTH="yes, before cycle or loop session"
         ADAPTER_REASON="Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual."
         ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use bash scripts/handoff.sh next + paste for other turns."
+    elif [ "$role" = "Reviewer" ] && [ "$tool" = "Codex" ]; then
+        # Callable in PowerShell only (since v1.3.0) via review-run + review-apply, and never
+        # auto-run by loop/cycle (Auto-loop stays no). Bash itself never invokes Codex.
+        ADAPTER_CALLABLE="yes (PowerShell only: review-run + review-apply)"
+        ADAPTER_AUTOLOOP="no"
+        ADAPTER_STATES="READY_FOR_REVIEW"
+        ADAPTER_INVOCATION="PowerShell only: pwsh scripts/handoff.ps1 review-run (capture) then pwsh scripts/handoff.ps1 review-apply (apply the captured verdict's local AI_HANDOFF.md transition)."
+        ADAPTER_SAFETY="Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only; review-apply edits only AI_HANDOFF.md; never loop/cycle automated; no commit/push/tag/deploy/db/secrets; no release action."
+        ADAPTER_STOP="Operator Manual Action"
+        ADAPTER_AUTH="yes, explicit yes before review-run and review-apply"
+        ADAPTER_REASON="review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end (PowerShell only); callable via these explicit commands only - never inside loop or cycle."
+        ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 review-run then review-apply; Bash cannot invoke Codex."
     elif [ "$tool" = "Codex" ]; then
-        ADAPTER_REASON="No Codex CLI, MCP adapter, API bridge, or other local callable adapter is present in this repository."
+        ADAPTER_REASON="No callable local adapter is present for $tool in the $role role in this repository."
     fi
 }
 
@@ -217,6 +231,7 @@ cmd_adapters() {
         echo "Role:        $role"
         echo "Tool:        $tool"
         echo "Callable:    $ADAPTER_CALLABLE"
+        echo "Auto-loop:   $ADAPTER_AUTOLOOP  (yes only if loop/cycle may auto-run this turn)"
         echo "States:      $ADAPTER_STATES"
         echo "Reason:      $ADAPTER_REASON"
         echo "Invocation:  $ADAPTER_INVOCATION"
@@ -499,16 +514,18 @@ cmd_sequence_blocked() {
     exit 1
 }
 
-# review-check / review-run are PowerShell-only (one path owns the read-only Codex
-# invocation, guard checks, and local artifact capture). Bash never invokes Codex.
+# review-check / review-run / review-apply are PowerShell-only (one path owns the
+# read-only Codex invocation, the fail-closed guards, local artifact capture, and the
+# captured-verdict AI_HANDOFF.md transition). Bash never invokes Codex or applies a verdict.
 cmd_review_blocked() {
     local cmd_name="$1"
     echo ""
     echo "$cmd_name is not available in handoff.sh."
-    echo "The Codex Reviewer POC is implemented in PowerShell only so one path owns the read-only Codex invocation, the fail-closed guards, and local artifact capture."
+    echo "The Codex Reviewer automation is implemented in PowerShell only so one path owns the read-only Codex invocation, the fail-closed guards, local artifact capture, and the captured-verdict AI_HANDOFF.md transition."
     echo "To dry-run:  pwsh scripts/handoff.ps1 review-check"
-    echo "To run:      pwsh scripts/handoff.ps1 review-run"
-    echo "It runs Codex read-only and captures output locally; it never runs git add/commit/push/tag and never changes AI_HANDOFF.md."
+    echo "To capture:  pwsh scripts/handoff.ps1 review-run"
+    echo "To apply:    pwsh scripts/handoff.ps1 review-apply"
+    echo "review-run runs Codex read-only and captures output locally; review-apply edits only AI_HANDOFF.md. Neither ever runs git add/commit/push/tag."
     echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
     echo ""
     exit 1
@@ -533,6 +550,7 @@ case "$COMMAND" in
     sequence-advance) cmd_sequence_blocked "sequence-advance" ;;
     review-check) cmd_review_blocked "review-check" ;;
     review-run)   cmd_review_blocked "review-run" ;;
+    review-apply) cmd_review_blocked "review-apply" ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
     loop)         cmd_automation_blocked "loop" ;;
@@ -552,6 +570,7 @@ case "$COMMAND" in
         echo "  sequence-advance          Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  review-check              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  review-run                Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  review-apply              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."

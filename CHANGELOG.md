@@ -3,6 +3,42 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.3.0 - Automated Reviewer Turn (review-apply)
+
+- Added `handoff.ps1 review-apply`: it consumes the verdict captured by `review-run`
+  (`CODEX_REVIEW_LAST.md`) and applies the corresponding LOCAL `AI_HANDOFF.md` transition
+  fail-closed - `APPROVED` -> `REVIEW_DONE` / `Waiting For: User`; `BLOCKED` ->
+  `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` (recording the reason). It does
+  NOT re-invoke Codex, runs no git, edits only `AI_HANDOFF.md`, and requires an explicit
+  `yes` (or `-Yes` for automation). Modeled on `sequence-advance`.
+- Tightened the `review-run` review prompt to require a strict four-line verdict block
+  (`VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:` the current task verbatim,
+  `REASON:` one line) so the captured verdict is machine-parseable. `review-run` remains
+  strictly capture-only.
+- Strict, fail-closed verdict parsing (`Get-VerdictFromCapture`): refuses unless the capture
+  has exactly one valid `VERDICT` (case-sensitive APPROVED/BLOCKED), `REVIEWER: Codex`, a
+  `TASK:` matching the current Current Task (anti-stale guard), and a non-empty `REASON:`.
+  `review-apply` also re-runs every `review-run` protocol guard (state, bound/actual Reviewer
+  is Codex and != actual Implementer, Changed Files == git status) before any write.
+- Adapter model now separates `callable` from loop/cycle eligibility via a new
+  `AutoLoopEligible` flag. `loop` and `cycle` gate on `AutoLoopEligible`, never on `callable`,
+  so an explicit-command-only adapter makes `loop` STOP rather than auto-run a turn.
+- Reviewer/Codex is now `callable: yes` for `READY_FOR_REVIEW` (via `review-run` +
+  `review-apply`) but `AutoLoopEligible: no`: it is never auto-run by `loop`/`cycle`. The
+  `adapters` command prints the new `Auto-loop` line. Master/Codex remains `callable: no`.
+  Loop integration of Reviewer turns is deferred to v1.4.0; a capture-only Master POC may be
+  planned as v1.3.1.
+- Added `-Yes` to `loop` (skip the session confirmation for automation/tests; all other loop
+  safety guards still apply).
+- Bash `handoff.sh review-apply` refuses honestly and points to PowerShell.
+- Tests: `protocol-tests.ps1` adds section 10 (review-apply APPROVED/BLOCKED transitions;
+  fail-closed on missing/malformed/multiple/unknown-token verdict, empty reason, wrong
+  reviewer, stale TASK; guard reuse for wrong state, Changed Files mismatch, equal actors;
+  `loop` stops at a Reviewer turn; `cycle` refuses it) plus a Reviewer-callable/Auto-loop
+  adapter assertion. `protocol-tests.sh` adds the `review-apply` honest-refusal check.
+  62 PowerShell checks and 11 Bash checks pass. Bumped `VERSION` to 1.3.0 (canonical and
+  template mirror); updated `ADAPTERS.md` and `PROTOCOL_METHOD.md` (+ mirrors).
+
 ## 1.2.0 - Codex Reviewer Adapter Proof of Concept
 
 - Added a narrow, conservative Codex Reviewer proof of concept to `scripts/handoff.ps1`:

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.2.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.3.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -10,7 +10,9 @@
 
     Coverage: state routing, turn-ownership mismatch routing, adapter decisions,
     stop categories, release executor guards, sequence advance guards, mirror parity,
-    and safety boundaries (dry runs change no files and run no git mutations).
+    safety boundaries (dry runs change no files and run no git mutations), the Codex
+    Reviewer POC capture guards, and the v1.3.0 automated Reviewer turn (review-apply
+    verdict transitions fail-closed; loop stops rather than auto-running a Reviewer turn).
 
     Usage:  pwsh -File scripts/protocol-tests.ps1
     Exit:   0 = all passed, 1 = one or more failures or a harness error.
@@ -144,6 +146,70 @@ $Extra
 "@
 }
 
+# Build an AI_HANDOFF.md for review-apply tests: includes the Status, Last Update, Task
+# Actors, Changed Files, Dialogue, and Next Recommended Step sections review-apply needs.
+# Changed Files lists scripts/handoff.ps1 so the scope guard matches an untracked fixture file.
+function New-ReviewHandoff {
+    param(
+        [string]$State = "READY_FOR_REVIEW",
+        [string]$WaitingFor = "Reviewer",
+        [string]$CurrentTask = "v1.3.0 - Review Apply Test"
+    )
+    return @"
+# AI Handoff
+
+## Status
+- State: $State
+- Waiting For: $WaitingFor
+- Last Updated By: Test
+- Last Updated At: 2026-06-14
+- Current Task: $CurrentTask
+
+## Last Update
+- Actor: Test
+- Date: 2026-06-14
+- Task: Fixture for review-apply tests.
+
+## Task Actors
+- Implementer: Claude Code
+- Reviewer: Codex
+
+## Changed Files
+- scripts/handoff.ps1
+
+## Dialogue / Open Questions
+- None
+
+## Next Recommended Step
+- See AI_HANDOFF.md.
+"@
+}
+
+# Build a disposable review-apply fixture: clean git baseline, the reviewed file
+# (scripts/handoff.ps1) untracked so scope matches Changed Files, and optionally a
+# captured verdict file (CODEX_REVIEW_LAST.md). Returns the fixture dir path.
+function New-ReviewApplyFixture {
+    param(
+        [string]$Capture,
+        [string]$CurrentTask = "v1.3.0 - Review Apply Test",
+        [string]$State = "READY_FOR_REVIEW",
+        [string]$WaitingFor = "Reviewer",
+        [string]$Roles = $DefaultRoles,
+        [string]$ReviewerActor = "Codex",
+        [switch]$AddExtraUntracked,
+        [switch]$NoCapture
+    )
+    $handoff = New-ReviewHandoff -State $State -WaitingFor $WaitingFor -CurrentTask $CurrentTask
+    if ($ReviewerActor -ne "Codex") { $handoff = $handoff -replace "- Reviewer: Codex", "- Reviewer: $ReviewerActor" }
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
+    Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+    if ($AddExtraUntracked) { Set-Content -Path (Join-Path $fx "EXTRA_FILE.txt") -Value "extra" -Encoding utf8 }
+    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "CODEX_REVIEW_LAST.md") -Value $Capture -Encoding utf8 }
+    return $fx
+}
+
 # Run handoff.ps1 in $WorkDir as a child process; capture exit code + combined output.
 function Invoke-Handoff {
     param([string]$WorkDir, [string[]]$Arguments)
@@ -201,6 +267,9 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMP
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
 Check "Implementer/Claude Code adapter is callable for READY_FOR_IMPLEMENTATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Tool:\s+Claude Code.*?Callable:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION")
 Check "Master/Codex adapter is not callable (manual handoff)" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+no")
+# Since v1.3.0 Reviewer/Codex is callable for READY_FOR_REVIEW (review-run + review-apply)
+# but Auto-loop is no: loop/cycle must never auto-run it.
+Check "Reviewer/Codex adapter is callable for READY_FOR_REVIEW but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Reviewer.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+READY_FOR_REVIEW")
 Check "Release executor advertised as PowerShell-only, REVIEW_DONE-gated" (($r.Out -match "Authorized release executor") -and ($r.Out -match "REVIEW_DONE"))
 
 # === 4. Stop categories ===
@@ -488,6 +557,98 @@ Check "review-run fails closed (exit 6) when Codex exits 0 but captures no verdi
 Check "review-run no-verdict path leaves no verdict file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md"))) -and ($before -eq $after))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+# === 10. Automated Reviewer turn (review-apply, v1.3.0) ===
+Write-Host "[10] Automated Reviewer turn (review-apply)"
+
+$task = "v1.3.0 - Review Apply Test"
+$approvedCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $task`nREASON: scope matches the approved task"
+$blockedCapture  = "VERDICT: BLOCKED`nREVIEWER: Codex`nTASK: $task`nREASON: needs a fix before approval"
+
+# APPROVED verdict -> REVIEW_DONE / Waiting For: User; edits only AI_HANDOFF.md; no commit.
+$fx = New-ReviewApplyFixture -Capture $approvedCapture -CurrentTask $task
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$reviewedPath = Join-Path $fx "scripts/handoff.ps1"
+$reviewedBefore = (Get-FileHash -Algorithm SHA256 -Path $reviewedPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$h = Get-Content -Raw -Path $handoffPath
+$reviewedAfter = (Get-FileHash -Algorithm SHA256 -Path $reviewedPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "review-apply APPROVED sets REVIEW_DONE / Waiting For: User" (($r.Code -eq 0) -and ($h -match "State:\s+REVIEW_DONE") -and ($h -match "Waiting For:\s+User"))
+Check "review-apply APPROVED records the verdict and source pointer" (($h -match "Verdict:\s+APPROVED") -and ($h -match "CODEX_REVIEW_LAST.md"))
+Check "review-apply changes no file other than AI_HANDOFF.md (reviewed file untouched)" ($reviewedBefore -eq $reviewedAfter)
+Check "review-apply creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# BLOCKED verdict -> READY_FOR_IMPLEMENTATION / Waiting For: Implementer; records the reason.
+$fx = New-ReviewApplyFixture -Capture $blockedCapture -CurrentTask $task
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$h = Get-Content -Raw -Path $handoffPath
+Check "review-apply BLOCKED sets READY_FOR_IMPLEMENTATION / Waiting For: Implementer" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
+Check "review-apply BLOCKED records the captured reason for the Implementer" ($h -match "needs a fix before approval")
+
+# Fail-closed verdict parsing: each bad capture blocks (exit 1) and leaves AI_HANDOFF.md unchanged.
+$badCaptures = @{
+    "missing VERDICT line"    = "REVIEWER: Codex`nTASK: $task`nREASON: no verdict line here"
+    "multiple VERDICT lines"  = "VERDICT: APPROVED`nVERDICT: BLOCKED`nREVIEWER: Codex`nTASK: $task`nREASON: two verdicts"
+    "unknown verdict token"   = "VERDICT: MAYBE`nREVIEWER: Codex`nTASK: $task`nREASON: not a real verdict"
+    "empty REASON"            = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $task`nREASON: "
+    "REVIEWER not Codex"      = "VERDICT: APPROVED`nREVIEWER: Claude Code`nTASK: $task`nREASON: wrong reviewer"
+    "stale TASK mismatch"     = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: some other task`nREASON: stale capture"
+}
+foreach ($name in $badCaptures.Keys) {
+    $fx = New-ReviewApplyFixture -Capture $badCaptures[$name] -CurrentTask $task
+    $handoffPath = Join-Path $fx "AI_HANDOFF.md"
+    $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+    $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+    Check "review-apply fails closed on $name (no transition, no handoff change)" (($r.Code -ne 0) -and ($before -eq $after))
+}
+
+# Missing capture file -> blocked, no handoff change.
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $task
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-apply fails closed when no captured verdict file exists" (($r.Code -ne 0) -and ($r.Out -match "No captured verdict file") -and ($before -eq $after))
+
+# Guard reuse: wrong state blocks before any transition.
+$fx = New-ReviewApplyFixture -Capture $approvedCapture -CurrentTask $task -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-apply blocks unless State is READY_FOR_REVIEW / Waiting For: Reviewer" (($r.Code -eq 1) -and ($r.Out -match "must be State: READY_FOR_REVIEW") -and ($before -eq $after))
+
+# Guard reuse: Changed Files != git status (an extra untracked file) blocks.
+$fx = New-ReviewApplyFixture -Capture $approvedCapture -CurrentTask $task -AddExtraUntracked
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-apply blocks when Changed Files does not match git status" (($r.Code -eq 1) -and ($r.Out -match "does not match git status") -and ($before -eq $after))
+
+# Guard reuse: independent-review invariant (actual Reviewer == actual Implementer) blocks.
+$fx = New-ReviewApplyFixture -Capture $approvedCapture -CurrentTask $task -ReviewerActor "Claude Code"
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "review-apply blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($before -eq $after))
+
+# loop must STOP at a READY_FOR_REVIEW Reviewer turn, never auto-run it (callable but not loop-eligible).
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes")
+Check "loop stops at a Reviewer turn instead of auto-running it (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "callable only via an explicit command, not inside loop"))
+Check "loop does not start an Implementer turn for a Reviewer state" ($r.Out -notmatch "automated Claude Code Implementer turn")
+
+# cycle must refuse a Reviewer state too (RFI-only; explicit-only adapters are never auto-run).
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle")
+Check "cycle refuses a READY_FOR_REVIEW Reviewer turn" (($r.Code -eq 1) -and ($r.Out -match "cycle: blocked"))
 
 # --- Summary ---
 Write-Host ""

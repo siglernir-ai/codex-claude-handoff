@@ -448,7 +448,8 @@ safety boundary or pretending full autonomy exists.
 - Adapter/method/README docs, protocol tests, templates, and mirrors updated.
 
 **Does not include:**
-- Automatic `AI_HANDOFF.md` state transitions from the verdict (deferred to v1.3.0).
+- Automatic `AI_HANDOFF.md` state transitions from the verdict (delivered in v1.3.0 via
+  `review-apply`).
 - Marking any Codex role callable; automating Master turns; an MCP/API bridge; new
   roles or states; any git/commit/push/tag/deploy/db/secret action.
 
@@ -456,8 +457,43 @@ safety boundary or pretending full autonomy exists.
 - `review-check` prints the plan and mutates nothing; `review-run` runs Codex read-only,
   captures the verdict locally, and changes no git state and no `AI_HANDOFF.md`. MET.
 - Guards fail closed and are test-covered; Bash refuses honestly; mirrors are in sync. MET.
-- STILL `callable: no`: this is a capture-only POC, not an end-to-end callable Reviewer
-  role turn. The Default Local Registry keeps Reviewer/Codex non-callable.
+- Capture-only POC as of v1.2.0; the end-to-end callable Reviewer turn arrives in v1.3.0.
+
+---
+
+### v1.3.0 - Automated Reviewer Turn (review-apply)
+
+**Goal:** Complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end by applying the verdict
+captured by `review-run`, without weakening any safety boundary and without making the turn
+auto-runnable inside `loop`/`cycle`.
+
+**Includes:**
+- PowerShell `handoff.ps1 review-apply`: consumes `CODEX_REVIEW_LAST.md` and applies the
+  local `AI_HANDOFF.md` transition (`APPROVED` -> `REVIEW_DONE` / `Waiting For: User`;
+  `BLOCKED` -> `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`), after an explicit
+  `yes` (or `-Yes`). Modeled on `sequence-advance`; edits only `AI_HANDOFF.md`; no Codex
+  re-invocation; no git.
+- A strict four-line verdict block in the `review-run` prompt (`VERDICT`, `REVIEWER: Codex`,
+  `TASK` matching the current task, non-empty `REASON`) and a fail-closed parser.
+- `review-apply` re-runs every `review-run` protocol guard before any write.
+- A new `AutoLoopEligible` adapter flag, distinct from `callable`. `loop` and `cycle` gate on
+  `AutoLoopEligible`, so an explicit-only adapter makes `loop` STOP rather than auto-run.
+- `-Yes` added to `loop` for automation/tests (all other loop guards still apply).
+- Tests (`protocol-tests.ps1` section 10 + a Reviewer-adapter assertion; `protocol-tests.sh`
+  refusal check), docs (ADAPTERS/PROTOCOL_METHOD/README/CHANGELOG), templates, and mirrors.
+
+**Does not include:**
+- Loop integration of Reviewer turns (deferred to v1.4.0).
+- Any Master automation (a capture-only Master POC may be planned as v1.3.1); marking
+  Master/Codex callable; an MCP/API bridge; new roles or states; any
+  git/commit/push/tag/deploy/db/secret action; any release authorization.
+
+**Exit criteria (honest status):**
+- Reviewer/Codex `READY_FOR_REVIEW` is `callable: yes` via `review-run` + `review-apply`,
+  fail-closed, edits only `AI_HANDOFF.md`, and is test-covered. MET.
+- `AutoLoopEligible: no` for Reviewer/Codex: `loop` stops and `cycle` refuses a Reviewer
+  turn, proven by tests. MET.
+- Master/Codex remains `callable: no`; no release/git automation added. MET.
 
 ---
 

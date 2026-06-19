@@ -152,15 +152,20 @@ status, the actual task Reviewer and actual task Implementer recorded in
 `AI_HANDOFF.md` `Task Actors` are present and different, pre-release checks pass,
 and the user supplies the exact release authorization token.
 
-Codex Reviewer POC (since v1.2.0): the `review-check` / `review-run` commands invoke
-Codex read-only during `READY_FOR_REVIEW` and capture a review verdict to local,
-gitignored artifacts. This is a guarded Operator Manual Action (an explicit `yes`
-confirmation runs the read-only Codex CLI), not a callable role turn: it performs no
-git mutation and does not transition `AI_HANDOFF.md`. The actual `REVIEW_DONE` /
-`READY_FOR_IMPLEMENTATION` transition stays a manual step a human or the Master applies
-from the captured verdict. The independent-review invariant is unchanged: the POC
-refuses unless the bound and actual Reviewer is Codex and differs from the actual
-Implementer. See `ADAPTERS.md`, "Codex Reviewer POC".
+Codex Reviewer turn (since v1.2.0, completed v1.3.0): the `review-check` / `review-run`
+commands invoke Codex read-only during `READY_FOR_REVIEW` and capture a review verdict to
+local, gitignored artifacts. Since v1.3.0 the `review-apply` command reads that captured
+verdict and applies the resulting transition: `APPROVED` -> `REVIEW_DONE` / `Waiting For:
+User`; `BLOCKED` -> `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`. Each command is
+a guarded Operator Manual Action requiring an explicit `yes`; `review-run` performs no git
+mutation and never transitions `AI_HANDOFF.md`, and `review-apply` edits ONLY `AI_HANDOFF.md`
+(no git, no release action) and fails closed on any missing/malformed/stale verdict or failed
+guard. Together they make the Reviewer/Codex `READY_FOR_REVIEW` turn callable end-to-end, but
+ONLY via these explicit commands - the turn is never auto-run by `loop`/`cycle` (the adapter's
+`AutoLoopEligible` flag is false). The independent-review invariant is unchanged: both
+commands refuse unless the bound and actual Reviewer is Codex and differs from the actual
+Implementer. The user's release authorization at `REVIEW_DONE` is also unchanged. See
+`ADAPTERS.md`, "Automated Reviewer Turn".
 
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 

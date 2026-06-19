@@ -63,19 +63,18 @@ Current local status:
 
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION`
   through `handoff.ps1 cycle` / `handoff.ps1 loop`.
-- Master and Reviewer bound to Codex are manual because this repository has no
-  verified local Codex callable adapter. A Codex CLI binary may be discoverable on a
-  machine, and as of v1.1.0 a read-only `codex exec` smoke test has been run
-  successfully (read-only sandbox, deterministic JSON output, no git change) - but that
-  is not sufficient on its own: no protocol wrapper/adapter has been implemented and
-  tested, so Codex stays `callable: no`. No MCP adapter or API bridge is wired in. See
-  the "Codex CLI Verification" section of `ADAPTERS.md`.
-- Since v1.2.0 a read-only **Codex Reviewer POC** (`handoff.ps1 review-check` /
-  `review-run`) wires a guarded per-turn Codex invocation into the scripts during
-  `READY_FOR_REVIEW`. It captures a review verdict to local, gitignored artifacts but is
-  capture-only: it runs no git command and does not transition `AI_HANDOFF.md`, so the
-  Reviewer stays `callable: no`. A human or the Master applies the actual state
-  transition. See the "Codex Reviewer POC" section of `ADAPTERS.md`.
+- Master bound to Codex is manual because this repository has no verified local Codex
+  callable adapter for that role. A Codex CLI binary may be discoverable on a machine, and
+  as of v1.1.0 a read-only `codex exec` smoke test has been run successfully (read-only
+  sandbox, deterministic JSON output, no git change). See the "Codex CLI Verification"
+  section of `ADAPTERS.md`.
+- Since v1.3.0 the **Reviewer/Codex `READY_FOR_REVIEW` turn is callable end-to-end** via the
+  explicit two-step `handoff.ps1 review-run` (read-only Codex capture) + `handoff.ps1
+  review-apply` (apply the captured verdict's local `AI_HANDOFF.md` transition, fail-closed).
+  This is callable **only via those explicit commands**: it is never auto-run by `loop` or
+  `cycle` (the adapter is `callable: yes` but `Auto-loop: no`). `review-run` runs no git and
+  never transitions `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex
+  remains `callable: no`. See the "Automated Reviewer Turn" section of `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.
@@ -395,14 +394,14 @@ The review prompt is delivered on Codex's standard input (the trailing `-`), not
 command-line argument, so a multi-word prompt is never split into separate argv tokens.
 The prompt is tightly scoped so the review finishes within the timeout: it tells Codex to
 be fast, not to load `AGENTS.md` / `CLAUDE.md` / the skill or other protocol files, to
-inspect only `AI_HANDOFF.md`, `git status`, and the Changed Files' diffs, and to end with
-exactly one line `VERDICT: APPROVED` or `VERDICT: BLOCKED` plus a one-line reason.
-It never uses `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or
-danger-full-access. It captures the `--json` event stream to `CODEX_REVIEW.jsonl` and
+inspect only `AI_HANDOFF.md`, `git status`, and the Changed Files' diffs. Since v1.3.0 it
+asks Codex to end with a strict four-line verdict block (`VERDICT:` APPROVED/BLOCKED,
+`REVIEWER: Codex`, `TASK:` the current task verbatim, `REASON:` one line) so `review-apply`
+can parse it. It never uses `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`,
+or danger-full-access. It captures the `--json` event stream to `CODEX_REVIEW.jsonl` and
 the final verdict to `CODEX_REVIEW_LAST.md` (both local and gitignored), then stops.
-The actual `REVIEW_DONE` / `READY_FOR_IMPLEMENTATION` transition remains a manual step
-a human or the Master applies from the captured verdict. Automating that transition is
-deferred to v1.3.0.
+`review-run` itself never transitions `AI_HANDOFF.md`; apply the captured verdict with
+`review-apply` (below).
 
 `review-run` is bounded by `-TimeoutSeconds` (default 180). It runs Codex as a tracked
 child process; if Codex does not finish in time, `review-run` **fails closed**: it
@@ -412,9 +411,41 @@ terminates the Codex process (and its children), preserves any partial
 or `AI_HANDOFF.md` change, and exits non-zero (exit 4). Raise `-TimeoutSeconds` for a
 review that legitimately needs longer.
 
-Bash does not implement the POC. `bash scripts/handoff.sh review-check` and
-`bash scripts/handoff.sh review-run` print a PowerShell-required message and exit
-without invoking Codex.
+Bash does not implement these commands. `bash scripts/handoff.sh review-check`,
+`review-run`, and `review-apply` print a PowerShell-required message and exit without
+invoking Codex or changing `AI_HANDOFF.md`.
+
+### `review-apply [-Yes]` (automated Reviewer turn, since v1.3.0)
+
+Applies the verdict captured by `review-run` as a local `AI_HANDOFF.md` transition. Together,
+`review-run` (capture) and `review-apply` (apply) make the Reviewer/Codex `READY_FOR_REVIEW`
+turn **callable end-to-end** - but only via these explicit commands; the turn is never
+auto-run by `loop`/`cycle`.
+
+```powershell
+.\scripts\handoff.ps1 review-run     # capture a verdict (read-only Codex)
+.\scripts\handoff.ps1 review-apply   # apply the captured verdict to AI_HANDOFF.md
+```
+
+`review-apply` re-runs every `review-run` protocol guard (state, bound/actual Reviewer is
+Codex and != actual Implementer, Changed Files == git status), then parses
+`CODEX_REVIEW_LAST.md`. It **fails closed** - no transition, no file change - unless the
+capture contains exactly one valid verdict block: one `VERDICT:` (exactly `APPROVED` or
+`BLOCKED`), `REVIEWER: Codex`, a `TASK:` matching the current Current Task (anti-stale guard),
+and a non-empty `REASON:`. After an explicit `yes` (or `-Yes`) it sets:
+
+- `APPROVED` -> `State: REVIEW_DONE` / `Waiting For: User` (the user still authorizes release);
+- `BLOCKED` -> `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` (the reason is
+  recorded for the Implementer).
+
+It edits only `AI_HANDOFF.md` (rewriting the Status, Last Update, and Next Recommended Step
+sections; all other sections are preserved), re-invokes no Codex, and runs no git. It is
+PowerShell-only.
+
+Because `review-apply` requires an explicit command, the Reviewer/Codex adapter is recorded
+`callable: yes` for `READY_FOR_REVIEW` but `Auto-loop: no` (see `handoff.ps1 adapters`):
+`loop` and `cycle` stop at a Reviewer turn rather than running it. Master/Codex remains
+`callable: no`.
 
 ### `cycle [-BudgetUsd N]`
 

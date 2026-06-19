@@ -145,7 +145,7 @@ function Get-AdapterProfile {
     $manual = "Run 'handoff.ps1 next' then paste the prompt into $Tool."
     if ($Role -eq "User") {
         return @{
-            Role = "User"; Tool = "User"; Callable = $false; SupportedStates = @();
+            Role = "User"; Tool = "User"; Callable = $false; AutoLoopEligible = $false; SupportedStates = @();
             Invocation = "See AI_HANDOFF.md and decide or authorize the next step.";
             SafetyLimits = "User approval authority; no automation.";
             StopCategory = "User Decision"; UserAuthorizationRequired = "yes";
@@ -156,7 +156,7 @@ function Get-AdapterProfile {
 
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
-            Role = $Role; Tool = $Tool; Callable = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
+            Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
             Invocation = "npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text";
             SafetyLimits = "Explicit yes confirmation; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
@@ -165,12 +165,28 @@ function Get-AdapterProfile {
         }
     }
 
+    # Reviewer/Codex (since v1.3.0): callable for READY_FOR_REVIEW via the explicit two-step
+    # review-run (read-only capture) + review-apply (apply the captured verdict's local
+    # AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose: "callable" here means
+    # "has a verified end-to-end command path", NOT "may be auto-run inside loop/cycle".
+    # Reviewer turns are never invoked automatically by loop or cycle in v1.3.0.
+    if ($Role -eq "Reviewer" -and $Tool -eq "Codex") {
+        return @{
+            Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
+            Invocation = "Capture: handoff.ps1 review-run (read-only Codex review, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
+            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only, no --ask-for-approval / --dangerously-bypass / danger-full-access; review-apply edits only AI_HANDOFF.md; never loop/cycle automated; no commit/push/tag/deploy/db/secrets; no release action.";
+            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; release stays a separate User authorization";
+            Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end, read-only and fail-closed. Callable via these explicit commands only - never inside loop or cycle.";
+            NextStep = "Run review-run to capture a verdict, then review-apply to set REVIEW_DONE (approved) or READY_FOR_IMPLEMENTATION (blocked)."
+        }
+    }
+
     $reason = "$Tool has no verified local callable adapter for the $Role role."
     if ($Tool -eq "Codex") {
-        $reason = "No Codex CLI, MCP adapter, API bridge, or other local callable adapter is present in this repository."
+        $reason = "No callable local adapter is present for $Tool in the $Role role in this repository."
     }
     return @{
-        Role = $Role; Tool = $Tool; Callable = $false; SupportedStates = @();
+        Role = $Role; Tool = $Tool; Callable = $false; AutoLoopEligible = $false; SupportedStates = @();
         Invocation = $manual;
         SafetyLimits = "Manual prompt handoff only; no commit/push/tag/deploy/db/secrets automation.";
         StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "no for paste; yes for protected actions";
@@ -187,13 +203,18 @@ function Resolve-TurnAdapter {
         if ($s -eq $ForState) { $stateSupported = $true; break }
     }
     $callableForState = [bool]($adapter.Callable -and $stateSupported)
+    # AutoLoopEligible is a STRICT subset of Callable: a turn that is callable via an
+    # explicit command (e.g. Reviewer/Codex review-run + review-apply) is NOT necessarily
+    # eligible to be auto-run inside loop/cycle. loop and cycle must gate on this field,
+    # never on Callable, so an explicit-only adapter never triggers an automated turn.
+    $autoLoopForState = [bool]($adapter.AutoLoopEligible -and $stateSupported)
     $reason = $adapter.Reason
     if ($adapter.Callable -and -not $stateSupported) {
         $supported = if ($adapter.SupportedStates.Count -gt 0) { $adapter.SupportedStates -join ", " } else { "none" }
         $reason = "$Role/$Tool adapter does not support state $ForState. Supported automated states: $supported."
     }
     return @{
-        Role = $Role; Tool = $Tool; Callable = $callableForState;
+        Role = $Role; Tool = $Tool; Callable = $callableForState; AutoLoopEligible = $autoLoopForState;
         SupportedStates = $adapter.SupportedStates; Invocation = $adapter.Invocation;
         SafetyLimits = $adapter.SafetyLimits; StopCategory = $adapter.StopCategory;
         UserAuthorizationRequired = $adapter.UserAuthorizationRequired; Reason = $reason;
@@ -210,10 +231,12 @@ function Invoke-Adapters {
         $tool = Resolve-Actor -Role $role -Binding $script:Binding
         $adapter = Get-AdapterProfile -Role $role -Tool $tool
         $callable = if ($adapter.Callable) { "yes" } else { "no" }
+        $autoLoop = if ($adapter.AutoLoopEligible) { "yes" } else { "no" }
         $states = if ($adapter.SupportedStates.Count -gt 0) { $adapter.SupportedStates -join ", " } else { "none" }
         Write-Host "Role:        $role"
         Write-Host "Tool:        $tool"
         Write-Host "Callable:    $callable"
+        Write-Host "Auto-loop:   $autoLoop  (yes only if loop/cycle may auto-run this turn)"
         Write-Host "States:      $states"
         Write-Host "Reason:      $($adapter.Reason)"
         Write-Host "Invocation:  $($adapter.Invocation)"
@@ -1397,6 +1420,10 @@ function Resolve-CodexCli {
 # print a plan even when blocked. Reuses the release-grade Changed Files parser and
 # git-status comparison so review scope is verified exactly like a release.
 function Get-ReviewPlan {
+    # RequireCli: review-run/review-check need a runnable Codex CLI; review-apply does NOT
+    # (it consumes an already-captured verdict file), so it passes -RequireCli:$false and a
+    # placeholder Cli result is returned instead of probing the filesystem/PATH.
+    param([bool]$RequireCli = $true)
     $ok = $true
     $errors = [System.Collections.Generic.List[string]]::new()
 
@@ -1445,7 +1472,11 @@ function Get-ReviewPlan {
         $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files.")
     }
 
-    $cli = Resolve-CodexCli
+    $cli = if ($RequireCli) {
+        Resolve-CodexCli
+    } else {
+        @{ Ok = $true; Path = ""; Source = "not required for review-apply"; Error = "" }
+    }
 
     return @{
         Ok = $ok
@@ -1590,7 +1621,12 @@ function Invoke-ReviewRun {
         "Inspect ONLY these sources: AI_HANDOFF.md for the current task and approved scope; the output of git status --short; and git diff -- for each of these Changed Files: $reviewFileList . " +
         "Decide only whether those changed files match the task and approved scope described in AI_HANDOFF.md. Do not modify any file. " +
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
-        "Finish quickly and end your reply with exactly one final line: VERDICT: APPROVED or VERDICT: BLOCKED followed by a one-line reason."
+        "Finish quickly. End your reply with a verdict block of EXACTLY four lines, each on its own line, nothing after them, and no surrounding punctuation. " +
+        "Line 1 must be exactly 'VERDICT: APPROVED' or exactly 'VERDICT: BLOCKED' (uppercase). " +
+        "Line 2 must be exactly 'REVIEWER: Codex'. " +
+        "Line 3 must be 'TASK: ' followed by the Current Task value copied verbatim from the Status section of AI_HANDOFF.md. " +
+        "Line 4 must be 'REASON: ' followed by a single concise one-line reason. " +
+        "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
 
     Write-Host ""
     Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
@@ -1713,9 +1749,236 @@ function Invoke-ReviewRun {
     Write-Host "Codex final message:"
     Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
     Write-Host ""
-    Write-Host "This POC captured the review only. It made no git changes and did not modify AI_HANDOFF.md."
-    Write-Host "A human or the Master applies the actual REVIEW_DONE / READY_FOR_IMPLEMENTATION transition from this output."
-    Write-Host "Stop category: Operator Manual Action - apply the protocol state transition manually."
+    Write-Host "This step captured the review only. It made no git changes and did not modify AI_HANDOFF.md."
+    Write-Host "To apply the captured verdict's local handoff transition, run:"
+    Write-Host "  handoff.ps1 review-apply"
+    Write-Host "(review-apply parses this verdict and sets REVIEW_DONE for APPROVED or READY_FOR_IMPLEMENTATION for BLOCKED; it edits only AI_HANDOFF.md and runs no git.)"
+    Write-Host "Stop category: Operator Manual Action - run review-apply, or apply the transition manually."
+    Write-Host ""
+}
+
+# --- Automated Reviewer Turn (v1.3.0): review-apply applies a captured verdict ---
+#
+# review-apply consumes the verdict captured by review-run (CODEX_REVIEW_LAST.md) and
+# applies the corresponding LOCAL AI_HANDOFF.md transition, fail-closed. It does NOT
+# re-invoke Codex, runs no git, and edits only AI_HANDOFF.md. It is modeled on
+# sequence-advance: guarded plan -> strict parse -> single local-file rewrite.
+
+# Strict verdict parser. Returns @{ Ok; Verdict; Reviewer; Task; Reason; Error }.
+# Fails closed unless the capture contains exactly one well-formed verdict block whose
+# REVIEWER is Codex and whose TASK matches the current Current Task (anti-stale guard).
+function Get-VerdictFromCapture {
+    param([string]$Path, [string]$ExpectedTask)
+    $result = @{ Ok = $false; Verdict = ""; Reviewer = ""; Task = ""; Reason = ""; Error = "" }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $result.Error = "No captured verdict file ($ReviewLastName) found. Run 'handoff.ps1 review-run' first to capture a Codex review verdict."
+        return $result
+    }
+    $raw = Get-Content -Raw -Path $Path -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $result.Error = "Captured verdict file ($ReviewLastName) is empty; no verdict to apply."
+        return $result
+    }
+    $captureLines = $raw -split "`r?`n"
+    $verdictLines  = @($captureLines | Where-Object { $_ -match '^\s*VERDICT:\s*(.+?)\s*$' })
+    $reviewerLines = @($captureLines | Where-Object { $_ -match '^\s*REVIEWER:\s*(.+?)\s*$' })
+    $taskLines     = @($captureLines | Where-Object { $_ -match '^\s*TASK:\s*(.+?)\s*$' })
+    $reasonLines   = @($captureLines | Where-Object { $_ -match '^\s*REASON:\s*(.+?)\s*$' })
+    if ($verdictLines.Count  -ne 1) { $result.Error = "Captured verdict must contain exactly one VERDICT: line (found $($verdictLines.Count)). The capture is malformed or stale; re-run review-run."; return $result }
+    if ($reviewerLines.Count -ne 1) { $result.Error = "Captured verdict must contain exactly one REVIEWER: line (found $($reviewerLines.Count))."; return $result }
+    if ($taskLines.Count     -ne 1) { $result.Error = "Captured verdict must contain exactly one TASK: line (found $($taskLines.Count))."; return $result }
+    if ($reasonLines.Count   -ne 1) { $result.Error = "Captured verdict must contain exactly one REASON: line (found $($reasonLines.Count))."; return $result }
+    [void]($verdictLines[0]  -match '^\s*VERDICT:\s*(.+?)\s*$');  $verdict  = $Matches[1].Trim()
+    [void]($reviewerLines[0] -match '^\s*REVIEWER:\s*(.+?)\s*$'); $reviewer = $Matches[1].Trim()
+    [void]($taskLines[0]     -match '^\s*TASK:\s*(.+?)\s*$');     $task     = $Matches[1].Trim()
+    [void]($reasonLines[0]   -match '^\s*REASON:\s*(.+?)\s*$');   $reason   = $Matches[1].Trim()
+    # Case-sensitive: the verdict token must be exactly APPROVED or BLOCKED.
+    if ($verdict -cne "APPROVED" -and $verdict -cne "BLOCKED") {
+        $result.Error = "VERDICT must be exactly APPROVED or BLOCKED (found: '$verdict')."
+        return $result
+    }
+    if ($reviewer -ne "Codex") {
+        $result.Error = "REVIEWER in the captured verdict must be Codex (found: '$reviewer')."
+        return $result
+    }
+    if ($task -ne $ExpectedTask) {
+        $result.Error = "Captured verdict TASK does not match the current task (anti-stale guard). Verdict TASK: '$task'; current Current Task: '$ExpectedTask'. The capture may be stale - re-run review-run for this task."
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($reason)) {
+        $result.Error = "REASON in the captured verdict must be a non-empty line."
+        return $result
+    }
+    $result.Ok = $true; $result.Verdict = $verdict; $result.Reviewer = $reviewer; $result.Task = $task; $result.Reason = $reason
+    return $result
+}
+
+# Replace the body of a single '## <Heading>' section (everything up to the next '## '
+# heading or EOF) with $NewBody, preserving the heading line and all other sections.
+# Returns @{ Ok = section found; Lines = rebuilt lines }. Fails closed (Ok=$false) when
+# the heading is absent so a malformed handoff is never silently rewritten.
+function Set-HandoffSectionBody {
+    param([string[]]$Lines, [string]$Heading, [string[]]$NewBody)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $found = $false
+    $i = 0
+    while ($i -lt $Lines.Count) {
+        $line = $Lines[$i]
+        if (-not $found -and $line.TrimEnd() -eq "## $Heading") {
+            $found = $true
+            $out.Add($line)
+            foreach ($b in $NewBody) { $out.Add($b) }
+            $i++
+            while ($i -lt $Lines.Count -and $Lines[$i] -notmatch '^##\s') { $i++ }
+            if ($i -lt $Lines.Count) { $out.Add("") }   # one blank line before the next heading
+            continue
+        }
+        $out.Add($line)
+        $i++
+    }
+    return @{ Ok = $found; Lines = $out.ToArray() }
+}
+
+# Validate the review-apply request: reuse ALL Get-ReviewPlan protocol guards (no Codex CLI
+# needed) plus parse the captured verdict against the current task.
+function Get-ReviewApplyPlan {
+    $base = Get-ReviewPlan -RequireCli:$false
+    $verdict = Get-VerdictFromCapture -Path (Join-Path (Get-Location) $ReviewLastName) -ExpectedTask $CurrentTask
+    return @{ Base = $base; Verdict = $verdict }
+}
+
+function Show-ReviewApplyPlan {
+    param([hashtable]$Base, [hashtable]$Verdict)
+    Write-Host ""
+    Write-Host "Review apply plan (consumes the captured verdict; edits only AI_HANDOFF.md; runs no git)"
+    Write-Host "State:               $State"
+    Write-Host "Waiting For:         $WaitingFor"
+    Write-Host "Current Task:        $CurrentTask"
+    Write-Host "Bound Reviewer:      $($Base.BoundReviewer)"
+    Write-Host "Bound Implementer:   $($Base.BoundImplementer)"
+    Write-Host "Actual Reviewer:     $(if ($Base.TaskActors.Reviewer -ne '') { $Base.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
+    Write-Host "Actual Implementer:  $(if ($Base.TaskActors.Implementer -ne '') { $Base.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    Write-Host "Capture file:        $ReviewLastName (local, gitignored capture from review-run)"
+    if ($Verdict.Ok) {
+        $target = if ($Verdict.Verdict -eq "APPROVED") { "REVIEW_DONE / Waiting For: User" } else { "READY_FOR_IMPLEMENTATION / Waiting For: Implementer" }
+        Write-Host "Captured verdict:    $($Verdict.Verdict)"
+        Write-Host "Captured reason:     $($Verdict.Reason)"
+        Write-Host "Would transition to: $target"
+    } else {
+        Write-Host "Captured verdict:    (not usable) $($Verdict.Error)"
+    }
+    Write-Host ""
+    Write-Host "Safety: edits only AI_HANDOFF.md (local, gitignored); no git add/commit/push/tag;"
+    Write-Host "        no deploy/db/secrets; no release action; never auto-run by loop or cycle."
+    Write-Host ""
+}
+
+function Invoke-ReviewApply {
+    $plan = Get-ReviewApplyPlan
+    $base = $plan.Base
+    $verdict = $plan.Verdict
+    Show-ReviewApplyPlan -Base $base -Verdict $verdict
+
+    if (-not $base.Ok) {
+        Write-Host "review-apply: blocked."
+        foreach ($e in $base.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $verdict.Ok) {
+        Write-Host "review-apply: blocked."
+        Write-Host "Reason: $($verdict.Error)"
+        Write-Host "Stop category: Environment/Preflight (no usable captured verdict) - not a user decision."
+        Write-Host "No files were changed and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+
+    $date = (Get-Date).ToString("yyyy-MM-dd")
+    if ($verdict.Verdict -eq "APPROVED") {
+        $newState = "REVIEW_DONE"; $newWaiting = "User"
+    } else {
+        $newState = "READY_FOR_IMPLEMENTATION"; $newWaiting = "Implementer"
+    }
+
+    Write-Host "This applies the captured $($verdict.Verdict) verdict as a LOCAL AI_HANDOFF.md transition to:"
+    Write-Host "  State: $newState / Waiting For: $newWaiting"
+    Write-Host "It makes NO git changes and performs NO release action."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; applying without an interactive prompt (local AI_HANDOFF.md edit only)."
+    } else {
+        # Fail closed: only an explicit, non-null "yes" proceeds.
+        $confirm = Read-Host 'Type "yes" to apply this verdict to AI_HANDOFF.md, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            Write-Host "AI_HANDOFF.md was not modified."
+            exit 2
+        }
+    }
+
+    $statusBody = @(
+        "- State: $newState",
+        "- Waiting For: $newWaiting",
+        "- Last Updated By: Reviewer",
+        "- Last Updated At: $date",
+        "- Current Task: $CurrentTask"
+    )
+    $lastUpdateBody = @(
+        "- Actor: Reviewer (Codex), applied from the captured review verdict via review-apply",
+        "- Date: $date",
+        "- Task: Applied the captured Codex review verdict for '$CurrentTask'.",
+        "- Verdict: $($verdict.Verdict)",
+        "- Reason: $($verdict.Reason)",
+        "- Source: $ReviewLastName (local, gitignored capture from review-run; not committed)"
+    )
+    if ($verdict.Verdict -eq "APPROVED") {
+        $nextStepBody = @(
+            "- User: the Reviewer (Codex) attested technical readiness (REVIEW_DONE). Grant release",
+            "  authorization and perform the commit/push yourself; do not commit AI_HANDOFF.md. The",
+            "  guarded executor is 'handoff.ps1 release-check' then 'handoff.ps1 release'."
+        )
+    } else {
+        $nextStepBody = @(
+            "- Implementer (Claude Code): address the Reviewer's BLOCKED findings recorded under",
+            "  Last Update (Reason), then set State: READY_FOR_REVIEW / Waiting For: Reviewer."
+        )
+    }
+
+    # Section-preserving rewrite: Status, Last Update, and Next Recommended Step must all
+    # exist or we fail closed without writing anything. Every other section is preserved.
+    $cur = Get-Content -Path $HandoffFile
+    $r1 = Set-HandoffSectionBody -Lines $cur       -Heading "Status"               -NewBody $statusBody
+    $r2 = Set-HandoffSectionBody -Lines $r1.Lines  -Heading "Last Update"          -NewBody $lastUpdateBody
+    $r3 = Set-HandoffSectionBody -Lines $r2.Lines  -Heading "Next Recommended Step" -NewBody $nextStepBody
+    if (-not ($r1.Ok -and $r2.Ok -and $r3.Ok)) {
+        $missing = @()
+        if (-not $r1.Ok) { $missing += "Status" }
+        if (-not $r2.Ok) { $missing += "Last Update" }
+        if (-not $r3.Ok) { $missing += "Next Recommended Step" }
+        Write-Host "review-apply: blocked."
+        Write-Host "Reason: AI_HANDOFF.md is missing required section(s): $([string]::Join(', ', $missing)). The handoff is malformed; not rewriting."
+        Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
+        Write-Host "AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+
+    Set-Content -Path $HandoffFile -Value ($r3.Lines -join "`n") -Encoding utf8 -ErrorAction Stop
+
+    Write-Host "review-apply: applied (local AI_HANDOFF.md only)."
+    Write-Host "AI_HANDOFF.md: State -> $newState / Waiting For -> $newWaiting (from captured $($verdict.Verdict) verdict)."
+    Write-Host ""
+    Write-Host "Next steps:"
+    if ($verdict.Verdict -eq "APPROVED") {
+        Write-Host "  1. User: grant release authorization; the Reviewer attested technical readiness."
+        Write-Host "  2. Use handoff.ps1 release-check / release for the guarded executor when ready."
+    } else {
+        Write-Host "  1. Implementer (Claude Code): address the BLOCKED findings, then return to READY_FOR_REVIEW."
+    }
+    Write-Host "  - This command made no git changes (no add/commit/push/tag) and no deploy/db/secrets actions."
+    Write-Host "  - AI_HANDOFF.md remains local and gitignored - do not commit it."
     Write-Host ""
 }
 
@@ -1739,7 +2002,8 @@ function Invoke-Menu {
     Write-Host "8. Check authorized release       - dry-run release plan (release-check)"
     Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
     Write-Host "10. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
-    Write-Host "11. Exit"
+    Write-Host "11. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
+    Write-Host "12. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -1757,7 +2021,8 @@ function Invoke-Menu {
         "8" { Invoke-ReleaseCheck }
         "9" { Invoke-SequenceCheck }
         "10" { Invoke-ReviewCheck }
-        "11" { }
+        "11" { Invoke-ReviewApply }
+        "12" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -1815,7 +2080,10 @@ function Invoke-Cycle {
         exit 1
     }
 
-    if (-not $turnAdapter.Callable) {
+    # Gate on AutoLoopEligible, never on Callable: cycle automates only turns that are
+    # explicitly auto-run-eligible (Implementer/Claude Code at READY_FOR_IMPLEMENTATION).
+    # An explicit-only callable adapter (e.g. Reviewer/Codex) must never be run by cycle.
+    if (-not $turnAdapter.AutoLoopEligible) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
@@ -2085,11 +2353,15 @@ function Invoke-Loop {
     Write-Host ""
     Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
     Write-Host ""
-    # Fail closed: only an explicit, non-null "yes" starts the session.
-    $confirm = Read-Host 'Type "yes" to start the loop session, or press Enter to cancel'
-    if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
-        Write-Host "Cancelled."
-        exit 2
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; starting the loop session without an interactive prompt."
+    } else {
+        # Fail closed: only an explicit, non-null "yes" starts the session.
+        $confirm = Read-Host 'Type "yes" to start the loop session, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            exit 2
+        }
     }
 
     Write-LoopLog "=== session start MaxTurns=$MaxTurns BudgetUsd=$BudgetUsd SessionBudgetUsd=$SessionBudgetUsd"
@@ -2141,9 +2413,12 @@ function Invoke-Loop {
         }
 
         $turnAdapter = Resolve-TurnAdapter -ForState $script:State -Role $role -Tool $tool
-        $callable = $turnAdapter.Callable
+        # Gate on AutoLoopEligible, NOT Callable. A turn that is callable only via an
+        # explicit command (e.g. Reviewer/Codex via review-run + review-apply) must make the
+        # loop STOP, never auto-run. This keeps loop from ever invoking a Reviewer turn.
+        $loopEligible = $turnAdapter.AutoLoopEligible
 
-        if (-not $callable) {
+        if (-not $loopEligible) {
             try {
                 Invoke-Next -Silent $true
             } catch {
@@ -2153,11 +2428,18 @@ function Invoke-Loop {
                 exit 4
             }
             Write-Host ""
-            Write-Host "loop: stop - next actor is not callable."
+            if ($turnAdapter.Callable) {
+                Write-Host "loop: stop - next actor is callable only via an explicit command, not inside loop."
+            } else {
+                Write-Host "loop: stop - next actor is not callable."
+            }
             Write-Host "State:      $($script:State)"
             Write-Host "Next actor: $tool ($role)"
             if ($tool -eq "User") {
                 Write-Host (Get-StopCategoryLine -ForState $script:State -ActorTool $tool -Automation $true)
+            } elseif ($turnAdapter.Callable) {
+                Write-Host "Reason:     $($turnAdapter.Reason)"
+                Write-Host "Stop category: Operator Manual Action - this actor is callable only via its explicit command(s); loop never auto-runs it. Run it manually."
             } else {
                 Write-Host "Reason:     $($turnAdapter.Reason)"
                 Write-Host "Stop category: $($turnAdapter.StopCategory) (automation limitation) - next step is an Operator Manual Action."
@@ -2166,7 +2448,7 @@ function Invoke-Loop {
                 Write-Host "Paste:      Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
             }
             Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
-            Write-LoopLog "turn=$turnsRun stop reason=not-callable state=$($script:State) nextActor=$tool($role) exit=0"
+            Write-LoopLog "turn=$turnsRun stop reason=not-loop-eligible state=$($script:State) nextActor=$tool($role) callable=$($turnAdapter.Callable) exit=0"
             Write-Host ""
             exit 0
         }
@@ -2275,6 +2557,7 @@ switch ($Command) {
     "sequence-advance" { Invoke-SequenceAdvance }
     "review-check" { Invoke-ReviewCheck }
     "review-run"   { Invoke-ReviewRun }
+    "review-apply" { Invoke-ReviewApply }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -2302,10 +2585,11 @@ switch ($Command) {
             Write-Host "  review-check              Dry-run the Codex Reviewer POC plan for READY_FOR_REVIEW. Mutates nothing."
             Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
-            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a callable adapter turn, then prepare the next handoff."
+            Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; never auto-run by loop/cycle."
+            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]"
-            Write-Host "                            Run a bounded loop of callable adapter turns; stops at any non-callable actor or hard stop. Writes HANDOFF_LOOP.log."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-Yes]"
+            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor (including explicit-only callable turns like Reviewer/Codex) or hard stop. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
     }
