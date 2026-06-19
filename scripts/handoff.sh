@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.1)
 # Commands: status, adapters, next, start, commit-check
 # cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
-# review-check, review-run, and review-apply require PowerShell; use handoff.ps1.
+# review-check, review-run, review-apply, master-check, and master-run require
+# PowerShell; use handoff.ps1.
 
 set -euo pipefail
 
@@ -531,6 +532,21 @@ cmd_review_blocked() {
     exit 1
 }
 
+# master-check / master-run are PowerShell-only (one path owns the read-only Codex
+# invocation, the fail-closed guards, and local artifact capture). Bash never invokes Codex.
+cmd_master_blocked() {
+    local cmd_name="$1"
+    echo ""
+    echo "$cmd_name is not available in handoff.sh."
+    echo "The Codex Master capture POC is implemented in PowerShell only so one path owns the read-only Codex invocation, the fail-closed guards, and local artifact capture."
+    echo "To dry-run:  pwsh scripts/handoff.ps1 master-check"
+    echo "To capture:  pwsh scripts/handoff.ps1 master-run"
+    echo "master-run runs Codex read-only and captures the routing recommendation locally; it never runs git add/commit/push/tag and never changes AI_HANDOFF.md. Master/Codex stays callable: no."
+    echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+    echo ""
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Init and dispatch
 # ---------------------------------------------------------------------------
@@ -551,6 +567,8 @@ case "$COMMAND" in
     review-check) cmd_review_blocked "review-check" ;;
     review-run)   cmd_review_blocked "review-run" ;;
     review-apply) cmd_review_blocked "review-apply" ;;
+    master-check) cmd_master_blocked "master-check" ;;
+    master-run)   cmd_master_blocked "master-run" ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
     loop)         cmd_automation_blocked "loop" ;;
@@ -571,6 +589,8 @@ case "$COMMAND" in
         echo "  review-check              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  review-run                Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  review-apply              Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  master-check              Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  master-run                Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."

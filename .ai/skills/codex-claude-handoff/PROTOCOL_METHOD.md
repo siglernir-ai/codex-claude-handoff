@@ -167,6 +167,17 @@ commands refuse unless the bound and actual Reviewer is Codex and differs from t
 Implementer. The user's release authorization at `REVIEW_DONE` is also unchanged. See
 `ADAPTERS.md`, "Automated Reviewer Turn".
 
+Codex Master capture POC (since v1.3.1): the `master-check` / `master-run` commands invoke
+Codex read-only as the Master decision router during `NEEDS_ANALYSIS` and capture a structured
+routing recommendation to local, gitignored artifacts (`CODEX_MASTER.jsonl`,
+`CODEX_MASTER_LAST.md`). Like the v1.2.0 Reviewer capture POC, each is a guarded Operator
+Manual Action requiring an explicit `yes`; `master-run` performs no git mutation and never
+transitions `AI_HANDOFF.md`. It is deliberately capture-only: there is no `master-apply`, and a
+human or the Master reads the captured recommendation and applies any gate/actor decision
+manually. Master/Codex stays `callable: no` and is never auto-run by `loop`/`cycle` (no
+`AutoLoopEligible` change). State-changing Master automation is a higher-risk, later reviewed
+step. See `ADAPTERS.md`, "Codex Master Capture POC".
+
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 
 `AI_SEQUENCE.md`:

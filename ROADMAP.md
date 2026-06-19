@@ -497,6 +497,41 @@ auto-runnable inside `loop`/`cycle`.
 
 ---
 
+### v1.3.1 - Codex Master Capture POC (master-check / master-run)
+
+**Goal:** Build the Master-side equivalent of the v1.2.0 Reviewer capture POC: let Codex
+inspect the handoff as the Master decision router during `NEEDS_ANALYSIS` and capture a
+structured routing recommendation, without changing `AI_HANDOFF.md` and without making Master
+callable.
+
+**Includes:**
+- PowerShell `master-check` (dry run) and `master-run` (read-only Codex execution after an
+  explicit `yes`, or `-Yes`) for the Master turn during `NEEDS_ANALYSIS` / `Waiting For: Master`.
+- Fail-closed guards: bound Master is Codex; correct state/Waiting For (Task Actors may be TBD).
+- Reuses the verified read-only Codex CLI shape, stdin prompt delivery, the `-TimeoutSeconds`
+  bound with a process-tree kill, and the fail-closed exit vocabulary (1/3/4/5/6).
+- A strict five-line recommendation block (`MASTER_RECOMMENDATION` / `WAITING_FOR` /
+  `IMPLEMENTER` / `REVIEWER` / `REASON`) captured to local, gitignored artifacts
+  (`CODEX_MASTER.jsonl`, `CODEX_MASTER_LAST.md`); added to `.gitignore`, the snippet, both
+  installers, and the clean-tree exemptions.
+- Bash refuses honestly and points to PowerShell.
+- Adapter/method/README docs, protocol tests (section 11), templates, and mirrors updated.
+
+**Does not include:**
+- `master-apply` or any automatic `AI_HANDOFF.md` change from the recommendation.
+- Marking Master/Codex `callable: yes`; any `AutoLoopEligible` change; integrating Master
+  turns into `loop`/`cycle`; an MCP/API bridge; new roles or states; any
+  git/commit/push/tag/deploy/db/secret action.
+
+**Exit criteria (honest status):**
+- `master-check` prints the plan and mutates nothing; `master-run` runs Codex read-only,
+  captures the recommendation locally, and changes no git state and no `AI_HANDOFF.md`. MET.
+- Guards fail closed and are test-covered; Bash refuses honestly; mirrors are in sync. MET.
+- Master/Codex remains `callable: no` and `Auto-loop: no`. State-changing Master automation is
+  a higher-risk, later reviewed step.
+
+---
+
 ## Safety Model for Autonomous Dialogue
 
 These boundaries apply to any automated turn in v0.16.0 and especially v0.17.0. Every item

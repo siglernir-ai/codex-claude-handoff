@@ -89,10 +89,10 @@ done
 
 # .gitignore: create or update
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"
-RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md" "CODEX_REVIEW.jsonl" "CODEX_REVIEW_LAST.md")
+RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md" "CODEX_REVIEW.jsonl" "CODEX_REVIEW_LAST.md" "CODEX_MASTER.jsonl" "CODEX_MASTER_LAST.md")
 
 if [ ! -f "$GITIGNORE_PATH" ]; then
-    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\nCODEX_REVIEW.jsonl\nCODEX_REVIEW_LAST.md\n' > "$GITIGNORE_PATH"
+    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\nCODEX_REVIEW.jsonl\nCODEX_REVIEW_LAST.md\nCODEX_MASTER.jsonl\nCODEX_MASTER_LAST.md\n' > "$GITIGNORE_PATH"
     echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
 else
     ADDED=()

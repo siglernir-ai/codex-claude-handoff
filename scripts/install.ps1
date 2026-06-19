@@ -53,8 +53,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md`nCODEX_REVIEW.jsonl`nCODEX_REVIEW_LAST.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, and CODEX_REVIEW_LAST.md rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md`nCODEX_REVIEW.jsonl`nCODEX_REVIEW_LAST.md`nCODEX_MASTER.jsonl`nCODEX_MASTER_LAST.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, and CODEX_MASTER_LAST.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -97,10 +97,20 @@ else {
         $addedRules.Add("CODEX_REVIEW_LAST.md")
     }
 
+    if ($lines -notcontains "CODEX_MASTER.jsonl") {
+        Add-Content -Path $GitignorePath -Value "CODEX_MASTER.jsonl"
+        $addedRules.Add("CODEX_MASTER.jsonl")
+    }
+
+    if ($lines -notcontains "CODEX_MASTER_LAST.md") {
+        Add-Content -Path $GitignorePath -Value "CODEX_MASTER_LAST.md"
+        $addedRules.Add("CODEX_MASTER_LAST.md")
+    }
+
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, and CODEX_REVIEW_LAST.md"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, and CODEX_MASTER_LAST.md"
     }
 }
 

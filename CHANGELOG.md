@@ -3,6 +3,41 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 1.3.1 - Codex Master Capture POC (master-check / master-run)
+
+- Added a narrow, conservative Codex Master capture proof of concept to
+  `scripts/handoff.ps1`, the Master-side equivalent of the v1.2.0 Reviewer capture POC:
+  `master-check` (dry run) and `master-run` (read-only Codex execution after an explicit
+  `yes`, or `-Yes`). Eligible only during `State: NEEDS_ANALYSIS` / `Waiting For: Master`
+  with the bound Master tool Codex; Task Actors may be TBD (the Master turn is expected to
+  recommend them).
+- `master-run` is **capture-only**: it invokes Codex read-only
+  (`exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message <file> -`,
+  prompt on stdin), captures a structured routing recommendation, and never changes
+  `AI_HANDOFF.md` or runs git. There is intentionally **no `master-apply`**. A human or the
+  Master applies any gate/actor decision manually.
+- The prompt is tightly bounded (inspect only `AI_HANDOFF.md`, `AI_SEQUENCE.md` if present,
+  `git status --short`, and narrowly the protocol docs) and asks Codex to end with a strict
+  five-line recommendation block (`MASTER_RECOMMENDATION` / `WAITING_FOR` / `IMPLEMENTER` /
+  `REVIEWER` / `REASON`).
+- Reuses the v1.2/v1.3 machinery: the runnable Codex CLI resolver, stdin prompt delivery,
+  `-TimeoutSeconds` bound with a process-tree kill, and fail-closed exits (1 blocked guard,
+  3 CLI unavailable/failed start, 4 timeout, 5 non-zero Codex exit, 6 exit-0-with-no-capture).
+- New local, gitignored capture artifacts `CODEX_MASTER.jsonl` and `CODEX_MASTER_LAST.md`,
+  added to the clean-tree exemption list, `.gitignore`, the template gitignore snippet, and
+  both installers.
+- **Adapter truth: Master/Codex remains `callable: no`** and `Auto-loop: no` - this is a
+  documented POC, not an end-to-end callable Master turn, and there is no `AutoLoopEligible`
+  change. `loop` and `cycle` never run Master turns.
+- Bash `handoff.sh master-check` / `master-run` refuse honestly and point to PowerShell.
+- Tests: `protocol-tests.ps1` adds section 11 (master-check guards: state/Waiting For,
+  bound Master, Task Actors TBD allowed; master-run fail-closed on unavailable CLI, timeout,
+  exit-0-no-capture; stdin delivery vs argv; clean-exit capture success; capture-only =
+  no handoff change) plus a strengthened Master `callable: no` / `Auto-loop: no` assertion.
+  `protocol-tests.sh` adds the master-check/master-run honest-refusal checks. 79 PowerShell
+  checks and 13 Bash checks pass. Bumped `VERSION` to 1.3.1 (canonical and template mirror);
+  updated `ADAPTERS.md` and `PROTOCOL_METHOD.md` (+ mirrors).
+
 ## 1.3.0 - Automated Reviewer Turn (review-apply)
 
 - Added `handoff.ps1 review-apply`: it consumes the verdict captured by `review-run`

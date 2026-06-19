@@ -63,11 +63,14 @@ Current local status:
 
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION`
   through `handoff.ps1 cycle` / `handoff.ps1 loop`.
-- Master bound to Codex is manual because this repository has no verified local Codex
-  callable adapter for that role. A Codex CLI binary may be discoverable on a machine, and
-  as of v1.1.0 a read-only `codex exec` smoke test has been run successfully (read-only
-  sandbox, deterministic JSON output, no git change). See the "Codex CLI Verification"
-  section of `ADAPTERS.md`.
+- Master bound to Codex is manual and stays `callable: no`. Since v1.3.1 a read-only **Codex
+  Master capture POC** (`handoff.ps1 master-check` / `master-run`) captures a routing
+  recommendation during `NEEDS_ANALYSIS` to local, gitignored artifacts, but it is
+  capture-only (no `AI_HANDOFF.md` change, no `master-apply`) and does not make Master
+  callable. A Codex CLI binary may be discoverable on a machine, and as of v1.1.0 a read-only
+  `codex exec` smoke test has been run successfully (read-only sandbox, deterministic JSON
+  output, no git change). See the "Codex Master Capture POC" and "Codex CLI Verification"
+  sections of `ADAPTERS.md`.
 - Since v1.3.0 the **Reviewer/Codex `READY_FOR_REVIEW` turn is callable end-to-end** via the
   explicit two-step `handoff.ps1 review-run` (read-only Codex capture) + `handoff.ps1
   review-apply` (apply the captured verdict's local `AI_HANDOFF.md` transition, fail-closed).
@@ -446,6 +449,49 @@ Because `review-apply` requires an explicit command, the Reviewer/Codex adapter 
 `callable: yes` for `READY_FOR_REVIEW` but `Auto-loop: no` (see `handoff.ps1 adapters`):
 `loop` and `cycle` stop at a Reviewer turn rather than running it. Master/Codex remains
 `callable: no`.
+
+### `master-check` and `master-run` (Codex Master capture POC, since v1.3.1)
+
+The Master-side equivalent of the v1.2.0 Reviewer capture POC. It invokes Codex read-only as
+the **Master decision router** during `NEEDS_ANALYSIS` and captures a structured routing
+recommendation to local artifacts. It is **capture-only**: it never runs git and never changes
+`AI_HANDOFF.md`, and there is intentionally **no `master-apply`**, so it does not make the
+Master callable.
+
+```powershell
+.\scripts\handoff.ps1 master-check
+.\scripts\handoff.ps1 master-run
+```
+
+`master-check` never invokes Codex. It prints the plan and the read-only invocation shape, then
+blocks unless the handoff is `State: NEEDS_ANALYSIS` / `Waiting For: Master` and the bound
+Master is Codex (Task Actors may still be `TBD` - the Master turn is expected to recommend
+them). It also reports whether a runnable Codex CLI is available.
+
+`master-run`, after an explicit `yes` (or `-Yes`), runs the same verified read-only invocation
+shape used by `review-run` (`codex exec --cd <repo> --sandbox read-only --ephemeral --json
+--output-last-message CODEX_MASTER_LAST.md -`, prompt on stdin), bounded by `-TimeoutSeconds`
+(default 180) with a process-tree kill on timeout. The prompt is tightly scoped (inspect only
+`AI_HANDOFF.md`, `AI_SEQUENCE.md` if present, `git status --short`, and narrowly the protocol
+docs) and asks Codex to end with a strict recommendation block:
+
+```
+MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION|PLAN_REQUIRED|NEEDS_INVESTIGATION|BLOCKED
+WAITING_FOR: Implementer|User
+IMPLEMENTER: <tool or TBD>
+REVIEWER: <tool or TBD>
+REASON: <one non-empty line>
+```
+
+It captures the `--json` stream to `CODEX_MASTER.jsonl` and the recommendation to
+`CODEX_MASTER_LAST.md` (both local and gitignored), then stops. A human or the Master reads the
+captured recommendation and applies any gate/actor decision manually. It **fails closed** on an
+unavailable CLI (exit 3), timeout (exit 4), non-zero Codex exit (exit 5), or a clean exit that
+produced no capture (exit 6) - never changing git or `AI_HANDOFF.md`.
+
+**Master/Codex stays `callable: no`** and `Auto-loop: no`: this is a documented POC, not an
+applied Master turn, and `loop`/`cycle` never run Master turns. Bash refuses
+`master-check` / `master-run` honestly and points to PowerShell.
 
 ### `cycle [-BudgetUsd N]`
 

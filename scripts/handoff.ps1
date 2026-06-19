@@ -96,9 +96,13 @@ function Resolve-Actor {
 $ReviewJsonlName = "CODEX_REVIEW.jsonl"
 $ReviewLastName  = "CODEX_REVIEW_LAST.md"
 
+# Local Codex Master capture POC artifacts (v1.3.1). Local, gitignored, never committed.
+$MasterJsonlName = "CODEX_MASTER.jsonl"
+$MasterLastName  = "CODEX_MASTER_LAST.md"
+
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName)
 
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
@@ -1982,6 +1986,293 @@ function Invoke-ReviewApply {
     Write-Host ""
 }
 
+# --- Codex Master capture POC (v1.3.1): read-only Master analysis capture ---
+#
+# master-check / master-run are the Master-side equivalent of the v1.2.0 Reviewer capture
+# POC. They invoke Codex read-only as the Master decision router during NEEDS_ANALYSIS and
+# capture a structured routing recommendation to local, gitignored artifacts. They are
+# deliberately CAPTURE-ONLY: no AI_HANDOFF.md change, no git, no apply step. Master/Codex
+# stays callable: no - this is a documented POC, not an end-to-end callable Master turn.
+
+# Validate the Master capture POC request. Always returns every key so callers can print a
+# plan even when blocked. Task Actors may be TBD here: the Master turn is expected to
+# recommend the actors/gate, so this POC does not require them to be set.
+function Get-MasterPlan {
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $boundMaster = Resolve-Actor -Role "Master" -Binding $Binding
+    $taskActors = Get-TaskActors
+
+    # Eligibility is the role name (Master), matched exactly rather than the bound tool name.
+    if ($State -ne "NEEDS_ANALYSIS" -or $WaitingFor -ne "Master") {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master for the Codex Master capture POC.")
+    }
+    if ($boundMaster -ne "Codex") {
+        $ok = $false
+        $errors.Add("The bound Master tool must be Codex (found: $boundMaster). This POC only invokes Codex as Master.")
+    }
+
+    $cli = Resolve-CodexCli
+
+    return @{
+        Ok = $ok
+        Errors = $errors
+        BoundMaster = $boundMaster
+        TaskActors = $taskActors
+        Cli = $cli
+    }
+}
+
+function Show-MasterPlan {
+    param([hashtable]$Plan)
+    $repoRoot = (Get-Location).Path
+    Write-Host ""
+    Write-Host "Codex Master capture POC plan (read-only; capture only)"
+    Write-Host "State:               $State"
+    Write-Host "Waiting For:         $WaitingFor"
+    Write-Host "Current Task:        $CurrentTask"
+    Write-Host "Bound Master:        $($Plan.BoundMaster)"
+    Write-Host "Actual Implementer:  $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { 'TBD (Master may recommend)' })"
+    Write-Host "Actual Reviewer:     $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { 'TBD (Master may recommend)' })"
+    Write-Host ""
+    Write-Host "Codex CLI resolution:"
+    if ($Plan.Cli.Ok) {
+        Write-Host "  Resolved: $($Plan.Cli.Path)"
+        Write-Host "  Source:   $($Plan.Cli.Source)"
+    } else {
+        Write-Host "  Not resolved: $($Plan.Cli.Error)"
+    }
+    Write-Host ""
+    Write-Host "Read-only invocation shape (master-run, after explicit confirmation):"
+    Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (master prompt via stdin)"
+    Write-Host "Captured artifacts (local, gitignored, never committed):"
+    Write-Host "  $MasterJsonlName  (JSONL events)"
+    Write-Host "  $MasterLastName  (Codex final message)"
+    Write-Host ""
+    Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change (capture only)."
+    Write-Host "Master/Codex remains callable: no - this is a documented capture POC, not an applied Master turn."
+    Write-Host ""
+}
+
+function Invoke-MasterCheck {
+    $plan = Get-MasterPlan
+    Show-MasterPlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "master-check: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed and no Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $plan.Cli.Ok) {
+        Write-Host "master-check: protocol guards pass, but no runnable Codex CLI is available."
+        Write-Host "Reason: $($plan.Cli.Error)"
+        Write-Host "Stop category: Environment/Preflight - resolve the Codex CLI before master-run."
+        Write-Host "No files were changed and no Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "master-check: ready for operator-confirmed master-run."
+    Write-Host "To run the read-only Codex Master analysis, run:"
+    Write-Host "  handoff.ps1 master-run"
+    Write-Host "Stop category: Operator Manual Action - master-run requires an explicit 'yes' confirmation."
+    Write-Host "No files were changed and no Codex invocation was run."
+    Write-Host ""
+}
+
+function Invoke-MasterRun {
+    if ($TimeoutSeconds -lt 1) {
+        Write-Host ""
+        Write-Host "master-run: blocked."
+        Write-Host "Reason: -TimeoutSeconds must be at least 1 (got: $TimeoutSeconds)."
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    $plan = Get-MasterPlan
+    Show-MasterPlan -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "master-run: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $plan.Cli.Ok) {
+        Write-Host "master-run: blocked."
+        Write-Host "Reason: $($plan.Cli.Error)"
+        Write-Host "Stop category: Environment/Preflight (Codex CLI unavailable) - not a user decision."
+        Write-Host "No Codex invocation was run."
+        Write-Host ""
+        exit 3
+    }
+    $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
+    if (-not $execHelp.Ok) {
+        Write-Host "master-run: blocked."
+        Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
+        Write-Host "Resolved: $($plan.Cli.Path)"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Write-Host "No Codex Master invocation was run."
+        Write-Host ""
+        exit 3
+    }
+
+    $repoRoot = (Get-Location).Path
+    $jsonlPath = Join-Path $repoRoot $MasterJsonlName
+    $lastPath  = Join-Path $repoRoot $MasterLastName
+
+    Write-Host ""
+    Write-Host "WARNING: This invokes the Codex CLI in a read-only sandbox to analyze the task as Master."
+    Write-Host "         It captures Codex output locally and makes NO changes to git or AI_HANDOFF.md."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; proceeding without an interactive prompt (read-only capture only)."
+    } else {
+        # Fail closed: only an explicit, non-null "yes" proceeds.
+        $confirm = Read-Host 'Type "yes" to run the read-only Codex Master analysis, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            Write-Host "No Codex invocation was run."
+            exit 2
+        }
+    }
+
+    # Tightly scoped Master prompt delivered via STDIN (codex exec -), so a multi-word prompt
+    # is never split into argv tokens. Keep it free of shell metacharacters. The recommendation
+    # block is captured only - this POC never applies it and never marks Master callable.
+    $masterPrompt = "Read-only task analysis as the Master decision router. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
+        "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files beyond those named here. " +
+        "Inspect ONLY these sources, and only as needed: AI_HANDOFF.md for the current task; AI_SEQUENCE.md for current and next task ordering if it exists; the output of git status --short; and, only if needed to classify, the protocol docs .ai/skills/codex-claude-handoff/ADAPTERS.md and .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md. Do not modify any file. " +
+        "Decide how the current NEEDS_ANALYSIS task should be routed (which gate it needs and which actors should hold it). " +
+        "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
+        "Finish quickly. End your reply with a recommendation block of EXACTLY five lines, each on its own line, nothing after them, and no surrounding punctuation. " +
+        "Line 1 must be 'MASTER_RECOMMENDATION: ' followed by exactly one of READY_FOR_IMPLEMENTATION, PLAN_REQUIRED, NEEDS_INVESTIGATION, or BLOCKED. " +
+        "Line 2 must be 'WAITING_FOR: ' followed by exactly one of Implementer or User. " +
+        "Line 3 must be 'IMPLEMENTER: ' followed by a tool name or TBD. " +
+        "Line 4 must be 'REVIEWER: ' followed by a tool name or TBD. " +
+        "Line 5 must be 'REASON: ' followed by a single concise one-line reason. " +
+        "Do not write MASTER_RECOMMENDATION, WAITING_FOR, IMPLEMENTER, REVIEWER, or REASON at the start of any earlier line."
+
+    Write-Host ""
+    Write-Host "Running Codex read-only Master analysis (timeout: ${TimeoutSeconds}s)..."
+    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (prompt via stdin)"
+    Write-Host ""
+
+    # Clear any stale capture artifacts so old/partial output is never mistaken for this run.
+    Remove-Item $jsonlPath, $lastPath -Force -ErrorAction SilentlyContinue
+
+    # Run Codex as a tracked child process with a hard timeout (same pattern as review-run):
+    # prompt on stdin, stdout/stderr to temp files, real PID for a process-tree kill.
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $promptFile -Value $masterPrompt -Encoding utf8 -ErrorAction SilentlyContinue
+    $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+    $timedOut = $false
+    $codexExit = -1
+    try {
+        $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
+            -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+    } catch {
+        Write-Host "master-run: blocked."
+        Write-Host "Reason: Failed to start the Codex CLI: $_"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+        exit 3
+    }
+    # Cache the handle so $proc.ExitCode is reliable after exit (a never-touched handle reads null).
+    try { $null = $proc.Handle } catch { }
+
+    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+        $codexExit = $proc.ExitCode
+    } else {
+        $timedOut = $true
+        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
+        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        try { $proc.WaitForExit(5000) | Out-Null } catch { }
+    }
+
+    $partial = ""
+    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (-not [string]::IsNullOrEmpty($partial)) {
+        Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+    }
+    $stderrText = ""
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+
+    Write-Host ""
+    if ($timedOut) {
+        Write-Host "master-run: TIMED OUT after $TimeoutSeconds seconds."
+        Write-Host "The Codex process (and its children) were terminated. NO final recommendation was captured."
+        if (Test-Path $jsonlPath) {
+            Write-Host "Partial, INCOMPLETE Codex output was preserved (NOT a recommendation): $MasterJsonlName"
+        }
+        if (Test-Path $lastPath) { Remove-Item $lastPath -Force -ErrorAction SilentlyContinue }
+        Write-Host "No $MasterLastName final recommendation exists for this run."
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr (partial, before termination):"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (Codex Master analysis timed out) - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host "Re-run with a larger -TimeoutSeconds if the analysis legitimately needs more time."
+        Write-Host ""
+        exit 4
+    }
+
+    # Fail closed if Codex exited 0 but produced no final message: a capture command must only
+    # report success when the artifact exists.
+    $hasCapture = Test-Path $lastPath
+    if (-not $hasCapture -and ($null -eq $codexExit -or $codexExit -eq 0)) {
+        Write-Host "master-run: blocked."
+        if ($null -eq $codexExit) {
+            Write-Host "Reason: Codex wrote no final message ($MasterLastName), and no reliable process exit code was available; no recommendation was captured."
+        } else {
+            Write-Host "Reason: Codex exited 0 but wrote no final message ($MasterLastName); no recommendation was captured."
+        }
+        Write-Host "Captured JSONL (if any): $MasterJsonlName"
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr:"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (no recommendation captured) - not a user decision."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 6
+    }
+
+    if ($codexExit -ne 0) {
+        Write-Host "master-run: Codex exited with a non-zero code ($codexExit)."
+        Write-Host "Captured JSONL (if any): $MasterJsonlName"
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr:"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight - inspect the captured output."
+        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 5
+    }
+
+    Write-Host "master-run: complete (read-only capture)."
+    Write-Host "Captured artifacts (local, gitignored - do not commit):"
+    Write-Host "  $MasterJsonlName"
+    Write-Host "  $MasterLastName"
+    Write-Host ""
+    Write-Host "Codex final message:"
+    Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
+    Write-Host ""
+    Write-Host "This POC captured the Master recommendation only. It made no git changes and did not modify AI_HANDOFF.md."
+    Write-Host "A human or the Master reads the captured recommendation and applies any gate/actor decision manually."
+    Write-Host "Master/Codex remains callable: no - there is no master-apply, and loop/cycle never run Master turns."
+    Write-Host "Stop category: Operator Manual Action - apply any routing decision manually."
+    Write-Host ""
+}
+
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
@@ -2003,7 +2294,8 @@ function Invoke-Menu {
     Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
     Write-Host "10. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
     Write-Host "11. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
-    Write-Host "12. Exit"
+    Write-Host "12. Check Codex Master (POC)       - dry-run Codex Master capture plan (master-check)"
+    Write-Host "13. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -2022,7 +2314,8 @@ function Invoke-Menu {
         "9" { Invoke-SequenceCheck }
         "10" { Invoke-ReviewCheck }
         "11" { Invoke-ReviewApply }
-        "12" { }
+        "12" { Invoke-MasterCheck }
+        "13" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -2558,6 +2851,8 @@ switch ($Command) {
     "review-check" { Invoke-ReviewCheck }
     "review-run"   { Invoke-ReviewRun }
     "review-apply" { Invoke-ReviewApply }
+    "master-check" { Invoke-MasterCheck }
+    "master-run"   { Invoke-MasterRun }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -2586,6 +2881,9 @@ switch ($Command) {
             Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
             Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; never auto-run by loop/cycle."
+            Write-Host "  master-check              Dry-run the Codex Master capture POC plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
+            Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
+            Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run. Master/Codex stays callable: no."
             Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-Yes]"

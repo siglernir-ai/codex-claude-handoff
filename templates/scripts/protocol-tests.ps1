@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.3.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.3.1
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -11,8 +11,10 @@
     Coverage: state routing, turn-ownership mismatch routing, adapter decisions,
     stop categories, release executor guards, sequence advance guards, mirror parity,
     safety boundaries (dry runs change no files and run no git mutations), the Codex
-    Reviewer POC capture guards, and the v1.3.0 automated Reviewer turn (review-apply
-    verdict transitions fail-closed; loop stops rather than auto-running a Reviewer turn).
+    Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
+    transitions fail-closed; loop stops rather than auto-running a Reviewer turn), and the
+    v1.3.1 Codex Master capture POC (master-check/master-run guards, capture-only, fail
+    closed; Master/Codex stays callable: no).
 
     Usage:  pwsh -File scripts/protocol-tests.ps1
     Exit:   0 = all passed, 1 = one or more failures or a harness error.
@@ -266,7 +268,8 @@ Write-Host "[3] Adapter decisions (adapters)"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
 Check "Implementer/Claude Code adapter is callable for READY_FOR_IMPLEMENTATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Tool:\s+Claude Code.*?Callable:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION")
-Check "Master/Codex adapter is not callable (manual handoff)" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+no")
+# Master/Codex stays callable: no and Auto-loop: no (unchanged by the v1.3.1 capture POC).
+Check "Master/Codex adapter is not callable and not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+no.*?Auto-loop:\s+no")
 # Since v1.3.0 Reviewer/Codex is callable for READY_FOR_REVIEW (review-run + review-apply)
 # but Auto-loop is no: loop/cycle must never auto-run it.
 Check "Reviewer/Codex adapter is callable for READY_FOR_REVIEW but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Reviewer.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+READY_FOR_REVIEW")
@@ -649,6 +652,132 @@ Check "loop does not start an Implementer turn for a Reviewer state" ($r.Out -no
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle")
 Check "cycle refuses a READY_FOR_REVIEW Reviewer turn" (($r.Code -eq 1) -and ($r.Out -match "cycle: blocked"))
+
+# === 11. Codex Master capture POC guards (master-check / master-run, v1.3.1) ===
+Write-Host "[11] Codex Master capture POC guards (master-check / master-run)"
+
+# Force a deterministic, unresolvable Codex CLI so guard behavior does not depend on a real
+# codex binary being on PATH in the test environment.
+$env:CODEX_CLI = Join-Path $FixtureRoot "no-such-codex-cli.exe"
+
+# Happy path: NEEDS_ANALYSIS / Master with Codex bound passes the protocol guards and stops
+# only on the (forced) missing CLI - not on a guard. Task Actors may be present or TBD.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "master-check passes protocol guards (stops only on missing Codex CLI)" (($r.Out -match "protocol guards pass, but no runnable Codex CLI is available") -and ($r.Out -notmatch "must be State: NEEDS_ANALYSIS"))
+
+# Task Actors TBD must NOT block (the Master turn is expected to recommend the actors).
+$tbdHandoff = New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"
+$tbdHandoff = $tbdHandoff -replace "- Implementer: Claude Code", "- Implementer: TBD" -replace "- Reviewer: Codex", "- Reviewer: TBD"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $tbdHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "master-check allows Task Actors TBD (does not block on missing actors)" (($r.Out -match "protocol guards pass, but no runnable Codex CLI is available") -and ($r.Out -notmatch "Task Actors"))
+
+# Wrong state: master-check must block before any Codex resolution.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "master-check blocks unless State is NEEDS_ANALYSIS / Waiting For: Master" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS"))
+
+# Waiting For must be Master exactly - the bound tool name (Codex) is NOT accepted.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Codex"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "master-check requires Waiting For: Master exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS and Waiting For: Master"))
+
+# Bound Master is not Codex: this POC only invokes Codex.
+$nonCodexMaster = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Gemini |
+| Reviewer | Codex |
+| Implementer | Claude Code |
+"@
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexMaster }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "master-check blocks when the bound Master is not Codex" (($r.Code -eq 1) -and ($r.Out -match "bound Master tool must be Codex"))
+
+# master-run fails closed with Environment/Preflight when the Codex CLI is unavailable, and
+# runs no Codex invocation, no git, and no handoff change.
+$env:CODEX_CLI = Join-Path $FixtureRoot "no-such-codex-cli.exe"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "master-run blocks (exit 3) when the Codex CLI is unavailable" (($r.Code -eq 3) -and ($r.Out -match "Environment/Preflight") -and ($r.Out -match "No Codex invocation was run"))
+Check "master-run does not modify AI_HANDOFF.md when blocked" ($before -eq $after)
+Check "master-run creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+# master-run fails closed on a HANGING Codex: a fake CLI that answers `exec --help` but then
+# sleeps must be killed at the timeout, leaving no recommendation and no handoff change.
+$fakeCodex = Join-Path $FixtureRoot "fake-codex-hang.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+ping -n 30 127.0.0.1 >nul
+exit /b 0
+'@ | Set-Content -Path $fakeCodex -Encoding ascii
+$env:CODEX_CLI = $fakeCodex
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes", "-TimeoutSeconds", "2")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-run times out and fails closed (exit 4)" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "NO final recommendation"))
+Check "master-run timeout writes no final capture file" (-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md")))
+Check "master-run timeout does not modify AI_HANDOFF.md" ($before -eq $after)
+
+# master-run delivers the multi-word Master prompt through stdin (not split argv), and a clean
+# Codex exit that writes the capture file succeeds (exit 0). The fake records stdin and argv.
+$fakeEcho = Join-Path $FixtureRoot "fake-codex-master-echo.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > FAKE_STDIN.txt
+echo %* > FAKE_ARGV.txt
+echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> CODEX_MASTER_LAST.md
+:done
+'@ | Set-Content -Path $fakeEcho -Encoding ascii
+$env:CODEX_CLI = $fakeEcho
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$stdinFile = Join-Path $fx "FAKE_STDIN.txt"
+$argvFile  = Join-Path $fx "FAKE_ARGV.txt"
+$stdinContent = if (Test-Path $stdinFile) { Get-Content -Raw -Path $stdinFile } else { "" }
+$argvContent  = if (Test-Path $argvFile)  { Get-Content -Raw -Path $argvFile }  else { "" }
+Check "master-run delivers the Master prompt via stdin intact" ($stdinContent -match "as the Master decision router")
+Check "master-run does not pass the prompt as argv tokens" (($argvContent -notmatch "as the Master decision router") -and ($argvContent -match "-\s*$"))
+Check "master-run succeeds (exit 0) and captures the recommendation on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md")))
+Check "master-run capture-only: does not modify AI_HANDOFF.md on success" ($before -eq $after)
+
+# master-run must FAIL CLOSED if Codex exits 0 but writes NO capture file (no false success).
+$fakeNoCap = Join-Path $FixtureRoot "fake-codex-master-nocap.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+echo {"type":"item"}
+:done
+exit /b 0
+'@ | Set-Content -Path $fakeNoCap -Encoding ascii
+$env:CODEX_CLI = $fakeNoCap
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-run fails closed (exit 6) when Codex exits 0 but captures no recommendation" (($r.Code -eq 6) -and ($r.Out -match "no recommendation was captured"))
+Check "master-run no-capture path leaves no capture file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md"))) -and ($before -eq $after))
+
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
 # --- Summary ---
 Write-Host ""
