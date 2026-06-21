@@ -100,7 +100,7 @@ change.
   never appears in the role binding.
 - **Environment / Preflight Stop** - a STOP CATEGORY, not a state or a role. It maps
   to the existing automation exits: blocked preflight, dirty working tree, or
-  invalid arguments (exit 1); missing Claude Code / npx prerequisite (exit 3);
+  invalid arguments (exit 1); missing Claude Code / npx prerequisite or bounded runner start failure (exit 3); Claude Code turn timeout (exit 4);
   NEXT_TURN.md write failure (exit 4). Resolving it is an environment task, not a
   user decision.
 - **Protocol Repair** - a STOP CATEGORY, not a state or a role. It maps to the
@@ -233,3 +233,7 @@ Single authority per concern:
 - Documents that need the method refer to this file instead of restating it.
 - If wording elsewhere appears to define the method differently, this file wins and
   the discrepancy should be fixed as a documentation task.
+
+## Safe Agent Process Runner (v2.0.0)
+
+PowerShell `cycle`, `run-next`, and `loop` invoke Claude Code through a bounded process runner. The runner preserves the existing Claude Code safety flags, captures stdout/stderr, enforces `-TimeoutSeconds`, and terminates the process tree on timeout. Timeout is a fail-closed environment/preflight stop, not a user decision and not a successful handoff transition. Bash commands remain honest and do not gain a Claude runner.

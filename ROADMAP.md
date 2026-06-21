@@ -623,3 +623,13 @@ environment stops - but the loop never continues past any of them on its own:
 - No role may self-approve commits or deploys.
 - No role swap without explicit user approval.
 - The user remains the final approval point for all commits, pushes, and production actions.
+
+### v2.0.0 - Safe Agent Process Runner
+
+**Goal:** harden the callable Claude Code Implementer path before adding broader autonomy.
+
+**Status:** implemented as the first v2 autonomy foundation slice.
+
+**Includes:** bounded PowerShell runner for `cycle`, `run-next`, and `loop`; stdout/stderr capture; `-TimeoutSeconds`; process-tree kill on timeout; fake fast/hanging runner tests; documentation and version bump.
+
+**Does not include:** Master apply, full orchestration, release changes, Bash Claude runner, or any deploy/database/secrets behavior.

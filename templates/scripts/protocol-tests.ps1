@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v1.4.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -17,7 +17,7 @@
     closed; Master/Codex stays callable: no), and the v1.4.0 opt-in Reviewer loop integration
     (loop -IncludeReviewer runs review-run + review-apply in-session: APPROVED -> REVIEW_DONE/
     User, BLOCKED -> READY_FOR_IMPLEMENTATION and continues under MaxTurns; default loop still
-    stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer).
+    stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer), and the v2.0.0 safe Claude process runner (bounded child process, stdout/stderr capture, timeout kill, and no false handoff transition).
 
     Usage:  pwsh -File scripts/protocol-tests.ps1
     Exit:   0 = all passed, 1 = one or more failures or a harness error.
@@ -887,6 +887,90 @@ $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle")
 Check "cycle still refuses a Reviewer turn (no -IncludeReviewer opt-in for cycle)" (($r.Code -eq 1) -and ($r.Out -match "cycle: blocked"))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+
+# === 13. Safe Claude process runner (v2.0.0) ===
+Write-Host "[13] Safe Claude process runner"
+
+$fastBin = Join-Path $FixtureRoot "fake-npx-fast"
+New-Item -ItemType Directory -Path $fastBin -Force | Out-Null
+$fastCmd = Join-Path $fastBin "npx.cmd"
+Set-Content -Path $fastCmd -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%*"
+set IS_VERSION=
+set SAW_PERMISSION=
+set SAW_DISALLOWED=
+set SAW_NOSESSION=
+if not "!ALL:--version=!"=="!ALL!" set IS_VERSION=1
+if not "!ALL:--permission-mode=!"=="!ALL!" if not "!ALL:acceptEdits=!"=="!ALL!" set SAW_PERMISSION=1
+if not "!ALL:--disallowed-tools=!"=="!ALL!" if not "!ALL:Bash=!"=="!ALL!" set SAW_DISALLOWED=1
+if not "!ALL:--no-session-persistence=!"=="!ALL!" set SAW_NOSESSION=1
+if defined IS_VERSION (
+  echo claude-code-test
+  exit /b 0
+)
+echo FAKE_CLAUDE_FAST_STDOUT
+if not "%FAKE_NPX_ARGV%"=="" (
+  echo permission=!SAW_PERMISSION! > "%FAKE_NPX_ARGV%"
+  echo disallowed=!SAW_DISALLOWED! >> "%FAKE_NPX_ARGV%"
+  echo nosession=!SAW_NOSESSION! >> "%FAKE_NPX_ARGV%"
+)
+exit /b 0
+"@
+$fastArgv = Join-Path $fastBin "argv.txt"
+$prevPath = $env:PATH
+$prevArgv = $env:FAKE_NPX_ARGV
+$env:PATH = $fastBin + [System.IO.Path]::PathSeparator + $env:PATH
+$env:FAKE_NPX_ARGV = $fastArgv
+try {
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.0.0 - Safe Runner Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "cycle -Yes uses bounded Claude runner and succeeds with fake fast npx" (($r.Code -eq 0) -and ($r.Out -match "bounded PowerShell runner") -and ($r.Out -match "FAKE_CLAUDE_FAST_STDOUT"))
+    Check "cycle -Yes keeps the Claude safety flags" ((Test-Path $fastArgv) -and ((Get-Content -Raw -Path $fastArgv) -match "permission=1") -and ((Get-Content -Raw -Path $fastArgv) -match "disallowed=1") -and ((Get-Content -Raw -Path $fastArgv) -match "nosession=1"))
+} finally {
+    $env:PATH = $prevPath
+    if ($null -eq $prevArgv) { Remove-Item Env:\FAKE_NPX_ARGV -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_ARGV = $prevArgv }
+}
+
+$hangBin = Join-Path $FixtureRoot "fake-npx-hang"
+New-Item -ItemType Directory -Path $hangBin -Force | Out-Null
+$hangCmd = Join-Path $hangBin "npx.cmd"
+Set-Content -Path $hangCmd -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%*"
+set IS_VERSION=
+if not "!ALL:--version=!"=="!ALL!" set IS_VERSION=1
+if defined IS_VERSION (
+  echo claude-code-test
+  exit /b 0
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath `$env:FAKE_NPX_MARKER -Value 'started'; Start-Sleep -Seconds 30; Set-Content -LiteralPath `$env:FAKE_NPX_MARKER -Value 'finished'"
+exit /b 0
+"@
+$marker = Join-Path $hangBin "marker.txt"
+$prevPath = $env:PATH
+$prevMarker = $env:FAKE_NPX_MARKER
+$env:PATH = $hangBin + [System.IO.Path]::PathSeparator + $env:PATH
+$env:FAKE_NPX_MARKER = $marker
+try {
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.0.0 - Safe Runner Timeout Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $before = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "1")
+    $after = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $markerText = if (Test-Path $marker) { Get-Content -Raw -Path $marker } else { "" }
+    Check "bounded Claude runner times out and exits 4" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "process tree was terminated"))
+    Check "timeout does not transition AI_HANDOFF.md to a false review state" (($before -eq $after) -and ($after -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($after -notmatch "State:\s+READY_FOR_REVIEW"))
+    Check "timeout kills the hanging fake Claude before completion" ($markerText -notmatch "finished")
+} finally {
+    $env:PATH = $prevPath
+    if ($null -eq $prevMarker) { Remove-Item Env:\FAKE_NPX_MARKER -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_MARKER = $prevMarker }
+}
+
 
 # --- Summary ---
 Write-Host ""

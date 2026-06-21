@@ -3,6 +3,15 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.0.0 - Safe Agent Process Runner
+
+- Replaced the direct Claude Code Implementer `npx` invocation with a bounded PowerShell process runner used by `cycle`, `run-next`, and `loop`.
+- The runner starts a real process handle, captures stdout/stderr, enforces `-TimeoutSeconds`, kills the process tree on timeout, and fails closed without treating a timeout as a successful handoff transition.
+- Preserved the existing Claude Code safety flags: `--permission-mode acceptEdits`, `--disallowed-tools "Bash"`, `--max-budget-usd`, `--no-session-persistence`, and `--output-format text`.
+- Added explicit `cycle -Yes` support for scripted automation/tests while keeping interactive `yes` as the default confirmation path.
+- Added PowerShell protocol tests with fake fast and hanging `npx` commands proving success capture, safety flags, timeout exit, no false `AI_HANDOFF.md` transition, and hanging-process termination.
+- No Master automation, no `master-apply`, no release semantic changes, no Bash Claude runner, and no commit/push/tag/deploy/db/secrets automation were added.
+
 ## 1.4.0 - Human Intervention Minimization (opt-in Reviewer loop)
 
 - Added an opt-in Reviewer automation mode to `handoff.ps1 loop`: `loop -IncludeReviewer`.

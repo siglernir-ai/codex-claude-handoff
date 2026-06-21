@@ -61,8 +61,7 @@ authorization is required.
 
 Current local status:
 
-- Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION`
-  through `handoff.ps1 cycle` / `handoff.ps1 loop`.
+- Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout.
 - Master bound to Codex is manual and stays `callable: no`. Since v1.3.1 a read-only **Codex
   Master capture POC** (`handoff.ps1 master-check` / `master-run`) captures a routing
   recommendation during `NEEDS_ANALYSIS` to local, gitignored artifacts, but it is
@@ -505,6 +504,7 @@ is needed only if the package is not cached.
 ```powershell
 .\scripts\handoff.ps1 cycle
 .\scripts\handoff.ps1 cycle -BudgetUsd 5   # raise the budget cap
+.\scripts\handoff.ps1 cycle -TimeoutSeconds 600 -Yes
 ```
 
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
@@ -560,9 +560,9 @@ invariant.
 
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `cycle` exits with code 3.
 
-**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude Code error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
+**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or Claude Code timeout, 5 Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
 
-### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-IncludeReviewer]`
+### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeReviewer] [-Yes]`
 
 Run a bounded loop of automated handoff turns until a hard stop. It routes each turn by
 `State -> Role -> Tool -> Adapter`, runs only callable safe turns, re-reads
@@ -605,7 +605,7 @@ remain manual - the Claude Code CLI turn cannot be safely restricted to handoff-
 
 **Hard stops:** `REVIEW_DONE`, `WAITING_FOR_USER`, `BLOCKED`, `IMPLEMENTED`, unrecognized
 state, `Waiting For` mismatch, Reviewer == Implementer, dirty working tree (tracked or
-untracked), missing Claude Code/npx, Claude Code non-zero exit, `MaxTurns` reached, and
+untracked), missing Claude Code/npx, Claude Code runner start failure, Claude Code timeout, Claude Code non-zero exit, `MaxTurns` reached, and
 the session budget cap.
 
 **Budget semantics:** `-BudgetUsd` is the per-turn cap passed to `--max-budget-usd`.

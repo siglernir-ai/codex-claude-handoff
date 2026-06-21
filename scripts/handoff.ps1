@@ -134,14 +134,94 @@ function Test-ClaudeAvailable {
 
 # Run one Claude Code Implementer turn with the standard safety constraints.
 function Invoke-ClaudeTurn {
+    if ($TimeoutSeconds -lt 1) {
+        Write-Host "Claude Code turn blocked."
+        Write-Host "Reason: -TimeoutSeconds must be at least 1 (got: $TimeoutSeconds)."
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        return 1
+    }
+
     $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
-    npx --yes @anthropic-ai/claude-code -p $prompt `
-        --permission-mode acceptEdits `
-        --disallowed-tools "Bash" `
-        --max-budget-usd $BudgetUsd `
-        --no-session-persistence `
-        --output-format text
-    return $LASTEXITCODE
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    $runnerScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".ps1")
+    $budgetText = $BudgetUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+
+    $runnerBody = @'
+param(
+    [string]$PromptFile,
+    [string]$BudgetUsdText
+)
+$ErrorActionPreference = "Continue"
+$prompt = Get-Content -Raw -LiteralPath $PromptFile
+& npx --yes @anthropic-ai/claude-code -p $prompt --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd $BudgetUsdText --no-session-persistence --output-format text
+exit $LASTEXITCODE
+'@
+
+    $psHost = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if (-not $psHost) { $psHost = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+    if (-not $psHost) {
+        Write-Host "Claude Code turn blocked."
+        Write-Host "Reason: no PowerShell host (pwsh/powershell) is available for the bounded runner."
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        return 3
+    }
+
+    try {
+        Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -NoNewline -ErrorAction Stop
+        Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-BudgetUsdText', $budgetText)
+        $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+    } catch {
+        Write-Host "Claude Code turn blocked."
+        Write-Host "Reason: failed to start bounded Claude Code runner: $_"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        return 3
+    }
+
+    try { $null = $proc.Handle } catch { }
+    $timedOut = $false
+    $claudeExit = -1
+    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+        $claudeExit = $proc.ExitCode
+    } else {
+        $timedOut = $true
+        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
+        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        try { $proc.WaitForExit(5000) | Out-Null } catch { }
+    }
+
+    $stdoutText = ""
+    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    $stderrText = ""
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+
+    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+        ($stdoutText -split "`n") | ForEach-Object { Write-Host $_.TrimEnd() }
+    }
+
+    if ($timedOut) {
+        Write-Host "Claude Code turn TIMED OUT after $TimeoutSeconds seconds."
+        Write-Host "The Claude Code runner process tree was terminated."
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Claude Code stderr (partial, before termination):"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (Claude Code turn timed out) - not a user decision."
+        Write-Host "No git commands were run by handoff.ps1. Inspect AI_HANDOFF.md before continuing."
+        return 4
+    }
+
+    if ($null -eq $claudeExit) { $claudeExit = -1 }
+    if ($claudeExit -ne 0 -and -not [string]::IsNullOrWhiteSpace($stderrText)) {
+        Write-Host "Claude Code stderr:"
+        ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+    }
+    return $claudeExit
 }
 
 function Get-AdapterProfile {
@@ -162,8 +242,8 @@ function Get-AdapterProfile {
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
-            Invocation = "npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text";
-            SafetyLimits = "Explicit yes confirmation; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation.";
+            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text";
+            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
             NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use next + paste for other Implementer states."
@@ -2475,17 +2555,21 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Command: npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence"
+    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence"
     Write-Host ""
+    Write-Host "Timeout:     ${TimeoutSeconds}s (process tree is killed on timeout)"
     Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
     Write-Host "         This tool does not commit, push, or deploy automatically."
     Write-Host ""
-    # Fail closed: only an explicit, non-null "yes" proceeds. Null (EOF, redirected
-    # no-input, non-interactive), empty, whitespace, or anything else cancels.
-    $confirm = Read-Host 'Type "yes" to proceed, or press Enter to cancel'
-    if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
-        Write-Host "Cancelled."
-        exit 2
+    # Fail closed: only an explicit yes proceeds. -Yes is treated as explicit operator authorization for automation/tests.
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; proceeding without an interactive prompt."
+    } else {
+        $confirm = Read-Host 'Type "yes" to proceed, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            exit 2
+        }
     }
 
     Write-Host ""
@@ -2569,9 +2653,19 @@ function Invoke-Cycle {
             exit 6
         }
     } else {
-        Write-Host "Claude Code exited with error (code: $claudeExit)."
-        Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
-        exit 5
+        if ($claudeExit -eq 3) {
+            Write-Host "Claude Code runner failed before the turn could start (exit 3)."
+            Write-Host "AI_HANDOFF.md was not intentionally transitioned by handoff.ps1."
+            exit 3
+        } elseif ($claudeExit -eq 4) {
+            Write-Host "Claude Code turn timed out (exit 4)."
+            Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+            exit 4
+        } else {
+            Write-Host "Claude Code exited with error (code: $claudeExit)."
+            Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+            exit 5
+        }
     }
     Write-Host ""
 }
@@ -2902,10 +2996,21 @@ function Invoke-Loop {
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
 
         if ($claudeExit -ne 0) {
-            Write-Host "Claude Code exited with error (code: $claudeExit)."
-            Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
-            Write-LoopLog "turn=$turnNo stop reason=claude-error exit=5"
-            exit 5
+            if ($claudeExit -eq 3) {
+                Write-Host "Claude Code runner failed before the turn could start (exit 3)."
+                Write-LoopLog "turn=$turnNo stop reason=claude-runner-start-failed exit=3"
+                exit 3
+            } elseif ($claudeExit -eq 4) {
+                Write-Host "Claude Code turn timed out (exit 4)."
+                Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+                Write-LoopLog "turn=$turnNo stop reason=claude-timeout exit=4"
+                exit 4
+            } else {
+                Write-Host "Claude Code exited with error (code: $claudeExit)."
+                Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+                Write-LoopLog "turn=$turnNo stop reason=claude-error exit=5"
+                exit 5
+            }
         }
 
         # Log the post-turn state; the next iteration re-reads and routes it
@@ -2962,9 +3067,11 @@ switch ($Command) {
             Write-Host "  master-check              Dry-run the Codex Master capture POC plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
             Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run. Master/Codex stays callable: no."
-            Write-Host "  cycle [-BudgetUsd N]      Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
-            Write-Host "  run-next [-BudgetUsd N]   Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-IncludeReviewer] [-Yes]"
+            Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
+            Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
+            Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
+            Write-Host "                            Alias of cycle (kept for backward compatibility)."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeReviewer] [-Yes]"
             Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor (including explicit-only callable turns like Reviewer/Codex) or hard stop. With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed): APPROVED stops at REVIEW_DONE/User; BLOCKED returns to READY_FOR_IMPLEMENTATION and continues under MaxTurns/budget. Master/User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
