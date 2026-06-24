@@ -160,7 +160,9 @@ User`; `BLOCKED` -> `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`. Eac
 a guarded Operator Manual Action requiring an explicit `yes`; `review-run` performs no git
 mutation and never transitions `AI_HANDOFF.md`, and `review-apply` edits ONLY `AI_HANDOFF.md`
 (no git, no release action) and fails closed on any missing/malformed/stale verdict or failed
-guard. Together they make the Reviewer/Codex `READY_FOR_REVIEW` turn callable end-to-end, but
+guard. Since v2.0.2, `review-run` also tells Codex to inspect current file content directly
+for new/untracked Changed Files when `git diff -- <file>` is empty or insufficient, while
+still forbidding `git add`, `git add -N`, or any index/working-tree mutation. Together they make the Reviewer/Codex `READY_FOR_REVIEW` turn callable end-to-end, but
 ONLY via these explicit commands - by default the turn is never auto-run by `loop`/`cycle` (the
 adapter's `AutoLoopEligible` flag is false). Since v1.4.0 the operator may explicitly opt the
 Reviewer turn into a single `loop` session with `loop -IncludeReviewer`, which runs this same

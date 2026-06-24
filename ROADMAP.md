@@ -657,3 +657,21 @@ applies `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`, and 
 recommendations only when guards pass; malformed/stale/mismatched captures leave
 `AI_HANDOFF.md` unchanged; Master/Codex reports `callable: yes` / `Auto-loop: no`; full
 protocol tests pass.
+
+### v2.0.2 - Reviewer New File Diff Guidance
+
+**Goal:** remove the manual `git add -N` workaround discovered during the autonomy smoke test.
+
+**Status:** implemented as a targeted review-run prompt hardening slice.
+
+**Includes:** `review-run` guidance for Changed Files that are untracked or new: if
+`git diff -- <file>` is empty or insufficient, Codex must inspect the file's current content
+directly as the diff equivalent. The prompt explicitly forbids `git add`, `git add -N`, index
+mutation, and working-tree mutation.
+
+**Does not include:** any automatic git staging, committing, pushing, tagging, release action,
+deploy/database/secrets behavior, or broader Reviewer/Master loop integration.
+
+**Exit criteria:** a new untracked file listed in `AI_HANDOFF.md` Changed Files can be reviewed
+by `review-run` without an operator staging it intent-to-add first; protocol tests assert the
+prompt includes the new-file read path and no-index-mutation guard.

@@ -1731,6 +1731,7 @@ function Invoke-ReviewRun {
     $reviewPrompt = "Read-only code review. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
         "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files. " +
         "Inspect ONLY these sources: AI_HANDOFF.md for the current task and approved scope; the output of git status --short; and git diff -- for each of these Changed Files: $reviewFileList . " +
+        "For a Changed File that git status marks as untracked or new, if git diff -- for that file is empty or insufficient, inspect that file's current content directly as the diff equivalent; do not run git add, git add -N, or any other command that mutates the index or working tree. " +
         "Decide only whether those changed files match the task and approved scope described in AI_HANDOFF.md. Do not modify any file. " +
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
         "Finish quickly. End your reply with a verdict block of EXACTLY four lines, each on its own line, nothing after them, and no surrounding punctuation. " +

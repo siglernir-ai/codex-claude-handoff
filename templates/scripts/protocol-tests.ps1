@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.1
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.2
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -569,6 +569,7 @@ $stdinContent = if (Test-Path $stdinFile) { Get-Content -Raw -Path $stdinFile } 
 $argvContent  = if (Test-Path $argvFile)  { Get-Content -Raw -Path $argvFile }  else { "" }
 Check "review-run delivers the multi-word prompt via stdin intact" ($stdinContent -match "Inspect ONLY these sources")
 Check "review-run does not pass the prompt as argv tokens" (($argvContent -notmatch "Inspect ONLY these sources") -and ($argvContent -match "-\s*$"))
+Check "review-run prompt covers untracked/new files without index mutation" (($stdinContent -match "untracked or new") -and ($stdinContent -match "inspect that file's current content directly") -and ($stdinContent -match "do not run git add"))
 # Codex exited 0 AND wrote a verdict -> review-run succeeds (exit 0) and captures it. This
 # also proves the process ExitCode is read correctly (0, not a null that looks non-zero).
 Check "review-run succeeds (exit 0) and captures the verdict on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md")))

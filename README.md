@@ -399,7 +399,11 @@ The review prompt is delivered on Codex's standard input (the trailing `-`), not
 command-line argument, so a multi-word prompt is never split into separate argv tokens.
 The prompt is tightly scoped so the review finishes within the timeout: it tells Codex to
 be fast, not to load `AGENTS.md` / `CLAUDE.md` / the skill or other protocol files, to
-inspect only `AI_HANDOFF.md`, `git status`, and the Changed Files' diffs. Since v1.3.0 it
+inspect only `AI_HANDOFF.md`, `git status`, and the Changed Files' diffs. Since v2.0.2,
+when `git status` marks a Changed File as untracked or new and `git diff -- <file>` is
+empty or insufficient, the prompt tells Codex to inspect that file's current content
+directly as the diff equivalent without running `git add`, `git add -N`, or any other
+index/working-tree mutation. Since v1.3.0 it
 asks Codex to end with a strict four-line verdict block (`VERDICT:` APPROVED/BLOCKED,
 `REVIEWER: Codex`, `TASK:` the current task verbatim, `REASON:` one line) so `review-apply`
 can parse it. It never uses `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`,

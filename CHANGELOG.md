@@ -3,6 +3,18 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.0.2 - Reviewer New File Diff Guidance
+
+- Updated the read-only `review-run` prompt so Codex can review new/untracked files without
+  requiring the operator to run `git add -N`.
+- When `git status` marks a Changed File as untracked or new and `git diff -- <file>` is empty
+  or insufficient, Codex is instructed to inspect that file's current content directly as the
+  diff equivalent.
+- The instruction explicitly preserves read-only behavior: no `git add`, no `git add -N`, no
+  index mutation, no working-tree mutation, no commit/push/tag/deploy/db/secrets behavior.
+- Added a regression assertion that the `review-run` stdin prompt includes the new/untracked
+  file guidance and the no-index-mutation guard.
+
 ## 2.0.1 - Master Apply Command
 
 - Added `handoff.ps1 master-apply`: it consumes the recommendation captured by `master-run`

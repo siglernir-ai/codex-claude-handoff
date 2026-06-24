@@ -202,8 +202,11 @@ hardcoded in the scripts, docs, or templates.
 command-line argument, so a multi-word prompt is never split into separate argv tokens.
 The prompt is tightly scoped for bounded runtime: Codex is told to be fast, to NOT load
 AGENTS.md / CLAUDE.md / the skill or other protocol files, to inspect only AI_HANDOFF.md,
-`git status`, and the Changed Files' diffs. Since v1.3.0 the prompt asks Codex to end with
-a strict four-line verdict block (`VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:`
+`git status`, and the Changed Files' diffs. Since v2.0.2, if a Changed File is untracked or
+new and `git diff -- <file>` is empty or insufficient, the prompt tells Codex to inspect the
+file's current content directly as the diff equivalent while still forbidding `git add`,
+`git add -N`, index mutation, or working-tree mutation. Since v1.3.0 the prompt asks Codex
+to end with a strict four-line verdict block (`VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:`
 the current task verbatim, `REASON:` one line) so the captured verdict is machine-parseable
 by `review-apply`.
 `review-run` is bounded by `-TimeoutSeconds` (default 180) and runs Codex as a tracked
