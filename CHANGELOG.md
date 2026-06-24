@@ -3,6 +3,30 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.0.1 - Master Apply Command
+
+- Added `handoff.ps1 master-apply`: it consumes the recommendation captured by `master-run`
+  (`CODEX_MASTER_LAST.md`) and applies the corresponding local `AI_HANDOFF.md` transition.
+- Updated `master-run` to require a strict six-line recommendation block with a `TASK:` line,
+  giving `master-apply` an anti-stale guard before it writes anything.
+- `master-apply` supports `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`,
+  and `BLOCKED`. Non-`BLOCKED` recommendations must route to `Waiting For: Implementer` and
+  name concrete Task Actors matching the current role binding; `BLOCKED` must route to
+  `Waiting For: User`.
+- Fail-closed guards block missing, malformed, stale, or contradictory captures, missing actors,
+  `Reviewer == Implementer`, role-binding mismatches, and wrong starting state. On every blocked
+  path, `AI_HANDOFF.md` is left unchanged.
+- Hardened PowerShell subprocess startup against Windows process environments that expose both
+  `Path` and `PATH`; `handoff.ps1` and the protocol test harness normalize the process
+  environment before using child-process runners.
+- Master/Codex is now `callable: yes` for `NEEDS_ANALYSIS` only via explicit
+  `master-run` + `master-apply`, while `Auto-loop: no` remains unchanged. `loop` and `cycle`
+  still never auto-run Master turns.
+- Bash refuses `master-apply` honestly and points to PowerShell. No git add/commit/push/tag,
+  release, deploy, database, secret, or role-swap automation was added.
+- Tests: `protocol-tests.ps1` adds section 12 for `master-apply` success and fail-closed cases;
+  adapter tests now assert Master/Codex `callable: yes` / `Auto-loop: no`.
+
 ## 2.0.0 - Safe Agent Process Runner
 
 - Replaced the direct Claude Code Implementer `npx` invocation with a bounded PowerShell process runner used by `cycle`, `run-next`, and `loop`.

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Protocol Test Harness (Bash companion) - codex-claude-handoff v1.3.1
+# Protocol Test Harness (Bash companion) - codex-claude-handoff v2.0.1
 #
 # The protocol test harness is PowerShell-first: scripts/protocol-tests.ps1 holds the
 # full fixture-driven suite (state routing, adapter decisions, stop categories, release
 # and sequence guards, mirror parity, safety boundaries). This Bash companion does NOT
 # re-run that suite. It honestly verifies the Bash-side behavior that handoff.sh is
 # actually responsible for:
-#   - the PowerShell-only release/sequence executors are refused honestly in Bash, and
+#   - the PowerShell-only release/sequence/review/master executors are refused honestly in Bash, and
 #   - the canonical/template script mirrors are in sync.
 # Run scripts/protocol-tests.ps1 (pwsh) for the complete protocol suite.
 #
@@ -144,6 +144,10 @@ check "master-check is honestly refused in Bash" $?
 run_handoff "$fx" master-run
 echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
 check "master-run is honestly refused in Bash" $?
+
+run_handoff "$fx" master-apply
+echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
+check "master-apply is honestly refused in Bash" $?
 
 # Refusal must not create a git commit or mutate the handoff file.
 # Fail closed: require a real hash tool and a non-empty hash, so two empty strings

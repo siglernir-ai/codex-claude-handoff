@@ -62,14 +62,14 @@ authorization is required.
 Current local status:
 
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout.
-- Master bound to Codex is manual and stays `callable: no`. Since v1.3.1 a read-only **Codex
-  Master capture POC** (`handoff.ps1 master-check` / `master-run`) captures a routing
-  recommendation during `NEEDS_ANALYSIS` to local, gitignored artifacts, but it is
-  capture-only (no `AI_HANDOFF.md` change, no `master-apply`) and does not make Master
-  callable. A Codex CLI binary may be discoverable on a machine, and as of v1.1.0 a read-only
-  `codex exec` smoke test has been run successfully (read-only sandbox, deterministic JSON
-  output, no git change). See the "Codex Master Capture POC" and "Codex CLI Verification"
-  sections of `ADAPTERS.md`.
+- Master bound to Codex is callable for `NEEDS_ANALYSIS` only through explicit
+  `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. It is not auto-run by
+  `loop`/`cycle` (`Auto-loop: no`). `master-run` captures a routing recommendation to local,
+  gitignored artifacts; `master-apply` consumes it fail-closed and edits only `AI_HANDOFF.md`.
+  A Codex CLI binary may be discoverable on a machine, and as of v1.1.0 a read-only `codex exec`
+  smoke test has been run successfully (read-only sandbox, deterministic JSON output, no git
+  change). See the "Automated Master Turn" and "Codex CLI Verification" sections of
+  `ADAPTERS.md`.
 - Since v1.3.0 the **Reviewer/Codex `READY_FOR_REVIEW` turn is callable end-to-end** via the
   explicit two-step `handoff.ps1 review-run` (read-only Codex capture) + `handoff.ps1
   review-apply` (apply the captured verdict's local `AI_HANDOFF.md` transition, fail-closed).
@@ -77,9 +77,9 @@ Current local status:
   by default (the adapter is `callable: yes` but `Auto-loop: no`). Since v1.4.0 the operator may
   opt this exact turn into one loop session with `loop -IncludeReviewer` (per-session opt-in,
   `cycle` never does, `Auto-loop` stays `no`). `review-run` runs no git and never transitions
-  `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex remains
-  `callable: no`. See "Automated Reviewer Turn" and "Opt-in Reviewer Loop Integration" in
-  `ADAPTERS.md`.
+  `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex is callable only via
+  explicit `master-run` + `master-apply` and remains `Auto-loop: no`. See "Automated Reviewer
+  Turn", "Automated Master Turn", and "Opt-in Reviewer Loop Integration" in `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.
@@ -449,20 +449,20 @@ PowerShell-only.
 
 Because `review-apply` requires an explicit command, the Reviewer/Codex adapter is recorded
 `callable: yes` for `READY_FOR_REVIEW` but `Auto-loop: no` (see `handoff.ps1 adapters`):
-`loop` and `cycle` stop at a Reviewer turn rather than running it. Master/Codex remains
-`callable: no`.
+`loop` and `cycle` stop at a Reviewer turn rather than running it. Master/Codex is similarly
+explicit-command callable for `NEEDS_ANALYSIS` but `Auto-loop: no`.
 
-### `master-check` and `master-run` (Codex Master capture POC, since v1.3.1)
+### `master-check`, `master-run`, and `master-apply` (automated Master turn, since v2.0.1)
 
-The Master-side equivalent of the v1.2.0 Reviewer capture POC. It invokes Codex read-only as
-the **Master decision router** during `NEEDS_ANALYSIS` and captures a structured routing
-recommendation to local artifacts. It is **capture-only**: it never runs git and never changes
-`AI_HANDOFF.md`, and there is intentionally **no `master-apply`**, so it does not make the
-Master callable.
+The Master-side equivalent of the Reviewer capture/apply path. It invokes Codex read-only as
+the **Master decision router** during `NEEDS_ANALYSIS`, captures a structured routing
+recommendation to local artifacts, then applies that recommendation to local `AI_HANDOFF.md`
+with a separate fail-closed command. It never runs git.
 
 ```powershell
 .\scripts\handoff.ps1 master-check
 .\scripts\handoff.ps1 master-run
+.\scripts\handoff.ps1 master-apply
 ```
 
 `master-check` never invokes Codex. It prints the plan and the read-only invocation shape, then
@@ -482,18 +482,21 @@ MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION|PLAN_REQUIRED|NEEDS_INVESTIGATIO
 WAITING_FOR: Implementer|User
 IMPLEMENTER: <tool or TBD>
 REVIEWER: <tool or TBD>
+TASK: <current Current Task exactly>
 REASON: <one non-empty line>
 ```
 
 It captures the `--json` stream to `CODEX_MASTER.jsonl` and the recommendation to
-`CODEX_MASTER_LAST.md` (both local and gitignored), then stops. A human or the Master reads the
-captured recommendation and applies any gate/actor decision manually. It **fails closed** on an
-unavailable CLI (exit 3), timeout (exit 4), non-zero Codex exit (exit 5), or a clean exit that
-produced no capture (exit 6) - never changing git or `AI_HANDOFF.md`.
+`CODEX_MASTER_LAST.md` (both local and gitignored), then stops. `master-apply` parses that
+capture and applies one local transition: `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`,
+or `PLAN_REQUIRED` routes to `Waiting For: Implementer`; `BLOCKED` routes to `Waiting For:
+User`. It fails closed on a missing/malformed/stale capture, an invalid state/Waiting For
+pair, missing concrete actors for Implementer-routed work, Reviewer == Implementer, or captured
+actors that do not match the current role binding.
 
-**Master/Codex stays `callable: no`** and `Auto-loop: no`: this is a documented POC, not an
-applied Master turn, and `loop`/`cycle` never run Master turns. Bash refuses
-`master-check` / `master-run` honestly and points to PowerShell.
+**Master/Codex is `callable: yes` but `Auto-loop: no`** for `NEEDS_ANALYSIS`: it is callable
+only via explicit `master-run` + `master-apply`, and `loop`/`cycle` never run Master turns.
+Bash refuses `master-check` / `master-run` / `master-apply` honestly and points to PowerShell.
 
 ### `cycle [-BudgetUsd N]`
 

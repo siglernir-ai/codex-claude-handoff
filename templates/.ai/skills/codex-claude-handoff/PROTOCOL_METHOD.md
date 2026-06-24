@@ -174,16 +174,20 @@ invariant is unchanged: both commands refuse unless the bound and actual Reviewe
 differs from the actual Implementer. The user's release authorization at `REVIEW_DONE` is also
 unchanged. See `ADAPTERS.md`, "Automated Reviewer Turn" and "Opt-in Reviewer Loop Integration".
 
-Codex Master capture POC (since v1.3.1): the `master-check` / `master-run` commands invoke
-Codex read-only as the Master decision router during `NEEDS_ANALYSIS` and capture a structured
-routing recommendation to local, gitignored artifacts (`CODEX_MASTER.jsonl`,
-`CODEX_MASTER_LAST.md`). Like the v1.2.0 Reviewer capture POC, each is a guarded Operator
-Manual Action requiring an explicit `yes`; `master-run` performs no git mutation and never
-transitions `AI_HANDOFF.md`. It is deliberately capture-only: there is no `master-apply`, and a
-human or the Master reads the captured recommendation and applies any gate/actor decision
-manually. Master/Codex stays `callable: no` and is never auto-run by `loop`/`cycle` (no
-`AutoLoopEligible` change). State-changing Master automation is a higher-risk, later reviewed
-step. See `ADAPTERS.md`, "Codex Master Capture POC".
+Codex Master turn (capture since v1.3.1; apply since v2.0.1): the `master-check` /
+`master-run` commands invoke Codex read-only as the Master decision router during
+`NEEDS_ANALYSIS` and capture a structured routing recommendation to local, gitignored artifacts
+(`CODEX_MASTER.jsonl`, `CODEX_MASTER_LAST.md`). Since v2.0.1 the `master-apply` command reads
+that captured recommendation and applies the resulting local `AI_HANDOFF.md` transition:
+`READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`, or `PLAN_REQUIRED` -> `Waiting For:
+Implementer`; `BLOCKED` -> `Waiting For: User`. Each command is a guarded Operator Manual
+Action requiring an explicit `yes`; `master-run` performs no git mutation and never transitions
+`AI_HANDOFF.md`, and `master-apply` edits ONLY `AI_HANDOFF.md` (no git, no release action) and
+fails closed on any missing/malformed/stale recommendation, invalid state/actor pairing, or
+role-binding mismatch. Together they make the Master/Codex `NEEDS_ANALYSIS` turn callable
+end-to-end, but ONLY via explicit commands. Master/Codex is still never auto-run by
+`loop`/`cycle` (`Auto-loop: no`); full loop integration remains later work. See `ADAPTERS.md`,
+"Automated Master Turn".
 
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 

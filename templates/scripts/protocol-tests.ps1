@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.1
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -13,8 +13,8 @@
     safety boundaries (dry runs change no files and run no git mutations), the Codex
     Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
     transitions fail-closed; loop stops rather than auto-running a Reviewer turn), the
-    v1.3.1 Codex Master capture POC (master-check/master-run guards, capture-only, fail
-    closed; Master/Codex stays callable: no), and the v1.4.0 opt-in Reviewer loop integration
+    v1.3.1/v2.0.1 Codex Master turn (master-check/master-run guards, master-apply transitions,
+    fail closed; Master/Codex is explicit-command callable but not auto-loop eligible), and the v1.4.0 opt-in Reviewer loop integration
     (loop -IncludeReviewer runs review-run + review-apply in-session: APPROVED -> REVIEW_DONE/
     User, BLOCKED -> READY_FOR_IMPLEMENTATION and continues under MaxTurns; default loop still
     stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer), and the v2.0.0 safe Claude process runner (bounded child process, stdout/stderr capture, timeout kill, and no false handoff transition).
@@ -28,6 +28,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# PowerShell on Windows can accumulate duplicate process-environment keys that differ only by
+# case (Path/PATH) after tests prepend to PATH. Start-Process then fails before the child starts.
+if ($env:OS -eq "Windows_NT") {
+    $pathValue = $env:Path
+    if ([string]::IsNullOrEmpty($pathValue)) { $pathValue = $env:PATH }
+    [System.Environment]::SetEnvironmentVariable("PATH", $null, "Process")
+    if (-not [string]::IsNullOrEmpty($pathValue)) {
+        [System.Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+    }
+}
 
 # --- Resolve repo paths (this script lives in scripts/) ---
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -215,6 +226,30 @@ function New-ReviewApplyFixture {
     return $fx
 }
 
+# Build a disposable master-apply fixture: NEEDS_ANALYSIS handoff plus an optional
+# captured Master recommendation file (CODEX_MASTER_LAST.md).
+function New-MasterApplyFixture {
+    param(
+        [string]$Capture,
+        [string]$CurrentTask = "v2.0.1 - Master Apply Test",
+        [string]$State = "NEEDS_ANALYSIS",
+        [string]$WaitingFor = "Master",
+        [string]$Roles = $DefaultRoles,
+        [switch]$NoCapture
+    )
+    $handoff = New-Handoff -State $State -WaitingFor $WaitingFor -CurrentTask $CurrentTask -Extra @"
+
+## Last Update
+- Actor: Test
+- Date: 2026-06-23
+- Task: Fixture for master-apply tests.
+"@
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "CODEX_MASTER_LAST.md") -Value $Capture -Encoding utf8 }
+    return $fx
+}
+
 # Run handoff.ps1 in $WorkDir as a child process; capture exit code + combined output.
 function Invoke-Handoff {
     param([string]$WorkDir, [string[]]$Arguments)
@@ -271,8 +306,9 @@ Write-Host "[3] Adapter decisions (adapters)"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
 Check "Implementer/Claude Code adapter is callable for READY_FOR_IMPLEMENTATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Tool:\s+Claude Code.*?Callable:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION")
-# Master/Codex stays callable: no and Auto-loop: no (unchanged by the v1.3.1 capture POC).
-Check "Master/Codex adapter is not callable and not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+no.*?Auto-loop:\s+no")
+# Since v2.0.1 Master/Codex is callable for NEEDS_ANALYSIS via master-run + master-apply,
+# but Auto-loop is no: loop/cycle must never auto-run it.
+Check "Master/Codex adapter is callable for NEEDS_ANALYSIS but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+NEEDS_ANALYSIS")
 # Since v1.3.0 Reviewer/Codex is callable for READY_FOR_REVIEW (review-run + review-apply)
 # but Auto-loop is no: loop/cycle must never auto-run it.
 Check "Reviewer/Codex adapter is callable for READY_FOR_REVIEW but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Reviewer.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+READY_FOR_REVIEW")
@@ -426,11 +462,11 @@ exit /b 1
 '@ | Set-Content -Path (Join-Path $fakeBrokenPathDir "codex.cmd") -Encoding ascii
 $emptyLocalAppData = Join-Path $FixtureRoot "empty-localappdata"
 New-Item -ItemType Directory -Path $emptyLocalAppData -Force | Out-Null
-$prevPath = $env:PATH
+$prevPath = $env:Path
 $hadLocalAppData = Test-Path Env:\LOCALAPPDATA
 $prevLocalAppData = $env:LOCALAPPDATA
 try {
-    $env:PATH = "$fakeBrokenPathDir;$prevPath"
+    $env:Path = "$fakeBrokenPathDir;$prevPath"
     $env:LOCALAPPDATA = $emptyLocalAppData
     Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
@@ -444,7 +480,7 @@ try {
     $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
     Check "review-check blocks when PATH exposes a non-runnable Codex CLI alias" (($r.Code -eq 1) -and ($r.Out -match "no runnable Codex CLI is available") -and ($r.Out -notmatch "ready for operator-confirmed review-run"))
 } finally {
-    $env:PATH = $prevPath
+    $env:Path = $prevPath
     if ($hadLocalAppData) {
         $env:LOCALAPPDATA = $prevLocalAppData
     } else {
@@ -782,8 +818,91 @@ Check "master-run no-capture path leaves no capture file and no handoff change" 
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
-# === 12. Opt-in Reviewer loop integration (loop -IncludeReviewer, v1.4.0) ===
-Write-Host "[12] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
+# === 12. Automated Master turn (master-apply, v2.0.1) ===
+Write-Host "[12] Automated Master turn (master-apply)"
+
+$masterCaptureReady = @"
+MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION
+WAITING_FOR: Implementer
+IMPLEMENTER: Claude Code
+REVIEWER: Codex
+TASK: v2.0.1 - Master Apply Test
+REASON: The task is scoped and ready for implementation.
+"@
+$fx = New-MasterApplyFixture -Capture $masterCaptureReady
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$beforeCommits = & git -C $fx rev-list --count HEAD
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$h = Get-Content -Raw -Path $handoffPath
+$afterCommits = & git -C $fx rev-list --count HEAD
+Check "master-apply READY_FOR_IMPLEMENTATION sets Waiting For: Implementer" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
+Check "master-apply records concrete Task Actors from the capture" (($h -match "Implementer:\s+Claude Code") -and ($h -match "Reviewer:\s+Codex"))
+Check "master-apply creates no git commit" ("$afterCommits".Trim() -eq "$beforeCommits".Trim())
+
+$masterCaptureBlocked = @"
+MASTER_RECOMMENDATION: BLOCKED
+WAITING_FOR: User
+IMPLEMENTER: TBD
+REVIEWER: TBD
+TASK: v2.0.1 - Master Apply Test
+REASON: User approval is required before routing.
+"@
+$fx = New-MasterApplyFixture -Capture $masterCaptureBlocked
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$h = Get-Content -Raw -Path $handoffPath
+Check "master-apply BLOCKED sets Waiting For: User" (($r.Code -eq 0) -and ($h -match "State:\s+BLOCKED") -and ($h -match "Waiting For:\s+User") -and ($h -match "User approval is required"))
+
+$badMasterCaptures = @(
+    @{ Name = "missing recommendation"; Text = "WAITING_FOR: Implementer`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: v2.0.1 - Master Apply Test`nREASON: missing recommendation" },
+    @{ Name = "stale task"; Text = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: stale task`nREASON: stale" },
+    @{ Name = "bad waiting-for"; Text = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: User`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: v2.0.1 - Master Apply Test`nREASON: invalid pair" },
+    @{ Name = "TBD implementer"; Text = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: TBD`nREVIEWER: Codex`nTASK: v2.0.1 - Master Apply Test`nREASON: missing actor" },
+    @{ Name = "same implementer and reviewer"; Text = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Codex`nREVIEWER: Codex`nTASK: v2.0.1 - Master Apply Test`nREASON: invariant violation" }
+)
+foreach ($case in $badMasterCaptures) {
+    $fx = New-MasterApplyFixture -Capture $case.Text
+    $handoffPath = Join-Path $fx "AI_HANDOFF.md"
+    $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+    $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+    Check "master-apply fails closed on $($case.Name) (no transition, no handoff change)" (($r.Code -ne 0) -and ($before -eq $after))
+}
+
+$fx = New-MasterApplyFixture -Capture "" -NoCapture
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-apply fails closed when no captured recommendation file exists" (($r.Code -ne 0) -and ($r.Out -match "No captured Master recommendation file") -and ($before -eq $after))
+
+$rolesSwap = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Codex |
+| Reviewer | Codex |
+| Implementer | Gemini |
+"@
+$fx = New-MasterApplyFixture -Capture $masterCaptureReady -Roles $rolesSwap
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-apply blocks captured actors that do not match current role binding" (($r.Code -eq 1) -and ($r.Out -match "Role swaps require explicit user approval") -and ($before -eq $after))
+
+$fx = New-MasterApplyFixture -Capture $masterCaptureReady -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-apply blocks unless State is NEEDS_ANALYSIS / Waiting For: Master" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS") -and ($before -eq $after))
+
+# === 13. Opt-in Reviewer loop integration (loop -IncludeReviewer, v1.4.0) ===
+Write-Host "[13] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
 
 # The fake Codex CLIs below answer `exec --help` (exit 0) and, on the real run, write ONLY
 # CODEX_REVIEW_LAST.md (a local, gitignored, clean-tree-exempt artifact) so the in-loop
@@ -920,9 +1039,9 @@ if not "%FAKE_NPX_ARGV%"=="" (
 exit /b 0
 "@
 $fastArgv = Join-Path $fastBin "argv.txt"
-$prevPath = $env:PATH
+$prevPath = $env:Path
 $prevArgv = $env:FAKE_NPX_ARGV
-$env:PATH = $fastBin + [System.IO.Path]::PathSeparator + $env:PATH
+$env:Path = $fastBin + [System.IO.Path]::PathSeparator + $env:Path
 $env:FAKE_NPX_ARGV = $fastArgv
 try {
     $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.0.0 - Safe Runner Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
@@ -931,7 +1050,7 @@ try {
     Check "cycle -Yes uses bounded Claude runner and succeeds with fake fast npx" (($r.Code -eq 0) -and ($r.Out -match "bounded PowerShell runner") -and ($r.Out -match "FAKE_CLAUDE_FAST_STDOUT"))
     Check "cycle -Yes keeps the Claude safety flags" ((Test-Path $fastArgv) -and ((Get-Content -Raw -Path $fastArgv) -match "permission=1") -and ((Get-Content -Raw -Path $fastArgv) -match "disallowed=1") -and ((Get-Content -Raw -Path $fastArgv) -match "nosession=1"))
 } finally {
-    $env:PATH = $prevPath
+    $env:Path = $prevPath
     if ($null -eq $prevArgv) { Remove-Item Env:\FAKE_NPX_ARGV -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_ARGV = $prevArgv }
 }
 
@@ -952,9 +1071,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath
 exit /b 0
 "@
 $marker = Join-Path $hangBin "marker.txt"
-$prevPath = $env:PATH
+$prevPath = $env:Path
 $prevMarker = $env:FAKE_NPX_MARKER
-$env:PATH = $hangBin + [System.IO.Path]::PathSeparator + $env:PATH
+$env:Path = $hangBin + [System.IO.Path]::PathSeparator + $env:Path
 $env:FAKE_NPX_MARKER = $marker
 try {
     $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.0.0 - Safe Runner Timeout Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
@@ -967,7 +1086,7 @@ try {
     Check "timeout does not transition AI_HANDOFF.md to a false review state" (($before -eq $after) -and ($after -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($after -notmatch "State:\s+READY_FOR_REVIEW"))
     Check "timeout kills the hanging fake Claude before completion" ($markerText -notmatch "finished")
 } finally {
-    $env:PATH = $prevPath
+    $env:Path = $prevPath
     if ($null -eq $prevMarker) { Remove-Item Env:\FAKE_NPX_MARKER -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_MARKER = $prevMarker }
 }
 

@@ -2,7 +2,7 @@
 # handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.1)
 # Commands: status, adapters, next, start, commit-check
 # cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
-# review-check, review-run, review-apply, master-check, and master-run require
+# review-check, review-run, review-apply, master-check, master-run, and master-apply require
 # PowerShell; use handoff.ps1.
 
 set -euo pipefail
@@ -186,6 +186,18 @@ _adapter_profile() {
         ADAPTER_AUTH="yes, before cycle or loop session"
         ADAPTER_REASON="Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual."
         ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use bash scripts/handoff.sh next + paste for other turns."
+    elif [ "$role" = "Master" ] && [ "$tool" = "Codex" ]; then
+        # Callable in PowerShell only (since v2.0.1) via master-run + master-apply, and never
+        # auto-run by loop/cycle. Bash itself never invokes Codex or applies a recommendation.
+        ADAPTER_CALLABLE="yes (PowerShell only: master-run + master-apply)"
+        ADAPTER_AUTOLOOP="no"
+        ADAPTER_STATES="NEEDS_ANALYSIS"
+        ADAPTER_INVOCATION="PowerShell only: pwsh scripts/handoff.ps1 master-run (capture) then pwsh scripts/handoff.ps1 master-apply (apply the captured recommendation's local AI_HANDOFF.md transition)."
+        ADAPTER_SAFETY="Explicit yes per command; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/Waiting For pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle; no commit/push/tag/deploy/db/secrets."
+        ADAPTER_STOP="Operator Manual Action"
+        ADAPTER_AUTH="yes, explicit yes before master-run and master-apply"
+        ADAPTER_REASON="master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end (PowerShell only); callable via these explicit commands only - never inside loop or cycle."
+        ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 master-run then master-apply; Bash cannot invoke Codex or apply the recommendation."
     elif [ "$role" = "Reviewer" ] && [ "$tool" = "Codex" ]; then
         # Callable in PowerShell only (since v1.3.0) via review-run + review-apply, and never
         # auto-run by loop/cycle (Auto-loop stays no). Bash itself never invokes Codex.
@@ -532,16 +544,18 @@ cmd_review_blocked() {
     exit 1
 }
 
-# master-check / master-run are PowerShell-only (one path owns the read-only Codex
-# invocation, the fail-closed guards, and local artifact capture). Bash never invokes Codex.
+# master-check / master-run / master-apply are PowerShell-only (one path owns the read-only
+# Codex invocation, the fail-closed guards, local artifact capture, and local handoff apply).
+# Bash never invokes Codex or applies a recommendation.
 cmd_master_blocked() {
     local cmd_name="$1"
     echo ""
     echo "$cmd_name is not available in handoff.sh."
-    echo "The Codex Master capture POC is implemented in PowerShell only so one path owns the read-only Codex invocation, the fail-closed guards, and local artifact capture."
+    echo "The Codex Master automation is implemented in PowerShell only so one path owns the read-only Codex invocation, the fail-closed guards, local artifact capture, and the recommendation-to-AI_HANDOFF.md transition."
     echo "To dry-run:  pwsh scripts/handoff.ps1 master-check"
     echo "To capture:  pwsh scripts/handoff.ps1 master-run"
-    echo "master-run runs Codex read-only and captures the routing recommendation locally; it never runs git add/commit/push/tag and never changes AI_HANDOFF.md. Master/Codex stays callable: no."
+    echo "To apply:    pwsh scripts/handoff.ps1 master-apply"
+    echo "master-run runs Codex read-only and captures the routing recommendation locally; master-apply edits only AI_HANDOFF.md. Neither ever runs git add/commit/push/tag."
     echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
     echo ""
     exit 1
@@ -569,6 +583,7 @@ case "$COMMAND" in
     review-apply) cmd_review_blocked "review-apply" ;;
     master-check) cmd_master_blocked "master-check" ;;
     master-run)   cmd_master_blocked "master-run" ;;
+    master-apply) cmd_master_blocked "master-apply" ;;
     cycle)        cmd_automation_blocked "cycle" ;;
     run-next)     cmd_automation_blocked "run-next" ;;
     loop)         cmd_automation_blocked "loop" ;;
@@ -591,6 +606,7 @@ case "$COMMAND" in
         echo "  review-apply              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  master-check              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  master-run                Not available in handoff.sh; requires PowerShell (pwsh)."
+        echo "  master-apply              Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  cycle                     Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  run-next                  Alias of cycle; not available in handoff.sh."
         echo "  loop                      Not available in handoff.sh; requires PowerShell (pwsh)."

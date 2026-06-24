@@ -23,6 +23,17 @@ param(
 
 if ($CopyPrompt) { $Clip = $true }
 
+# Some Windows hosts can expose both Path and PATH in the process environment. PowerShell's
+# Start-Process fails before launching children when those case-only duplicates exist.
+if ($env:OS -eq "Windows_NT") {
+    $pathValue = $env:Path
+    if ([string]::IsNullOrEmpty($pathValue)) { $pathValue = $env:PATH }
+    [System.Environment]::SetEnvironmentVariable("PATH", $null, "Process")
+    if (-not [string]::IsNullOrEmpty($pathValue)) {
+        [System.Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+    }
+}
+
 $HandoffFile = Join-Path (Get-Location) "AI_HANDOFF.md"
 
 if (-not (Test-Path $HandoffFile)) {
@@ -247,6 +258,21 @@ function Get-AdapterProfile {
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
             NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use next + paste for other Implementer states."
+        }
+    }
+
+    # Master/Codex (since v2.0.1): callable for NEEDS_ANALYSIS via the explicit two-step
+    # master-run (read-only capture) + master-apply (apply the captured recommendation's
+    # local AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose; loop/cycle
+    # integration is a separate reviewed step.
+    if ($Role -eq "Master" -and $Tool -eq "Codex") {
+        return @{
+            Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("NEEDS_ANALYSIS");
+            Invocation = "Capture: handoff.ps1 master-run (read-only Codex Master analysis, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes).";
+            SafetyLimits = "Explicit yes per command; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/waiting-for pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle; no git add/commit/push/tag/deploy/db/secrets.";
+            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before master-run and master-apply";
+            Reason = "master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end, read-only and fail-closed. Callable via explicit commands only; loop/cycle integration is future work.";
+            NextStep = "Run master-run to capture a recommendation, then master-apply to route the task to Implementer or User."
         }
     }
 
@@ -2078,10 +2104,9 @@ function Invoke-ReviewApply {
 # --- Codex Master capture POC (v1.3.1): read-only Master analysis capture ---
 #
 # master-check / master-run are the Master-side equivalent of the v1.2.0 Reviewer capture
-# POC. They invoke Codex read-only as the Master decision router during NEEDS_ANALYSIS and
-# capture a structured routing recommendation to local, gitignored artifacts. They are
-# deliberately CAPTURE-ONLY: no AI_HANDOFF.md change, no git, no apply step. Master/Codex
-# stays callable: no - this is a documented POC, not an end-to-end callable Master turn.
+# Since v2.0.1, master-run + master-apply complete the Master/Codex NEEDS_ANALYSIS
+# turn end-to-end via explicit commands. master-run remains read-only capture-only;
+# master-apply consumes the capture and edits only local AI_HANDOFF.md.
 
 # Validate the Master capture POC request. Always returns every key so callers can print a
 # plan even when blocked. Task Actors may be TBD here: the Master turn is expected to
@@ -2117,7 +2142,7 @@ function Show-MasterPlan {
     param([hashtable]$Plan)
     $repoRoot = (Get-Location).Path
     Write-Host ""
-    Write-Host "Codex Master capture POC plan (read-only; capture only)"
+    Write-Host "Codex Master analysis plan (read-only capture; apply via master-apply)"
     Write-Host "State:               $State"
     Write-Host "Waiting For:         $WaitingFor"
     Write-Host "Current Task:        $CurrentTask"
@@ -2140,8 +2165,8 @@ function Show-MasterPlan {
     Write-Host "  $MasterLastName  (Codex final message)"
     Write-Host ""
     Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
-    Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change (capture only)."
-    Write-Host "Master/Codex remains callable: no - this is a documented capture POC, not an applied Master turn."
+    Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change during capture."
+    Write-Host "Apply step: handoff.ps1 master-apply consumes $MasterLastName and edits only local AI_HANDOFF.md."
     Write-Host ""
 }
 
@@ -2230,19 +2255,20 @@ function Invoke-MasterRun {
 
     # Tightly scoped Master prompt delivered via STDIN (codex exec -), so a multi-word prompt
     # is never split into argv tokens. Keep it free of shell metacharacters. The recommendation
-    # block is captured only - this POC never applies it and never marks Master callable.
+    # block is captured only; master-apply is the separate fail-closed apply step.
     $masterPrompt = "Read-only task analysis as the Master decision router. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
         "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files beyond those named here. " +
         "Inspect ONLY these sources, and only as needed: AI_HANDOFF.md for the current task; AI_SEQUENCE.md for current and next task ordering if it exists; the output of git status --short; and, only if needed to classify, the protocol docs .ai/skills/codex-claude-handoff/ADAPTERS.md and .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md. Do not modify any file. " +
         "Decide how the current NEEDS_ANALYSIS task should be routed (which gate it needs and which actors should hold it). " +
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
-        "Finish quickly. End your reply with a recommendation block of EXACTLY five lines, each on its own line, nothing after them, and no surrounding punctuation. " +
+        "Finish quickly. End your reply with a recommendation block of EXACTLY six lines, each on its own line, nothing after them, and no surrounding punctuation. " +
         "Line 1 must be 'MASTER_RECOMMENDATION: ' followed by exactly one of READY_FOR_IMPLEMENTATION, PLAN_REQUIRED, NEEDS_INVESTIGATION, or BLOCKED. " +
         "Line 2 must be 'WAITING_FOR: ' followed by exactly one of Implementer or User. " +
         "Line 3 must be 'IMPLEMENTER: ' followed by a tool name or TBD. " +
         "Line 4 must be 'REVIEWER: ' followed by a tool name or TBD. " +
-        "Line 5 must be 'REASON: ' followed by a single concise one-line reason. " +
-        "Do not write MASTER_RECOMMENDATION, WAITING_FOR, IMPLEMENTER, REVIEWER, or REASON at the start of any earlier line."
+        "Line 5 must be 'TASK: ' followed by the current Current Task exactly. " +
+        "Line 6 must be 'REASON: ' followed by a single concise one-line reason. " +
+        "Do not write MASTER_RECOMMENDATION, WAITING_FOR, IMPLEMENTER, REVIEWER, TASK, or REASON at the start of any earlier line."
 
     Write-Host ""
     Write-Host "Running Codex read-only Master analysis (timeout: ${TimeoutSeconds}s)..."
@@ -2334,7 +2360,9 @@ function Invoke-MasterRun {
         exit 6
     }
 
-    if ($codexExit -ne 0) {
+    # Match review-run: a captured final recommendation is authoritative when the
+    # process exit code is unavailable/null; only a concrete non-zero code fails.
+    if ($null -ne $codexExit -and $codexExit -ne 0) {
         Write-Host "master-run: Codex exited with a non-zero code ($codexExit)."
         Write-Host "Captured JSONL (if any): $MasterJsonlName"
         if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
@@ -2355,10 +2383,288 @@ function Invoke-MasterRun {
     Write-Host "Codex final message:"
     Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
     Write-Host ""
-    Write-Host "This POC captured the Master recommendation only. It made no git changes and did not modify AI_HANDOFF.md."
-    Write-Host "A human or the Master reads the captured recommendation and applies any gate/actor decision manually."
-    Write-Host "Master/Codex remains callable: no - there is no master-apply, and loop/cycle never run Master turns."
-    Write-Host "Stop category: Operator Manual Action - apply any routing decision manually."
+    Write-Host "This captured the Master recommendation only. It made no git changes and did not modify AI_HANDOFF.md."
+    Write-Host "To apply the recommendation locally, run:"
+    Write-Host "  handoff.ps1 master-apply"
+    Write-Host "Master/Codex is callable only via explicit master-run + master-apply. loop/cycle do not auto-run Master turns."
+    Write-Host "Stop category: Operator Manual Action - run master-apply, or apply the routing decision manually."
+    Write-Host ""
+}
+
+# --- Automated Master Turn (v2.0.1): master-apply applies a captured recommendation ---
+#
+# master-apply consumes the recommendation captured by master-run (CODEX_MASTER_LAST.md)
+# and applies the corresponding LOCAL AI_HANDOFF.md transition, fail-closed. It does NOT
+# re-invoke Codex, runs no git, and edits only AI_HANDOFF.md.
+
+function Get-MasterRecommendationFromCapture {
+    param([string]$Path, [string]$ExpectedTask)
+    $result = @{ Ok = $false; Recommendation = ""; WaitingFor = ""; Implementer = ""; Reviewer = ""; Task = ""; Reason = ""; Error = "" }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $result.Error = "No captured Master recommendation file ($MasterLastName) found. Run 'handoff.ps1 master-run' first to capture a Codex Master recommendation."
+        return $result
+    }
+    $raw = Get-Content -Raw -Path $Path -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $result.Error = "Captured Master recommendation file ($MasterLastName) is empty; no recommendation to apply."
+        return $result
+    }
+    $captureLines = $raw -split "`r?`n"
+    $recLines         = @($captureLines | Where-Object { $_ -match '^\s*MASTER_RECOMMENDATION:\s*(.+?)\s*$' })
+    $waitingLines     = @($captureLines | Where-Object { $_ -match '^\s*WAITING_FOR:\s*(.+?)\s*$' })
+    $implementerLines = @($captureLines | Where-Object { $_ -match '^\s*IMPLEMENTER:\s*(.+?)\s*$' })
+    $reviewerLines    = @($captureLines | Where-Object { $_ -match '^\s*REVIEWER:\s*(.+?)\s*$' })
+    $taskLines        = @($captureLines | Where-Object { $_ -match '^\s*TASK:\s*(.+?)\s*$' })
+    $reasonLines      = @($captureLines | Where-Object { $_ -match '^\s*REASON:\s*(.+?)\s*$' })
+    if ($recLines.Count         -ne 1) { $result.Error = "Captured recommendation must contain exactly one MASTER_RECOMMENDATION: line (found $($recLines.Count)). The capture is malformed or stale; re-run master-run."; return $result }
+    if ($waitingLines.Count     -ne 1) { $result.Error = "Captured recommendation must contain exactly one WAITING_FOR: line (found $($waitingLines.Count))."; return $result }
+    if ($implementerLines.Count -ne 1) { $result.Error = "Captured recommendation must contain exactly one IMPLEMENTER: line (found $($implementerLines.Count))."; return $result }
+    if ($reviewerLines.Count    -ne 1) { $result.Error = "Captured recommendation must contain exactly one REVIEWER: line (found $($reviewerLines.Count))."; return $result }
+    if ($taskLines.Count        -ne 1) { $result.Error = "Captured recommendation must contain exactly one TASK: line (found $($taskLines.Count))."; return $result }
+    if ($reasonLines.Count      -ne 1) { $result.Error = "Captured recommendation must contain exactly one REASON: line (found $($reasonLines.Count))."; return $result }
+    [void]($recLines[0]         -match '^\s*MASTER_RECOMMENDATION:\s*(.+?)\s*$'); $rec         = $Matches[1].Trim()
+    [void]($waitingLines[0]     -match '^\s*WAITING_FOR:\s*(.+?)\s*$');           $waiting     = $Matches[1].Trim()
+    [void]($implementerLines[0] -match '^\s*IMPLEMENTER:\s*(.+?)\s*$');           $implementer = $Matches[1].Trim()
+    [void]($reviewerLines[0]    -match '^\s*REVIEWER:\s*(.+?)\s*$');              $reviewer    = $Matches[1].Trim()
+    [void]($taskLines[0]        -match '^\s*TASK:\s*(.+?)\s*$');                  $task        = $Matches[1].Trim()
+    [void]($reasonLines[0]      -match '^\s*REASON:\s*(.+?)\s*$');                $reason      = $Matches[1].Trim()
+
+    $allowed = @("READY_FOR_IMPLEMENTATION", "PLAN_REQUIRED", "NEEDS_INVESTIGATION", "BLOCKED")
+    if (-not ($allowed -contains $rec)) {
+        $result.Error = "MASTER_RECOMMENDATION must be exactly one of READY_FOR_IMPLEMENTATION, PLAN_REQUIRED, NEEDS_INVESTIGATION, or BLOCKED (found: '$rec')."
+        return $result
+    }
+    if ($waiting -ne "Implementer" -and $waiting -ne "User") {
+        $result.Error = "WAITING_FOR must be exactly Implementer or User (found: '$waiting')."
+        return $result
+    }
+    if ($task -ne $ExpectedTask) {
+        $result.Error = "Captured recommendation TASK does not match the current task (anti-stale guard). Recommendation TASK: '$task'; current Current Task: '$ExpectedTask'. The capture may be stale - re-run master-run for this task."
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($reason)) {
+        $result.Error = "REASON in the captured recommendation must be a non-empty line."
+        return $result
+    }
+    if ($rec -eq "BLOCKED") {
+        if ($waiting -ne "User") {
+            $result.Error = "BLOCKED recommendations must set WAITING_FOR: User."
+            return $result
+        }
+    } else {
+        if ($waiting -ne "Implementer") {
+            $result.Error = "$rec recommendations must set WAITING_FOR: Implementer."
+            return $result
+        }
+        if ([string]::IsNullOrWhiteSpace($implementer) -or $implementer -eq "TBD") {
+            $result.Error = "$rec recommendations must name a concrete IMPLEMENTER, not TBD."
+            return $result
+        }
+        if ([string]::IsNullOrWhiteSpace($reviewer) -or $reviewer -eq "TBD") {
+            $result.Error = "$rec recommendations must name a concrete REVIEWER, not TBD."
+            return $result
+        }
+        if ($implementer -eq $reviewer) {
+            $result.Error = "IMPLEMENTER and REVIEWER must be different tools."
+            return $result
+        }
+    }
+
+    $result.Ok = $true
+    $result.Recommendation = $rec
+    $result.WaitingFor = $waiting
+    $result.Implementer = $implementer
+    $result.Reviewer = $reviewer
+    $result.Task = $task
+    $result.Reason = $reason
+    return $result
+}
+
+function Get-MasterApplyPlan {
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $boundMaster = Resolve-Actor -Role "Master" -Binding $Binding
+    $boundImplementer = Resolve-Actor -Role "Implementer" -Binding $Binding
+    $boundReviewer = Resolve-Actor -Role "Reviewer" -Binding $Binding
+    if ($State -ne "NEEDS_ANALYSIS" -or $WaitingFor -ne "Master") {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master for master-apply.")
+    }
+    if ($boundMaster -ne "Codex") {
+        $ok = $false
+        $errors.Add("The bound Master tool must be Codex (found: $boundMaster). This command only applies Codex Master recommendations.")
+    }
+    $recommendation = Get-MasterRecommendationFromCapture -Path (Join-Path (Get-Location) $MasterLastName) -ExpectedTask $CurrentTask
+    if ($recommendation.Ok -and $recommendation.Recommendation -ne "BLOCKED") {
+        if ($recommendation.Implementer -ne $boundImplementer) {
+            $ok = $false
+            $errors.Add("Captured IMPLEMENTER '$($recommendation.Implementer)' must match the current bound Implementer '$boundImplementer'. Role swaps require explicit user approval.")
+        }
+        if ($recommendation.Reviewer -ne $boundReviewer) {
+            $ok = $false
+            $errors.Add("Captured REVIEWER '$($recommendation.Reviewer)' must match the current bound Reviewer '$boundReviewer'. Role swaps require explicit user approval.")
+        }
+    }
+    return @{
+        Ok = $ok
+        Errors = $errors
+        BoundMaster = $boundMaster
+        BoundImplementer = $boundImplementer
+        BoundReviewer = $boundReviewer
+        Recommendation = $recommendation
+    }
+}
+
+function Show-MasterApplyPlan {
+    param([hashtable]$Plan)
+    $rec = $Plan.Recommendation
+    Write-Host ""
+    Write-Host "Master apply plan (consumes the captured recommendation; edits only AI_HANDOFF.md; runs no git)"
+    Write-Host "State:              $State"
+    Write-Host "Waiting For:        $WaitingFor"
+    Write-Host "Current Task:       $CurrentTask"
+    Write-Host "Bound Master:       $($Plan.BoundMaster)"
+    Write-Host "Bound Implementer:  $($Plan.BoundImplementer)"
+    Write-Host "Bound Reviewer:     $($Plan.BoundReviewer)"
+    Write-Host "Capture file:       $MasterLastName (local, gitignored capture from master-run)"
+    if ($rec.Ok) {
+        Write-Host "Recommendation:     $($rec.Recommendation)"
+        Write-Host "Captured waiting:   $($rec.WaitingFor)"
+        Write-Host "Captured actors:    Implementer=$($rec.Implementer); Reviewer=$($rec.Reviewer)"
+        Write-Host "Captured reason:    $($rec.Reason)"
+        Write-Host "Would transition to: $($rec.Recommendation) / Waiting For: $($rec.WaitingFor)"
+    } else {
+        Write-Host "Recommendation:     (not usable) $($rec.Error)"
+    }
+    Write-Host ""
+    Write-Host "Safety: edits only AI_HANDOFF.md (local, gitignored); no git add/commit/push/tag;"
+    Write-Host "        no deploy/db/secrets; no role swap; not auto-run by loop/cycle."
+    Write-Host ""
+}
+
+function Invoke-MasterApply {
+    $plan = Get-MasterApplyPlan
+    $rec = $plan.Recommendation
+    Show-MasterApplyPlan -Plan $plan
+
+    if (-not $plan.Ok) {
+        Write-Host "master-apply: blocked."
+        foreach ($e in $plan.Errors) { Write-Host "Reason: $e" }
+        Write-Host "No files were changed and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+    if (-not $rec.Ok) {
+        Write-Host "master-apply: blocked."
+        Write-Host "Reason: $($rec.Error)"
+        Write-Host "Stop category: Environment/Preflight (no usable captured recommendation) - not a user decision."
+        Write-Host "No files were changed and AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+
+    $date = (Get-Date).ToString("yyyy-MM-dd")
+    Write-Host "This applies the captured Master recommendation as a LOCAL AI_HANDOFF.md transition to:"
+    Write-Host "  State: $($rec.Recommendation) / Waiting For: $($rec.WaitingFor)"
+    Write-Host "It makes NO git changes and performs NO release action."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; applying without an interactive prompt (local AI_HANDOFF.md edit only)."
+    } else {
+        $confirm = Read-Host 'Type "yes" to apply this Master recommendation to AI_HANDOFF.md, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            Write-Host "AI_HANDOFF.md was not modified."
+            exit 2
+        }
+    }
+
+    $statusBody = @(
+        "- State: $($rec.Recommendation)",
+        "- Waiting For: $($rec.WaitingFor)",
+        "- Last Updated By: Master",
+        "- Last Updated At: $date",
+        "- Current Task: $CurrentTask"
+    )
+    $lastUpdateBody = @(
+        "- Actor: Master (Codex), applied from the captured Master recommendation via master-apply",
+        "- Date: $date",
+        "- Task: Applied the captured Codex Master recommendation for '$CurrentTask'.",
+        "- Recommendation: $($rec.Recommendation)",
+        "- Reason: $($rec.Reason)",
+        "- Source: $MasterLastName (local, gitignored capture from master-run; not committed)"
+    )
+    $taskActorsBody = if ($rec.Recommendation -eq "BLOCKED") {
+        @(
+            "- Implementer: $(if ([string]::IsNullOrWhiteSpace($rec.Implementer)) { 'TBD' } else { $rec.Implementer })",
+            "- Reviewer: $(if ([string]::IsNullOrWhiteSpace($rec.Reviewer)) { 'TBD' } else { $rec.Reviewer })"
+        )
+    } else {
+        @(
+            "- Implementer: $($rec.Implementer)",
+            "- Reviewer: $($rec.Reviewer)"
+        )
+    }
+    switch ($rec.Recommendation) {
+        "READY_FOR_IMPLEMENTATION" {
+            $nextStepBody = @(
+                "- Implementer ($($rec.Implementer)): implement the Master-approved scope. Do not modify",
+                "  unrelated files. When finished, update Changed Files and set State: READY_FOR_REVIEW /",
+                "  Waiting For: Reviewer."
+            )
+        }
+        "NEEDS_INVESTIGATION" {
+            $nextStepBody = @(
+                "- Implementer ($($rec.Implementer)): investigate only. Do not modify source files. Report",
+                "  findings and evidence, then set State: READY_FOR_REVIEW / Waiting For: Reviewer."
+            )
+        }
+        "PLAN_REQUIRED" {
+            $nextStepBody = @(
+                "- Implementer ($($rec.Implementer)): write a plan only. Do not modify source files. When",
+                "  the plan is ready, set State: PLAN_READY_FOR_REVIEW / Waiting For: Reviewer."
+            )
+        }
+        default {
+            $nextStepBody = @(
+                "- User: resolve the blocker recorded under Last Update (Reason), then ask the Master",
+                "  to re-route the task when ready."
+            )
+        }
+    }
+
+    $cur = Get-Content -Path $HandoffFile
+    $r1 = Set-HandoffSectionBody -Lines $cur       -Heading "Status"                -NewBody $statusBody
+    $r2 = Set-HandoffSectionBody -Lines $r1.Lines  -Heading "Last Update"           -NewBody $lastUpdateBody
+    $r3 = Set-HandoffSectionBody -Lines $r2.Lines  -Heading "Task Actors"           -NewBody $taskActorsBody
+    $r4 = Set-HandoffSectionBody -Lines $r3.Lines  -Heading "Next Recommended Step" -NewBody $nextStepBody
+    if (-not ($r1.Ok -and $r2.Ok -and $r3.Ok -and $r4.Ok)) {
+        $missing = @()
+        if (-not $r1.Ok) { $missing += "Status" }
+        if (-not $r2.Ok) { $missing += "Last Update" }
+        if (-not $r3.Ok) { $missing += "Task Actors" }
+        if (-not $r4.Ok) { $missing += "Next Recommended Step" }
+        Write-Host "master-apply: blocked."
+        Write-Host "Reason: AI_HANDOFF.md is missing required section(s): $([string]::Join(', ', $missing)). The handoff is malformed; not rewriting."
+        Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
+        Write-Host "AI_HANDOFF.md was not modified."
+        Write-Host ""
+        exit 1
+    }
+
+    Set-Content -Path $HandoffFile -Value ($r4.Lines -join "`n") -Encoding utf8 -ErrorAction Stop
+
+    Write-Host "master-apply: applied (local AI_HANDOFF.md only)."
+    Write-Host "AI_HANDOFF.md: State -> $($rec.Recommendation) / Waiting For -> $($rec.WaitingFor)."
+    Write-Host ""
+    Write-Host "Next step:"
+    if ($rec.WaitingFor -eq "Implementer") {
+        Write-Host "  - Implementer ($($rec.Implementer)): follow AI_HANDOFF.md Next Recommended Step."
+    } else {
+        Write-Host "  - User: resolve the blocker recorded in AI_HANDOFF.md."
+    }
+    Write-Host "  - This command made no git changes (no add/commit/push/tag) and no deploy/db/secrets actions."
+    Write-Host "  - AI_HANDOFF.md remains local and gitignored - do not commit it."
     Write-Host ""
 }
 
@@ -2383,8 +2689,9 @@ function Invoke-Menu {
     Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
     Write-Host "10. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
     Write-Host "11. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
-    Write-Host "12. Check Codex Master (POC)       - dry-run Codex Master capture plan (master-check)"
-    Write-Host "13. Exit"
+    Write-Host "12. Check Codex Master             - dry-run Codex Master capture plan (master-check)"
+    Write-Host "13. Apply captured Master route    - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
+    Write-Host "14. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -2404,7 +2711,8 @@ function Invoke-Menu {
         "10" { Invoke-ReviewCheck }
         "11" { Invoke-ReviewApply }
         "12" { Invoke-MasterCheck }
-        "13" { }
+        "13" { Invoke-MasterApply }
+        "14" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -3036,6 +3344,7 @@ switch ($Command) {
     "review-apply" { Invoke-ReviewApply }
     "master-check" { Invoke-MasterCheck }
     "master-run"   { Invoke-MasterRun }
+    "master-apply" { Invoke-MasterApply }
     "cycle"        { Invoke-Cycle }
     "run-next"     { Invoke-Cycle -CommandLabel "run-next" }
     "loop"         { Invoke-Loop }
@@ -3064,9 +3373,10 @@ switch ($Command) {
             Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
             Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeReviewer."
-            Write-Host "  master-check              Dry-run the Codex Master capture POC plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
+            Write-Host "  master-check              Dry-run the Codex Master capture plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
             Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
-            Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run. Master/Codex stays callable: no."
+            Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
+            Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by loop/cycle."
             Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"

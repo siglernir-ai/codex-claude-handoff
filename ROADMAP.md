@@ -633,3 +633,27 @@ environment stops - but the loop never continues past any of them on its own:
 **Includes:** bounded PowerShell runner for `cycle`, `run-next`, and `loop`; stdout/stderr capture; `-TimeoutSeconds`; process-tree kill on timeout; fake fast/hanging runner tests; documentation and version bump.
 
 **Does not include:** Master apply, full orchestration, release changes, Bash Claude runner, or any deploy/database/secrets behavior.
+
+### v2.0.1 - Master Apply Command
+
+**Goal:** complete the explicit-command Master/Codex `NEEDS_ANALYSIS` turn before wiring it
+into a broader orchestrator.
+
+**Status:** implemented as the second v2 autonomy foundation slice.
+
+**Includes:** `handoff.ps1 master-apply`; strict parsing of `CODEX_MASTER_LAST.md`; a `TASK`
+anti-stale guard in the `master-run` recommendation block; validation that recommendation /
+`Waiting For` pairs are legal; validation that non-`BLOCKED` routing uses the current bound
+Implementer and Reviewer and preserves Reviewer != Implementer; local `AI_HANDOFF.md` rewrite
+only; PowerShell subprocess startup normalization for Windows `Path`/`PATH` duplicate
+environments; protocol tests for success and fail-closed cases; documentation, template, and
+version updates.
+
+**Does not include:** loop/cycle integration for Master turns, full orchestration, release
+changes, Bash Codex execution, git mutation, deploy/database/secrets behavior, or role swaps.
+
+**Exit criteria:** `master-run` captures a six-line recommendation block; `master-apply`
+applies `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`, and `BLOCKED`
+recommendations only when guards pass; malformed/stale/mismatched captures leave
+`AI_HANDOFF.md` unchanged; Master/Codex reports `callable: yes` / `Auto-loop: no`; full
+protocol tests pass.
