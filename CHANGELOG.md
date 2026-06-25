@@ -3,6 +3,23 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.1.0 - Opt-in Master Loop Integration
+
+- Added `handoff.ps1 loop -IncludeMaster`, a per-session opt-in that can run the Codex
+  Master's `NEEDS_ANALYSIS` turn inside the loop by chaining the existing guarded
+  `master-run` capture and `master-apply` transition.
+- The default loop remains conservative: without `-IncludeMaster`, it still stops at the
+  Master turn and prints the operator handoff. `cycle` still never auto-runs Master turns.
+- A Master turn counts against `-MaxTurns`, uses the existing read-only Codex invocation,
+  edits only local `AI_HANDOFF.md` through `master-apply`, and adds no git add/commit/push,
+  release, deploy, database, secret, or role-swap behavior.
+- This is the first "talk to Codex, let the loop route onward" foundation slice: operators
+  can combine `-IncludeMaster` and `-IncludeReviewer` for an explicitly authorized
+  Master -> Implementer -> Reviewer loop session that still stops at User/release decisions.
+- Tests: `protocol-tests.ps1` adds opt-in Master loop coverage proving the default-off stop,
+  the opt-in transition to `READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer`, the
+  `MaxTurns` stop before Claude when capped, and no git commit creation.
+
 ## 2.0.2 - Reviewer New File Diff Guidance
 
 - Updated the read-only `review-run` prompt so Codex can review new/untracked files without

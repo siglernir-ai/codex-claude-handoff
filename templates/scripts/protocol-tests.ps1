@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.0.2
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.1.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -14,7 +14,9 @@
     Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
     transitions fail-closed; loop stops rather than auto-running a Reviewer turn), the
     v1.3.1/v2.0.1 Codex Master turn (master-check/master-run guards, master-apply transitions,
-    fail closed; Master/Codex is explicit-command callable but not auto-loop eligible), and the v1.4.0 opt-in Reviewer loop integration
+    fail closed; Master/Codex is explicit-command callable but not auto-loop eligible),
+    the v2.1.0 opt-in Master loop integration (loop -IncludeMaster runs master-run +
+    master-apply in-session; default loop still stops at the Master turn), and the v1.4.0 opt-in Reviewer loop integration
     (loop -IncludeReviewer runs review-run + review-apply in-session: APPROVED -> REVIEW_DONE/
     User, BLOCKED -> READY_FOR_IMPLEMENTATION and continues under MaxTurns; default loop still
     stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer), and the v2.0.0 safe Claude process runner (bounded child process, stdout/stderr capture, timeout kill, and no false handoff transition).
@@ -307,10 +309,10 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMP
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
 Check "Implementer/Claude Code adapter is callable for READY_FOR_IMPLEMENTATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Tool:\s+Claude Code.*?Callable:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION")
 # Since v2.0.1 Master/Codex is callable for NEEDS_ANALYSIS via master-run + master-apply,
-# but Auto-loop is no: loop/cycle must never auto-run it.
+# but Auto-loop is no: loop only includes it with -IncludeMaster, and cycle never does.
 Check "Master/Codex adapter is callable for NEEDS_ANALYSIS but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+NEEDS_ANALYSIS")
 # Since v1.3.0 Reviewer/Codex is callable for READY_FOR_REVIEW (review-run + review-apply)
-# but Auto-loop is no: loop/cycle must never auto-run it.
+# but Auto-loop is no: loop only includes it with -IncludeReviewer, and cycle never does.
 Check "Reviewer/Codex adapter is callable for READY_FOR_REVIEW but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Reviewer.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+READY_FOR_REVIEW")
 Check "Release executor advertised as PowerShell-only, REVIEW_DONE-gated" (($r.Out -match "Authorized release executor") -and ($r.Out -match "REVIEW_DONE"))
 
@@ -902,8 +904,54 @@ $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "master-apply blocks unless State is NEEDS_ANALYSIS / Waiting For: Master" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS") -and ($before -eq $after))
 
-# === 13. Opt-in Reviewer loop integration (loop -IncludeReviewer, v1.4.0) ===
-Write-Host "[13] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
+# === 13. Opt-in Master loop integration (loop -IncludeMaster, v2.1.0) ===
+Write-Host "[13] Opt-in Master loop integration (loop -IncludeMaster)"
+
+$loopMasterTask = "v2.1.0 - Loop Master Test"
+$fakeMasterReady = Join-Path $FixtureRoot "fake-codex-loop-master-ready.cmd"
+@'
+@echo off
+if "%~2"=="--help" exit /b 0
+echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> CODEX_MASTER_LAST.md
+echo WAITING_FOR: Implementer>> CODEX_MASTER_LAST.md
+echo IMPLEMENTER: Claude Code>> CODEX_MASTER_LAST.md
+echo REVIEWER: Codex>> CODEX_MASTER_LAST.md
+echo TASK: v2.1.0 - Loop Master Test>> CODEX_MASTER_LAST.md
+echo REASON: safe simple implementation task>> CODEX_MASTER_LAST.md
+exit /b 0
+'@ | Set-Content -Path $fakeMasterReady -Encoding ascii
+
+# Default OFF: without -IncludeMaster, loop still STOPS at the Master turn even when a
+# runnable fake Codex is present - it must not capture a recommendation or transition.
+$env:CODEX_CLI = $fakeMasterReady
+$fx = New-MasterApplyFixture -NoCapture -CurrentTask $loopMasterTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop without -IncludeMaster still stops at the Master turn (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "callable only via an explicit command, not inside loop"))
+Check "loop without -IncludeMaster captures no recommendation and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md"))) -and ($before -eq $after))
+Check "loop without -IncludeMaster creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# Opt-in Master: loop -IncludeMaster runs master-run + master-apply, applies the route,
+# then stops on MaxTurns before running Claude. No git commit.
+$env:CODEX_CLI = $fakeMasterReady
+$fx = New-MasterApplyFixture -NoCapture -CurrentTask $loopMasterTask
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+Push-Location $fx; try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeMaster", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
+Check "loop -IncludeMaster runs the Master turn and applies READY_FOR_IMPLEMENTATION / Implementer (exit 0)" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
+Check "loop -IncludeMaster stops on MaxTurns before running Claude" (($r.Out -match "MaxTurns") -and ($r.Out -notmatch "automated Claude Code Implementer turn"))
+Check "loop -IncludeMaster creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
+
+# === 14. Opt-in Reviewer loop integration (loop -IncludeReviewer, v1.4.0) ===
+Write-Host "[14] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
 
 # The fake Codex CLIs below answer `exec --help` (exit 0) and, on the real run, write ONLY
 # CODEX_REVIEW_LAST.md (a local, gitignored, clean-tree-exempt artifact) so the in-loop
@@ -1009,8 +1057,8 @@ Check "cycle still refuses a Reviewer turn (no -IncludeReviewer opt-in for cycle
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
 
-# === 13. Safe Claude process runner (v2.0.0) ===
-Write-Host "[13] Safe Claude process runner"
+# === 15. Safe Claude process runner (v2.0.0) ===
+Write-Host "[15] Safe Claude process runner"
 
 $fastBin = Join-Path $FixtureRoot "fake-npx-fast"
 New-Item -ItemType Directory -Path $fastBin -Force | Out-Null
@@ -1068,7 +1116,9 @@ if defined IS_VERSION (
   echo claude-code-test
   exit /b 0
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath `$env:FAKE_NPX_MARKER -Value 'started'; Start-Sleep -Seconds 30; Set-Content -LiteralPath `$env:FAKE_NPX_MARKER -Value 'finished'"
+echo started> "%FAKE_NPX_MARKER%"
+cmd /c "ping -n 31 127.0.0.1 > nul"
+echo finished> "%FAKE_NPX_MARKER%"
 exit /b 0
 "@
 $marker = Join-Path $hangBin "marker.txt"

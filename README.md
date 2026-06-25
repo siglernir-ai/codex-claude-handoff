@@ -7,11 +7,12 @@ The goal is to avoid copy-pasting long context between tools.
 > **Stable (v1.0.0).** The role model, states, gates, adapter contract, workflow
 > scripts, and safety boundaries are frozen with a commitment to backward compatibility.
 > 1.0.0 is a packaging release with no breaking changes from the 0.x line and no
-> migration steps. The automation it stabilizes is intentionally bounded: only the
-> Claude Code Implementer turn is callable, the release executor and sequence advance are
-> guarded and user-authorized, and Master/Reviewer (Codex) turns remain manual because no
-> verified local Codex adapter exists. Full autonomous Codex <-> Claude dialogue is
-> post-1.0 work. See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
+> migration steps. The automation it stabilizes is intentionally bounded: the
+> Claude Code Implementer turn is the default auto-loop turn, Codex Master/Reviewer turns are
+> callable only through guarded commands or per-session loop opt-ins, and release execution
+> and sequence advance remain guarded and user-authorized. Full autonomous Codex <-> Claude
+> dialogue is still being built in narrow, reviewed slices. See [CHANGELOG.md](CHANGELOG.md)
+> and [ROADMAP.md](ROADMAP.md).
 
 ## Concept
 
@@ -62,10 +63,12 @@ authorization is required.
 Current local status:
 
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout.
-- Master bound to Codex is callable for `NEEDS_ANALYSIS` only through explicit
-  `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. It is not auto-run by
-  `loop`/`cycle` (`Auto-loop: no`). `master-run` captures a routing recommendation to local,
-  gitignored artifacts; `master-apply` consumes it fail-closed and edits only `AI_HANDOFF.md`.
+- Master bound to Codex is callable for `NEEDS_ANALYSIS` through explicit
+  `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. Since v2.1.0 the operator
+  may also opt this exact turn into one loop session with `loop -IncludeMaster`
+  (per-session opt-in, `cycle` never does, `Auto-loop` stays `no`). `master-run` captures a
+  routing recommendation to local, gitignored artifacts; `master-apply` consumes it
+  fail-closed and edits only `AI_HANDOFF.md`.
   A Codex CLI binary may be discoverable on a machine, and as of v1.1.0 a read-only `codex exec`
   smoke test has been run successfully (read-only sandbox, deterministic JSON output, no git
   change). See the "Automated Master Turn" and "Codex CLI Verification" sections of
@@ -77,9 +80,9 @@ Current local status:
   by default (the adapter is `callable: yes` but `Auto-loop: no`). Since v1.4.0 the operator may
   opt this exact turn into one loop session with `loop -IncludeReviewer` (per-session opt-in,
   `cycle` never does, `Auto-loop` stays `no`). `review-run` runs no git and never transitions
-  `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. Master/Codex is callable only via
-  explicit `master-run` + `master-apply` and remains `Auto-loop: no`. See "Automated Reviewer
-  Turn", "Automated Master Turn", and "Opt-in Reviewer Loop Integration" in `ADAPTERS.md`.
+  `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. See "Automated Reviewer
+  Turn", "Automated Master Turn", "Opt-in Master Loop Integration", and "Opt-in Reviewer
+  Loop Integration" in `ADAPTERS.md`.
 - Investigation, planning, and question turns remain manual because the current
   automated Claude Code invocation cannot safely restrict edits to handoff-only
   files in non-interactive mode.
@@ -453,8 +456,9 @@ PowerShell-only.
 
 Because `review-apply` requires an explicit command, the Reviewer/Codex adapter is recorded
 `callable: yes` for `READY_FOR_REVIEW` but `Auto-loop: no` (see `handoff.ps1 adapters`):
-`loop` and `cycle` stop at a Reviewer turn rather than running it. Master/Codex is similarly
-explicit-command callable for `NEEDS_ANALYSIS` but `Auto-loop: no`.
+`loop` and `cycle` stop at a Reviewer turn by default rather than running it. Master/Codex is
+similarly guarded for `NEEDS_ANALYSIS`; since v2.1.0 only `loop -IncludeMaster` may opt the
+Master turn into one authorized loop session.
 
 ### `master-check`, `master-run`, and `master-apply` (automated Master turn, since v2.0.1)
 
@@ -499,8 +503,10 @@ pair, missing concrete actors for Implementer-routed work, Reviewer == Implement
 actors that do not match the current role binding.
 
 **Master/Codex is `callable: yes` but `Auto-loop: no`** for `NEEDS_ANALYSIS`: it is callable
-only via explicit `master-run` + `master-apply`, and `loop`/`cycle` never run Master turns.
-Bash refuses `master-check` / `master-run` / `master-apply` honestly and points to PowerShell.
+via explicit `master-run` + `master-apply`. Since v2.1.0, `loop -IncludeMaster` may opt that
+same guarded pair into one authorized loop session; without the flag `loop` stops at Master,
+and `cycle` never runs Master turns. Bash refuses `master-check` / `master-run` /
+`master-apply` honestly and points to PowerShell.
 
 ### `cycle [-BudgetUsd N]`
 
@@ -561,7 +567,7 @@ invariant.
 
 **No automatic commit, push, or deploy.** `cycle` never calls `git add`, `git commit`, `git push`, deploy commands, DB commands, or secret commands.
 
-**No Master automation.** The default Master (Codex) has no verified local callable adapter, so Master turns always remain manual. `cycle` only automates turns that the adapter registry marks callable.
+**No Master automation in `cycle`.** The default Master (Codex) is callable only through the guarded Master commands, or through the `loop -IncludeMaster` per-session opt-in. `cycle` still only automates the Implementer turn.
 
 **macOS/Linux.** `cycle` requires PowerShell (`handoff.ps1`). If you have `pwsh` on macOS/Linux, use `pwsh scripts/handoff.ps1 cycle`. Without `pwsh`, use `bash scripts/handoff.sh next` to generate `NEXT_TURN.md` and paste the prompt manually. `bash scripts/handoff.sh cycle` prints a blocked message and exits 1.
 
@@ -569,7 +575,7 @@ invariant.
 
 **Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or Claude Code timeout, 5 Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
 
-### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeReviewer] [-Yes]`
+### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]`
 
 Run a bounded loop of automated handoff turns until a hard stop. It routes each turn by
 `State -> Role -> Tool -> Adapter`, runs only callable safe turns, re-reads
@@ -580,13 +586,23 @@ clear reason.
 .\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
 .\scripts\handoff.ps1 loop -MaxTurns 2
 .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
+.\scripts\handoff.ps1 loop -IncludeMaster                       # also auto-run the Codex Master turn (opt-in)
 .\scripts\handoff.ps1 loop -IncludeReviewer                     # also auto-run the Codex Reviewer turn (opt-in)
+.\scripts\handoff.ps1 loop -IncludeMaster -IncludeReviewer      # authorized Master -> Implementer -> Reviewer session
 ```
 
 **What it automates:** by default, only states the adapter registry marks `AutoLoopEligible` -
 that means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
 Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
 `MaxTurns` times with one upfront confirmation for the whole session.
+
+**Opt-in Master turn (since v2.1.0):** with `-IncludeMaster`, the loop also auto-runs the
+**Codex Master's `NEEDS_ANALYSIS` turn** in-session instead of stopping at it. It runs the
+already-proven, guarded `master-run` (read-only Codex capture) then `master-apply` (consume
+the captured routing recommendation, edit only `AI_HANDOFF.md`), forcing their
+non-interactive path because you authorized the loop session. A Master turn counts against
+`-MaxTurns`. The adapter stays `callable: yes` / `Auto-loop: no`; this is a per-session
+opt-in only, and `cycle` never auto-runs a Master turn.
 
 **Opt-in Reviewer turn (since v1.4.0):** with `-IncludeReviewer`, the loop also auto-runs the
 **Codex Reviewer's `READY_FOR_REVIEW` turn** in-session instead of stopping at it. It runs the
@@ -603,10 +619,10 @@ clean-tree gate is relaxed whenever the session begins directly at the Codex Rev
 without `-IncludeReviewer` the loop just stops cleanly there, and with it
 `review-run`/`review-apply` still enforce Changed Files == git status.
 
-**What it cannot automate:** Master turns and User decisions are never automated. Without
-`-IncludeReviewer`, Reviewer turns are not automated either: when the next actor is the Codex
-Reviewer the loop refreshes `NEXT_TURN.md`, prints the exact next actor and paste instruction,
-and stops with exit 0. Master/Codex has no callable loop adapter. Investigation
+**What it cannot automate:** User decisions are never automated. Without `-IncludeMaster`,
+Master turns are not automated; without `-IncludeReviewer`, Reviewer turns are not automated
+either. When the next non-enabled actor is Codex, the loop refreshes `NEXT_TURN.md`, prints
+the exact next actor and paste instruction, and stops with exit 0. Investigation
 (`NEEDS_INVESTIGATION`), planning (`PLAN_REQUIRED`), and `QUESTION_FOR_IMPLEMENTER` turns also
 remain manual - the Claude Code CLI turn cannot be safely restricted to handoff-only edits.
 
@@ -859,7 +875,9 @@ in [ROADMAP.md](ROADMAP.md).
 
 - Full automation between Codex and Claude Code
 - File watcher or event-driven orchestration
-- Full Codex <-> Claude automation (as of v0.19.1 the adapter-driven `loop` exists, but it can automate only Implementer turns bound to Claude Code; Master and Reviewer turns still require manual paste because Codex has no verified local callable adapter)
+- Full Codex <-> Claude automation as default background behavior. The adapter-driven
+  `loop` can now opt in to Master and Reviewer turns per session, but User/release decisions
+  remain hard stops and broader chat-window orchestration is still being built.
 - Full shared memory layer
 - `AI_SKILLS.md` registry
 - Automatic model switching

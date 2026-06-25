@@ -13,6 +13,7 @@ param(
     [string]$SupersededVersions,
     [int]$TimeoutSeconds = 180,
     [switch]$Yes,
+    [switch]$IncludeMaster,
     [switch]$IncludeReviewer,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
@@ -143,6 +144,53 @@ function Test-ClaudeAvailable {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Get-ChildProcessIds {
+    param([int]$ParentProcessId)
+    $ids = [System.Collections.Generic.List[int]]::new()
+    $children = @()
+    try {
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentProcessId" -ErrorAction Stop)
+    } catch {
+        try { $children = @(Get-WmiObject Win32_Process -Filter "ParentProcessId=$ParentProcessId" -ErrorAction Stop) } catch { $children = @() }
+    }
+    foreach ($child in $children) {
+        $childId = [int]$child.ProcessId
+        $ids.Add($childId)
+        foreach ($descendantId in (Get-ChildProcessIds -ParentProcessId $childId)) {
+            $ids.Add([int]$descendantId)
+        }
+    }
+    return $ids.ToArray()
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    $descendants = @(Get-ChildProcessIds -ParentProcessId $ProcessId)
+    $taskkill = $null
+    if ($env:SystemRoot) {
+        $candidate = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        if (Test-Path $candidate) { $taskkill = $candidate }
+    }
+    if (-not $taskkill) {
+        $cmd = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $taskkill = $cmd.Source }
+    }
+    if ($taskkill) {
+        & $taskkill /PID $ProcessId /T /F *> $null
+    }
+    foreach ($id in ($descendants | Select-Object -Unique | Sort-Object -Descending)) {
+        try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch { }
+    Start-Sleep -Milliseconds 200
+    foreach ($id in ($descendants | Select-Object -Unique | Sort-Object -Descending)) {
+        try {
+            $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($p) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+        } catch { }
+    }
+}
+
 # Run one Claude Code Implementer turn with the standard safety constraints.
 function Invoke-ClaudeTurn {
     if ($TimeoutSeconds -lt 1) {
@@ -156,18 +204,42 @@ function Invoke-ClaudeTurn {
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
+    $childPidFile = [System.IO.Path]::GetTempFileName()
     $runnerScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".ps1")
     $budgetText = $BudgetUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 
     $runnerBody = @'
 param(
     [string]$PromptFile,
-    [string]$BudgetUsdText
+    [string]$BudgetUsdText,
+    [string]$ChildPidFile
 )
 $ErrorActionPreference = "Continue"
 $prompt = Get-Content -Raw -LiteralPath $PromptFile
-& npx --yes @anthropic-ai/claude-code -p $prompt --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd $BudgetUsdText --no-session-persistence --output-format text
-exit $LASTEXITCODE
+$argList = @(
+    '--yes',
+    '@anthropic-ai/claude-code',
+    '-p',
+    $prompt,
+    '--permission-mode',
+    'acceptEdits',
+    '--disallowed-tools',
+    'Bash',
+    '--max-budget-usd',
+    $BudgetUsdText,
+    '--no-session-persistence',
+    '--output-format',
+    'text'
+)
+try {
+    $child = Start-Process -FilePath 'npx' -ArgumentList $argList -NoNewWindow -PassThru
+    Set-Content -LiteralPath $ChildPidFile -Value $child.Id -Encoding ascii -NoNewline -ErrorAction SilentlyContinue
+    $child.WaitForExit()
+    exit $child.ExitCode
+} catch {
+    Write-Error $_
+    exit 3
+}
 '@
 
     $psHost = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
@@ -176,20 +248,20 @@ exit $LASTEXITCODE
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: no PowerShell host (pwsh/powershell) is available for the bounded runner."
         Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
         return 3
     }
 
     try {
         Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -NoNewline -ErrorAction Stop
         Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-BudgetUsdText', $budgetText)
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile)
         $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
     } catch {
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: failed to start bounded Claude Code runner: $_"
         Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
         return 3
     }
 
@@ -200,8 +272,13 @@ exit $LASTEXITCODE
         $claudeExit = $proc.ExitCode
     } else {
         $timedOut = $true
-        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
-        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        $childPid = $null
+        if (Test-Path $childPidFile) {
+            $childPidText = (Get-Content -Raw -Path $childPidFile -ErrorAction SilentlyContinue).Trim()
+            if ($childPidText -match '^\d+$') { $childPid = [int]$childPidText }
+        }
+        if ($childPid) { Stop-ProcessTree -ProcessId $childPid }
+        Stop-ProcessTree -ProcessId $proc.Id
         try { $proc.WaitForExit(5000) | Out-Null } catch { }
     }
 
@@ -209,7 +286,7 @@ exit $LASTEXITCODE
     if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
     $stderrText = ""
     if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
-    Remove-Item $tmpOut, $tmpErr, $promptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
 
     if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
         ($stdoutText -split "`n") | ForEach-Object { Write-Host $_.TrimEnd() }
@@ -263,15 +340,15 @@ function Get-AdapterProfile {
 
     # Master/Codex (since v2.0.1): callable for NEEDS_ANALYSIS via the explicit two-step
     # master-run (read-only capture) + master-apply (apply the captured recommendation's
-    # local AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose; loop/cycle
-    # integration is a separate reviewed step.
+    # local AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose; since v2.1.0,
+    # loop -IncludeMaster may opt this exact turn into one authorized loop session.
     if ($Role -eq "Master" -and $Tool -eq "Codex") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("NEEDS_ANALYSIS");
-            Invocation = "Capture: handoff.ps1 master-run (read-only Codex Master analysis, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes).";
-            SafetyLimits = "Explicit yes per command; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/waiting-for pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle; no git add/commit/push/tag/deploy/db/secrets.";
-            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before master-run and master-apply";
-            Reason = "master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end, read-only and fail-closed. Callable via explicit commands only; loop/cycle integration is future work.";
+            Invocation = "Capture: handoff.ps1 master-run (read-only Codex Master analysis, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes). PowerShell loop -IncludeMaster may run this pair in-session.";
+            SafetyLimits = "Explicit yes per command, or explicit loop -IncludeMaster for one authorized loop session; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/waiting-for pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by default and never by cycle; no git add/commit/push/tag/deploy/db/secrets.";
+            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before master-run and master-apply; loop session authorization when -IncludeMaster is used";
+            Reason = "master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end, read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeMaster; cycle never does.";
             NextStep = "Run master-run to capture a recommendation, then master-apply to route the task to Implementer or User."
         }
     }
@@ -1782,8 +1859,7 @@ function Invoke-ReviewRun {
     } else {
         $timedOut = $true
         # Terminate the whole Codex process tree; a child can outlive a bare Kill().
-        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
-        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        Stop-ProcessTree -ProcessId $proc.Id
         try { $proc.WaitForExit(5000) | Out-Null } catch { }
     }
 
@@ -2306,8 +2382,7 @@ function Invoke-MasterRun {
         $codexExit = $proc.ExitCode
     } else {
         $timedOut = $true
-        if (Get-Command taskkill -ErrorAction SilentlyContinue) { & taskkill /PID $proc.Id /T /F *> $null }
-        try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+        Stop-ProcessTree -ProcessId $proc.Id
         try { $proc.WaitForExit(5000) | Out-Null } catch { }
     }
 
@@ -2387,7 +2462,7 @@ function Invoke-MasterRun {
     Write-Host "This captured the Master recommendation only. It made no git changes and did not modify AI_HANDOFF.md."
     Write-Host "To apply the recommendation locally, run:"
     Write-Host "  handoff.ps1 master-apply"
-    Write-Host "Master/Codex is callable only via explicit master-run + master-apply. loop/cycle do not auto-run Master turns."
+    Write-Host "Master/Codex is callable via explicit master-run + master-apply. PowerShell loop may include it only with -IncludeMaster; cycle never does."
     Write-Host "Stop category: Operator Manual Action - run master-apply, or apply the routing decision manually."
     Write-Host ""
 }
@@ -2539,7 +2614,7 @@ function Show-MasterApplyPlan {
     }
     Write-Host ""
     Write-Host "Safety: edits only AI_HANDOFF.md (local, gitignored); no git add/commit/push/tag;"
-    Write-Host "        no deploy/db/secrets; no role swap; not auto-run by loop/cycle."
+    Write-Host "        no deploy/db/secrets; no role swap; not auto-run by default; loop may invoke it only with -IncludeMaster."
     Write-Host ""
 }
 
@@ -2979,10 +3054,10 @@ function Invoke-Cycle {
     Write-Host ""
 }
 
-# Bounded loop skeleton (v0.17.0). Runs automated turns until a hard stop.
-# Only callable turn: READY_FOR_IMPLEMENTATION / Implementer bound to Claude Code.
-# Master, Reviewer, and User turns are never automated - the loop prepares
-# NEXT_TURN.md, prints the next actor, and stops.
+# Bounded loop manager. Runs automated turns until a hard stop.
+# Default auto-loop turn: READY_FOR_IMPLEMENTATION / Implementer bound to Claude Code.
+# Explicit per-session opt-ins may add Codex Master/Reviewer turns; User/release
+# actions are never automated.
 function Invoke-Loop {
     # --- Validate arguments ---
     if ($MaxTurns -lt 1) {
@@ -3069,13 +3144,18 @@ function Invoke-Loop {
     Write-Host "Max turns:          $MaxTurns"
     Write-Host "Per-turn budget:    `$$BudgetUsd (passed to --max-budget-usd)"
     Write-Host "Session budget cap: `$$SessionBudgetUsd (worst-case authorized spend this session: `$$worstCase)"
-    Write-Host "Callable turns:     Resolved through ADAPTERS.md; currently READY_FOR_IMPLEMENTATION only when Implementer is Claude Code."
+    Write-Host "Default turns:      Resolved through ADAPTERS.md; READY_FOR_IMPLEMENTATION only when Implementer is Claude Code."
+    if ($IncludeMaster) {
+        Write-Host "Master mode:        -IncludeMaster ON - the Codex Master's NEEDS_ANALYSIS turn will be auto-run in-session (read-only master-run capture + master-apply). READY_FOR_IMPLEMENTATION continues to the Implementer; BLOCKED stops at User."
+    } else {
+        Write-Host "Master mode:        -IncludeMaster OFF (default) - loop stops at the Master turn and every other non-enabled explicit-command turn."
+    }
     if ($IncludeReviewer) {
         Write-Host "Reviewer mode:      -IncludeReviewer ON - the Codex Reviewer's READY_FOR_REVIEW turn will be auto-run in-session (read-only review-run capture + review-apply). APPROVED stops at REVIEW_DONE / Waiting For: User; BLOCKED returns to READY_FOR_IMPLEMENTATION and the loop continues under MaxTurns/budget."
-        Write-Host "Never automated:    Master turns, User turns, commit/push/tag/deploy/db/secrets (Reviewer release authorization is still the User's)."
+        Write-Host "Never automated:    User turns, commit/push/tag/deploy/db/secrets (Reviewer release authorization is still the User's)."
     } else {
         Write-Host "Reviewer mode:      -IncludeReviewer OFF (default) - loop stops at the Reviewer turn and every other non-Implementer turn."
-        Write-Host "Never automated:    Master turns, Reviewer turns, User turns, commit/push/tag/deploy."
+        Write-Host "Never automated:    User turns, commit/push/tag/deploy/db/secrets."
     }
     Write-Host ""
     Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
@@ -3145,6 +3225,47 @@ function Invoke-Loop {
         # loop STOP, never auto-run. This keeps loop from ever invoking a Reviewer turn unless
         # the operator explicitly opted in with -IncludeReviewer (handled just below).
         $loopEligible = $turnAdapter.AutoLoopEligible
+
+        # --- v2.1.0: opt-in in-session Master automation ---
+        # Master/Codex stays AutoLoopEligible:$false, so by default the loop still stops at
+        # NEEDS_ANALYSIS. ONLY when the operator passed -IncludeMaster AND the next turn is
+        # the Codex Master's NEEDS_ANALYSIS turn do we run the already-proven master-run +
+        # master-apply sequence in-session. master-run is read-only capture; master-apply
+        # edits only AI_HANDOFF.md and runs no git. Both fail closed through their existing
+        # guards, including stale TASK, role-binding mismatch, invalid actors, and bad state.
+        if (-not $loopEligible -and $IncludeMaster -and
+            ($script:State -eq "NEEDS_ANALYSIS") -and ($role -eq "Master") -and ($tool -eq "Codex")) {
+
+            # A Master turn counts against MaxTurns like any other automated protocol turn.
+            if ($turnsRun -ge $MaxTurns) {
+                Write-Host ""
+                Write-Host "loop: stop - MaxTurns ($MaxTurns) reached before the Master turn."
+                Write-Host "Stop category: Operator Manual Action - re-run loop to continue if desired; no user decision required."
+                Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+                Write-LoopLog "turn=$turnsRun stop reason=max-turns-before-master exit=0"
+                Write-Host ""
+                exit 0
+            }
+
+            $turnNo = $turnsRun + 1
+            Write-Host ""
+            Write-Host "loop: turn $turnNo of $MaxTurns - opt-in automated Codex Master turn (read-only master-run capture + master-apply)..."
+            Write-LoopLog "turn=$turnNo action=automated-master-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=Codex(Master)"
+            $turnsRun = $turnNo
+
+            # master-run / master-apply gate their own confirmation on the script-level -Yes.
+            # The operator already authorized this loop session, so force their non-interactive
+            # path. Any guard/capture/recommendation failure exits the process fail-closed.
+            $script:Yes = $true
+            Invoke-MasterRun
+            Invoke-MasterApply
+
+            Write-LoopLog "turn=$turnNo master-applied"
+            # Loop continues: the next iteration re-reads AI_HANDOFF.md. READY_FOR_IMPLEMENTATION
+            # proceeds to the Implementer; BLOCKED stops at User; planning/investigation states
+            # stop as non-loop-eligible Implementer turns unless a future opt-in handles them.
+            continue
+        }
 
         # --- v1.4.0: opt-in in-session Reviewer automation ---
         # Reviewer/Codex stays AutoLoopEligible:$false, so by default the next block stops the
@@ -3377,13 +3498,13 @@ switch ($Command) {
             Write-Host "  master-check              Dry-run the Codex Master capture plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
             Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
-            Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by loop/cycle."
+            Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeMaster."
             Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeReviewer] [-Yes]"
-            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor (including explicit-only callable turns like Reviewer/Codex) or hard stop. With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed): APPROVED stops at REVIEW_DONE/User; BLOCKED returns to READY_FOR_IMPLEMENTATION and continues under MaxTurns/budget. Master/User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]"
+            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor unless that actor is explicitly included for this session. With -IncludeMaster, also auto-runs the Codex Master's NEEDS_ANALYSIS turn in-session (master-run capture + master-apply, fail-closed). With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed). User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }
     }

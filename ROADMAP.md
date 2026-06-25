@@ -675,3 +675,23 @@ deploy/database/secrets behavior, or broader Reviewer/Master loop integration.
 **Exit criteria:** a new untracked file listed in `AI_HANDOFF.md` Changed Files can be reviewed
 by `review-run` without an operator staging it intent-to-add first; protocol tests assert the
 prompt includes the new-file read path and no-index-mutation guard.
+
+### v2.1.0 - Opt-in Master Loop Integration
+
+**Goal:** let one explicitly authorized loop session start from a Codex Master analysis turn,
+so the operator can ask Codex for work and have the protocol route onward automatically.
+
+**Status:** implemented as the next autonomy foundation slice.
+
+**Includes:** `loop -IncludeMaster`; in-loop chaining of the existing guarded `master-run` and
+`master-apply`; preservation of default-off Master behavior; `MaxTurns` accounting for Master
+turns; docs, templates, version update, and protocol tests.
+
+**Does not include:** default background Master automation, `cycle` Master automation, automatic
+commit/push/tag/release, deploy/database/secrets behavior, role swaps, or a persistent chat
+watcher.
+
+**Exit criteria:** without `-IncludeMaster`, `loop` still stops at `NEEDS_ANALYSIS` /
+`Waiting For: Master`; with `-IncludeMaster`, it can apply a valid Master recommendation and
+continue to the next routed state under the existing loop limits; malformed/stale/missing
+recommendations still fail closed; protocol tests pass.

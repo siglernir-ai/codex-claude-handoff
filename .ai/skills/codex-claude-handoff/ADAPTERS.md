@@ -34,7 +34,7 @@ orchestrator exists.
 
 | Role | Default tool | Callable | Supported states | Invocation or manual instruction | Safety limits | Stop category when not callable | User authorization required |
 |---|---|---|---|---|---|---|---|
-| Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply` |
+| Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; release stays a separate User authorization |
 
@@ -56,19 +56,24 @@ contract shape as role adapters.
   manual. The current Claude Code CLI invocation cannot be safely
   restricted to handoff-only edits in non-interactive mode.
 - Since v2.0.1 the Master/Codex `NEEDS_ANALYSIS` turn is callable end-to-end via the
-  explicit `master-run` + `master-apply` commands - see "Automated Master Turn" below. It is
-  deliberately NOT loop/cycle eligible. Since v1.3.0 the Reviewer/Codex `READY_FOR_REVIEW`
-  turn is callable via the explicit `review-run` + `review-apply` commands - see "Automated
-  Reviewer Turn" below. It is likewise not loop/cycle eligible by default.
+  explicit `master-run` + `master-apply` commands - see "Automated Master Turn" below. Since
+  v2.1.0, `loop -IncludeMaster` may opt that same guarded turn into one loop session; it is
+  still not auto-run by default and `cycle` never runs it. Since v1.3.0 the Reviewer/Codex
+  `READY_FOR_REVIEW` turn is callable via the explicit `review-run` + `review-apply`
+  commands - see "Automated Reviewer Turn" below. It is likewise not loop/cycle eligible by
+  default.
 - `callable` is not the same as `loop`/`cycle` eligible. The adapter model carries a
   separate `AutoLoopEligible` flag: `loop` and `cycle` gate on `AutoLoopEligible`, never on
   `callable`, so an explicit-command-only adapter (Reviewer/Codex) makes `loop` STOP rather
   than auto-run a turn. Only `READY_FOR_IMPLEMENTATION` / Implementer / Claude Code is
-  `AutoLoopEligible`. Since v1.4.0 there is one explicit, operator-opted-in exception:
+  `AutoLoopEligible`. Since v2.1.0 there is an explicit, operator-opted-in Master exception:
+  `loop -IncludeMaster` may auto-run the Codex Master's `NEEDS_ANALYSIS` turn in-session (see
+  "Opt-in Master Loop Integration" below). Since v1.4.0 there is also an explicit Reviewer
+  exception:
   `loop -IncludeReviewer` may auto-run the Codex Reviewer's `READY_FOR_REVIEW` turn in-session
-  (see "Opt-in Reviewer Loop Integration" below). That opt-in does NOT change the
-  `AutoLoopEligible` flag (Reviewer/Codex stays `Auto-loop: no` in the `adapters` view) and
-  `cycle` still never auto-runs a Reviewer turn.
+  (see "Opt-in Reviewer Loop Integration" below). These opt-ins do NOT change the
+  `AutoLoopEligible` flag (Master/Codex and Reviewer/Codex stay `Auto-loop: no` in the
+  `adapters` view), and `cycle` still never auto-runs Master or Reviewer turns.
 - Codex was not callable through v1.2.0: a discovered Codex CLI binary - even with a passing
   read-only `codex exec` smoke test - was not sufficient on its own, and the v1.2.0
   `review-check` / `review-run` POC was capture-only. Since v1.3.0, the Reviewer/Codex
@@ -76,7 +81,7 @@ contract shape as role adapters.
   capture then a fail-closed local `AI_HANDOFF.md` transition). Since v2.0.1, the
   Master/Codex `NEEDS_ANALYSIS` turn is callable end-to-end via `master-run` + `master-apply`.
   All other Codex roles/states remain non-callable. See "Codex CLI Verification", "Automated
-  Reviewer Turn", and "Automated Master Turn" below.
+  Reviewer Turn", "Automated Master Turn", and the opt-in loop integration sections below.
 - Since v0.19.1, `release-check` and `release` are PowerShell-only. Bash reports the
   limitation honestly and does not run release git mutations. `review-apply` (v1.3.0) is
   likewise PowerShell-only; Bash refuses honestly.
@@ -154,16 +159,13 @@ status` unchanged. That demonstrates criteria 1-2 (read-only safety; determinist
 parseable output) for a one-off manual run, executed under a read-only sandbox with no
 bypass flag (criterion 3).
 
-Codex nonetheless remains `callable: no` for all roles and all states, exactly as in
-the Default Local Registry, because a successful manual smoke test is necessary but not
-sufficient: no protocol wrapper/adapter has been implemented and tested. Nothing wires a
-per-turn Codex invocation into the workflow scripts with enforced read-only sandboxing,
-output capture, and Reviewer independence (criterion 4). The verified candidate
-invocation shape above is recorded for that future adapter turn. Note: the installed CLI
-does NOT accept `--ask-for-approval`, so that flag is not part of the shape; a
-config-based approval mechanism may be recorded later only if directly verified. Until a
-tested adapter records passing evidence for all four criteria, no Codex adapter may be
-marked callable.
+At v1.1.0 this smoke test was still not enough to mark Codex `callable: yes`: no
+protocol wrapper/adapter had been implemented and tested, and nothing yet wired a per-turn
+Codex invocation into the workflow scripts with enforced read-only sandboxing, output
+capture, and Reviewer independence (criterion 4). The verified candidate invocation shape
+above became the basis for the later Reviewer and Master adapters. Note: the installed CLI
+does NOT accept `--ask-for-approval`, so that flag is not part of the shape; a config-based
+approval mechanism may be recorded later only if directly verified.
 
 ## Codex Reviewer POC (v1.2.0)
 
@@ -176,11 +178,9 @@ the scripts. It is deliberately capture-only.
 |---|---|---|---|---|---|---|
 | Codex Reviewer POC (read-only review capture) | POC available, NOT a full callable Reviewer | `READY_FOR_REVIEW` with `Waiting For: Reviewer` | Dry-run: `handoff.ps1 review-check`. Run: `handoff.ps1 review-run` (explicit `yes` confirmation). | Bound Reviewer is Codex; exactly one Task Actors Implementer and one Reviewer; actual Reviewer is Codex and != actual Implementer; Changed Files match git status after excluding local coordination files; Codex run only as `exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message <file> -` with the review prompt delivered on stdin (never as an argv token, so a multi-word prompt is not split); never `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or danger-full-access; no git add/commit/push/tag; no deploy/db/secrets; no `AI_HANDOFF.md` state change. | Environment/Preflight when the Codex CLI cannot be resolved or `exec --help` fails; PowerShell only (Bash refuses honestly). | yes, explicit `yes` confirmation before `review-run` |
 
-Status: this is a POC, not a callable Reviewer adapter. The Default Local Registry above
-still records Reviewer/Codex as `callable: no`, and that is intentional and unchanged. The
-POC demonstrates a wired, guarded, read-only Codex invocation that captures a review
-verdict to local artifacts; it does NOT complete the Reviewer's protocol responsibility
-end-to-end:
+Status at v1.2.0: this was a POC, not yet a callable Reviewer adapter. The POC demonstrates
+a wired, guarded, read-only Codex invocation that captures a review verdict to local
+artifacts; by itself, it did NOT complete the Reviewer's protocol responsibility end-to-end:
 
 - `review-run` itself does not transition `AI_HANDOFF.md` (no automatic `REVIEW_DONE` or
   `READY_FOR_IMPLEMENTATION`); it only captures. Since v1.3.0 the separate `review-apply`
@@ -270,11 +270,12 @@ Since v2.0.1, `handoff.ps1 master-apply` completes the Master's `NEEDS_ANALYSIS`
 by applying the recommendation captured by `master-run`. With the two commands together, the
 Master/Codex `NEEDS_ANALYSIS` turn is **callable end-to-end** (read current handoff -> capture
 a routing recommendation -> apply the local handoff transition), fail-closed. This is explicit
-command automation only; `loop` and `cycle` still never auto-run Master turns.
+command automation by default; since v2.1.0 `loop -IncludeMaster` may opt this same guarded
+path into one authorized loop session. `cycle` still never auto-runs Master turns.
 
 | Capability | Callable | Auto-loop eligible | Eligible state | Invocation | Safety limits | Stop category when unavailable | User authorization required |
 |---|---|---|---|---|---|---|---|
-| Automated Master turn (capture + apply) | yes, explicit-command only | no | `NEEDS_ANALYSIS` with `Waiting For: Master` | Capture: `handoff.ps1 master-run` (explicit `yes`). Apply: `handoff.ps1 master-apply` (explicit `yes`, or `-Yes` for automation/tests). | Bound Master is Codex; `State: NEEDS_ANALYSIS` / `Waiting For: Master`; Codex run only as `exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message <file> -` with the prompt on stdin; never `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or danger-full-access; captured recommendation must parse to one strict block with matching `TASK`; non-`BLOCKED` routing must name the current bound Implementer and Reviewer and keep them different; `master-apply` edits ONLY `AI_HANDOFF.md`; no git add/commit/push/tag; no deploy/db/secrets; not auto-run by `loop`/`cycle`. | Environment/Preflight when the Codex CLI cannot be resolved, `exec --help` fails, the run times out, no capture is produced, or no usable recommendation exists; PowerShell only (Bash refuses honestly). | yes, explicit `yes` confirmation before `master-run` and `master-apply` |
+| Automated Master turn (capture + apply) | yes, explicit-command only | no | `NEEDS_ANALYSIS` with `Waiting For: Master` | Capture: `handoff.ps1 master-run` (explicit `yes`). Apply: `handoff.ps1 master-apply` (explicit `yes`, or `-Yes` for automation/tests). Since v2.1.0, `loop -IncludeMaster` may run this pair in-session. | Bound Master is Codex; `State: NEEDS_ANALYSIS` / `Waiting For: Master`; Codex run only as `exec --cd <repo> --sandbox read-only --ephemeral --json --output-last-message <file> -` with the prompt on stdin; never `--ask-for-approval`, `--dangerously-bypass-approvals-and-sandbox`, or danger-full-access; captured recommendation must parse to one strict block with matching `TASK`; non-`BLOCKED` routing must name the current bound Implementer and Reviewer and keep them different; `master-apply` edits ONLY `AI_HANDOFF.md`; no git add/commit/push/tag; no deploy/db/secrets; not auto-run by default and never by `cycle`. | Environment/Preflight when the Codex CLI cannot be resolved, `exec --help` fails, the run times out, no capture is produced, or no usable recommendation exists; PowerShell only (Bash refuses honestly). | yes, explicit `yes` confirmation before `master-run` and `master-apply`, or explicit loop session authorization with `-IncludeMaster` |
 
 The captured recommendation block is, by default:
 
@@ -313,6 +314,39 @@ captured actors that do not match the current role binding. Master/Codex is `cal
 `Auto-loop: no` in the `adapters` view. Bash refuses `master-check` / `master-run` honestly and
 does not implement `master-apply`.
 
+## Opt-in Master Loop Integration (v2.1.0)
+
+Since v2.1.0, `handoff.ps1 loop -IncludeMaster` may auto-run the Codex Master's
+`NEEDS_ANALYSIS` turn inside one explicitly authorized loop session, instead of stopping at
+it. This connects the already-proven, fail-closed Master path (`master-run` capture +
+`master-apply` transition) into `loop`.
+
+- **Opt-in per session.** Without `-IncludeMaster`, `loop` auto-runs no Master turn: it stops
+  cleanly at the Master turn as before the flag existed. The flag authorizes the Master turn
+  for that single `loop` invocation only.
+- **Master/Codex only.** The in-loop Master turn runs only when the bound next actor is the
+  Codex Master at `NEEDS_ANALYSIS`. `AutoLoopEligible` is unchanged (still `no` in the
+  `adapters` view); this is a per-session operator opt-in, not a default capability change.
+- **Reuses the guarded path.** The loop runs the existing `master-run` (read-only Codex
+  capture) then `master-apply` (consume the captured recommendation, edit only
+  `AI_HANDOFF.md`), forcing their non-interactive `-Yes` path because the operator already
+  authorized the loop session. Every `master-run`/`master-apply` guard is re-checked. Any
+  guard violation, or a malformed/stale/missing recommendation, fails closed and stops the
+  loop with no unintended transition.
+- **Routing.** `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`, or `PLAN_REQUIRED` route to
+  `Waiting For: Implementer`; `BLOCKED` routes to `Waiting For: User`. The loop then continues
+  only when the next state is otherwise automatable or explicitly opted in.
+- **Counts as a turn.** A Master turn counts against `-MaxTurns` like any automated turn.
+- **Boundaries preserved.** No git add/commit/push/tag/rebase/amend; no deploy/db/secrets/
+  production config; no bypass/danger sandbox flags; local artifacts stay gitignored. `cycle`
+  still refuses Master turns. The feature is PowerShell-only; Bash refuses honestly and points
+  to PowerShell.
+
+Tested coverage (see `protocol-tests.ps1`, section 13): default `loop` still stops at the
+Master turn when `-IncludeMaster` is absent (even with a runnable fake Codex present); opt-in
+`loop` captures + applies a `READY_FOR_IMPLEMENTATION` recommendation and then stops on
+`MaxTurns` before running Claude when capped; none of these create a git commit.
+
 ## Opt-in Reviewer Loop Integration (v1.4.0)
 
 Since v1.4.0, `handoff.ps1 loop -IncludeReviewer` may auto-run the Codex Reviewer's
@@ -350,10 +384,10 @@ into `loop`. It is the narrowest possible integration:
   requirement is unchanged for every normal Implementer-first session and for the per-iteration
   Implementer-turn recheck.
 - **Boundaries preserved.** No git add/commit/push/tag/rebase/amend; no deploy/db/secrets/
-  production config; no bypass/danger sandbox flags; local artifacts stay gitignored. Master is
-  not integrated into `loop`/`cycle`; even though `master-apply` exists as an explicit command,
-  `loop` and `cycle` still never run Master turns. `cycle` still refuses Reviewer turns. The
-  feature is PowerShell-only; Bash `loop` refuses honestly and points to PowerShell.
+  production config; no bypass/danger sandbox flags; local artifacts stay gitignored. Since
+  v2.1.0, Master may be integrated into `loop` only with `-IncludeMaster`; `cycle` still never
+  runs Master or Reviewer turns. The feature is PowerShell-only; Bash `loop` refuses honestly
+  and points to PowerShell.
 
 Tested coverage (see `protocol-tests.ps1`, section 12): default `loop` still stops at the
 Reviewer turn when `-IncludeReviewer` is absent (even with a runnable fake Codex present);
@@ -361,7 +395,7 @@ opt-in `loop` captures + applies an `APPROVED` verdict and stops at `REVIEW_DONE
 For: User`; opt-in `loop` applies a `BLOCKED` verdict, returns to `READY_FOR_IMPLEMENTATION` /
 `Waiting For: Implementer`, and stops on `MaxTurns` without involving the user; a malformed
 captured verdict fails closed (non-zero exit, no handoff transition); none of these create a
-git commit; `cycle` still refuses a Reviewer turn; and Master/Codex stays `callable: no` /
+git commit; `cycle` still refuses a Reviewer turn; and Reviewer/Codex stays `callable: yes` /
 `Auto-loop: no`.
 
 ## Safe Agent Process Runner (v2.0.0)

@@ -187,9 +187,13 @@ Action requiring an explicit `yes`; `master-run` performs no git mutation and ne
 `AI_HANDOFF.md`, and `master-apply` edits ONLY `AI_HANDOFF.md` (no git, no release action) and
 fails closed on any missing/malformed/stale recommendation, invalid state/actor pairing, or
 role-binding mismatch. Together they make the Master/Codex `NEEDS_ANALYSIS` turn callable
-end-to-end, but ONLY via explicit commands. Master/Codex is still never auto-run by
-`loop`/`cycle` (`Auto-loop: no`); full loop integration remains later work. See `ADAPTERS.md`,
-"Automated Master Turn".
+end-to-end through explicit commands. Master/Codex is still never auto-run by default
+(`Auto-loop: no`). Since v2.1.0, the operator may explicitly opt the Master turn
+into one `loop` session with `loop -IncludeMaster`, which runs the same guarded
+`master-run` + `master-apply` sequence in-session and counts the Master turn against
+`MaxTurns`. This opt-in does not change `AutoLoopEligible`, and `cycle` still never auto-runs
+a Master turn. See `ADAPTERS.md`, "Automated Master Turn" and "Opt-in Master Loop
+Integration".
 
 ## AI_SEQUENCE.md Contract (since v0.18.1)
 
