@@ -232,7 +232,9 @@ $argList = @(
     'text'
 )
 try {
-    $child = Start-Process -FilePath 'npx' -ArgumentList $argList -NoNewWindow -PassThru
+    $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
+    if (-not $npxCommand) { $npxCommand = Get-Command npx -ErrorAction Stop }
+    $child = Start-Process -FilePath $npxCommand.Source -ArgumentList $argList -NoNewWindow -PassThru
     Set-Content -LiteralPath $ChildPidFile -Value $child.Id -Encoding ascii -NoNewline -ErrorAction SilentlyContinue
     $child.WaitForExit()
     exit $child.ExitCode

@@ -3,6 +3,16 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.1.1 - Windows npx Runner Resolution
+
+- Fixed the bounded Claude Code runner on Windows after the v2.1.0 child-process hardening:
+  the inner runner now resolves `npx.cmd` first, then falls back to `npx`, before launching
+  the Claude Code Implementer turn.
+- This preserves the v2.1.0 child PID tracking and timeout cleanup while avoiding `%1 is not
+  a valid Win32 application` failures on Windows shells where plain `npx` resolves to a
+  non-executable shim.
+- No protocol-state, adapter, release, git, deploy, database, or secrets behavior changed.
+
 ## 2.1.0 - Opt-in Master Loop Integration
 
 - Added `handoff.ps1 loop -IncludeMaster`, a per-session opt-in that can run the Codex
