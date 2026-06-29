@@ -251,7 +251,7 @@ Example output:
 State:        REVIEW_DONE
 Waiting For:  User
 Task:         v0.9.1 - Encoding-safe handoff instructions
-Commit:       ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files.
+Commit:       ALLOWED - the Reviewer attested technical readiness; the remaining step is your commit authorization. Commit only the files listed under Changed Files.
 Roles:        Master=Codex, Reviewer=Codex, Implementer=Claude Code
 Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status
 ```
@@ -296,13 +296,23 @@ The Master remains the decision router. The prompt tells the Master tool to read
 
 ### `commit-check`
 
-Show whether a commit is allowed and which files to commit. Never runs git commands automatically.
+Dry-run the guarded commit plan after Reviewer approval. Never mutates git.
 
 ```powershell
-.\scripts\handoff.ps1 commit-check
+.\scripts\handoff.ps1 commit-check -Message "Complete reviewed handoff task"
 ```
 
-When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the changed files and prints suggested `git add`, `git commit`, and `git push` commands as text only. You run them yourself after confirming the list. This is the release-authorization step: the Reviewer has already attested technical readiness, so your part is approving the release and running the commands - not re-doing the verification.
+When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the files from `AI_HANDOFF.md` `Changed Files`, compares them to `git status` after excluding local coordination files, and blocks if the two lists do not match. This is the commit-authorization step: the Reviewer has already attested technical readiness, so your part is approving the guarded commit - not re-doing the verification.
+
+### `commit-approved`
+
+Create the reviewed local commit after explicit user authorization. This command runs only `git add -- <approved files>` and `git commit -m <message>`; it never pushes, tags, deploys, touches databases, or handles secrets.
+
+```powershell
+.\scripts\handoff.ps1 commit-approved -Message "Complete reviewed handoff task" -Authorize "I_AUTHORIZE_COMMIT"
+```
+
+`commit-approved` has the same gates as `commit-check`, then requires the exact token `I_AUTHORIZE_COMMIT`. It commits only the files listed under `Changed Files` and refuses if the actual task Reviewer and Implementer are missing, ambiguous, or the same tool.
 
 ### `release-check` and `release`
 
@@ -786,12 +796,12 @@ The script resolves the next role to the bound tool. Paste the Prompt into that 
 The `Commit:` line in Next Action is the commit signal:
 
 - `Commit: ALLOWED` means the Reviewer attested technical readiness; the remaining
-  step is your release authorization. Commit only the files listed under Changed Files -
-  you approve the release, you do not re-run the technical verification.
+  step is your commit authorization. Commit only the files listed under Changed Files -
+  you approve the guarded commit, you do not re-run the technical verification.
 - `Commit: Blocked - ...` means a review or decision is still pending. Do not commit.
 
 Since v0.18.2 the output also prints a `Stop:` / `Stop category:` line naming the stop
-category (User Release Authorization, User Decision, Operator Manual Action, Protocol
+category (User Commit Authorization, User Release Authorization, User Decision, Operator Manual Action, Protocol
 Repair, Environment/Preflight, or Non-callable Actor) so it is always clear whether a
 user decision is required and who or what acts next. See `PROTOCOL_METHOD.md`,
 "Stop Routing".
@@ -810,7 +820,7 @@ A typical handoff cycle looks like this:
 
 4. **The Reviewer reviews only `Changed Files` and attests readiness.** The Reviewer reads `AI_HANDOFF.md`, reviews only the files listed under the `Changed Files` section, and checks the verification evidence. Setting `State: REVIEW_DONE` / `Waiting For: User` is an attestation that the work is technically ready for release.
 
-5. **User grants release authorization and commits.** The user approves turning the reviewed work into a commit/push and runs the git commands (an operator action). The user is not expected to re-run the technical verification - that is what the Reviewer attested. `AI_HANDOFF.md` is not committed.
+5. **User grants commit authorization.** The user approves turning the reviewed work into a local commit, or asks Codex in Window Mode to run `commit-approved` with the exact authorization token. Push/tag/release remain separate user decisions. The user is not expected to re-run the technical verification - that is what the Reviewer attested. `AI_HANDOFF.md` is not committed.
 
 `AI_HANDOFF.md` is a working coordination file - it tracks current task state between tools and sessions. It is not a source file and should stay out of version control. A `.gitignore` rule for it is included in `gitignore-snippet.txt` and applied automatically by the install script. The user remains the final approval point for all commits and pushes.
 
@@ -1490,7 +1500,7 @@ Questions and answers are logged under a `## Dialogue / Open Questions` section 
 | `READY_FOR_IMPLEMENTATION` | Task is defined and the Implementer should implement. |
 | `IMPLEMENTED` | The Implementer finished and no review is required. |
 | `READY_FOR_REVIEW` | The Implementer finished and the Reviewer should review. |
-| `REVIEW_DONE` | The Reviewer attested technical readiness; the user grants release authorization. |
+| `REVIEW_DONE` | The Reviewer attested technical readiness; the user grants commit authorization. |
 | `QUESTION_FOR_MASTER` | The Implementer asked the Master a scoped question; no source edits while waiting. |
 | `QUESTION_FOR_IMPLEMENTER` | The Master asked the Implementer a scoped question; the Implementer answers read-only. |
 | `RE_GATE_REQUESTED` | The Implementer found the task riskier/larger than scoped; the Master re-routes. |
@@ -1521,7 +1531,7 @@ See [ROADMAP.md](ROADMAP.md) for the full milestone plan and acceptance criteria
 The following checklist applies before bumping a version and creating a release commit.
 Both the Master and the Implementer should verify these before handing off to the Reviewer.
 The checklist is the roles' attestation duty: after the Reviewer sets `REVIEW_DONE`, the
-user's step is release authorization, not re-verification.
+user's step is commit/release authorization, not re-verification.
 
 See [ROADMAP.md](ROADMAP.md) for planned milestones and their acceptance criteria.
 

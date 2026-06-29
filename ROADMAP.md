@@ -95,7 +95,7 @@ copy prompts between tools.
   with a clear message before any turn executes.
 - A distinct exit code for post-turn handoff inconsistency, so future orchestration can
   rely on exit codes instead of parsing output.
-- No automatic git operations; the user still runs `commit-check` and commits manually.
+- No automatic push/tag/release/deploy operations; after REVIEW_DONE, the user may authorize `commit-approved` to create only the reviewed local commit.
 
 **Does not include:**
 - Multi-turn autonomous loop.

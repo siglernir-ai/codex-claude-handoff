@@ -338,7 +338,7 @@ Reviewer checklist:
 - Record which commands were run and what they showed in AI_HANDOFF.md before approving.
 
 Recording this evidence is what makes REVIEW_DONE an attestation the user can rely
-on for release authorization without re-running the technical checks.
+on for commit/release authorization without re-running the technical checks.
 
 ## Unsafe Command Rules
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.1)
 # Commands: status, adapters, next, start, commit-check
-# cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
+# commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
 # PowerShell; use handoff.ps1.
 
@@ -110,7 +110,7 @@ _action_text() {
         PLAN_READY_FOR_REVIEW)     echo "Review the plan. Approve or request changes before implementation begins." ;;
         READY_FOR_IMPLEMENTATION)  echo "Implement the approved scope. Do not modify unrelated files." ;;
         READY_FOR_REVIEW)          echo "Review Changed Files. Run git status and git diff before approving." ;;
-        REVIEW_DONE)               echo "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md." ;;
+        REVIEW_DONE)               echo "Commit authorization: the Reviewer attested technical readiness. Approve the guarded commit if satisfied. Do not commit AI_HANDOFF.md." ;;
         QUESTION_FOR_MASTER)       echo "Answer the Implementer's question under Dialogue / Open Questions, then return the working state." ;;
         QUESTION_FOR_IMPLEMENTER)  echo "Answer the Master's question read-only under Dialogue / Open Questions. No source edits." ;;
         RE_GATE_REQUESTED)         echo "Re-route the task; the Implementer found it riskier/larger than scoped." ;;
@@ -140,7 +140,7 @@ _after_text() {
 
 _commit_status_text() {
     case "$STATE" in
-        REVIEW_DONE) echo "ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files." ;;
+        REVIEW_DONE) echo "ALLOWED - the Reviewer attested technical readiness; the remaining step is your commit authorization. Commit only the files listed under Changed Files." ;;
         IMPLEMENTED) echo "ALLOWED - no Reviewer review required. Review the work before committing." ;;
         *)           echo "Blocked - $STATE requires action before committing." ;;
     esac
@@ -152,9 +152,9 @@ _stop_category() {
     if [ "$actor_tool" = "User" ]; then
         case "$for_state" in
             REVIEW_DONE)
-                echo "Stop category: User Release Authorization - approve the release; technical readiness was attested by the Reviewer." ;;
+                echo "Stop category: User Commit Authorization - approve the guarded commit; technical readiness was attested by the Reviewer." ;;
             IMPLEMENTED)
-                echo "Stop category: User Release Authorization - this work did not require Reviewer review; check it yourself before approving the commit." ;;
+                echo "Stop category: User Commit Authorization - this work did not require Reviewer review; check it yourself before approving the commit." ;;
             *)
                 echo "Stop category: User Decision - see AI_HANDOFF.md." ;;
         esac
@@ -424,7 +424,7 @@ cmd_commit_check() {
         fi
 
         echo "Commit: ALLOWED - the Reviewer attested technical readiness."
-        echo "Stop category: User Release Authorization - you approve the release; running the commands is an Operator Manual Action."
+        echo "Stop category: User Commit Authorization - you approve the guarded commit; running the command is an Operator Manual Action."
         echo ""
 
         local mismatch=false x y found
@@ -460,12 +460,12 @@ cmd_commit_check() {
             for f in "${commit_files[@]}"; do echo "  $f"; done
             echo ""
             local file_args="${commit_files[*]}"
-            echo "Suggested commands (reference only - run these yourself):"
+            echo "Suggested commands (reference only - prefer PowerShell commit-approved for the guarded executor):"
             echo "  git add $file_args"
             echo '  git commit -m "<your commit message>"'
-            echo "  git push"
             echo ""
-            echo "These commands are shown for reference only. Run them yourself after confirming the file list."
+            echo "PowerShell executor:"
+            echo '  pwsh scripts/handoff.ps1 commit-approved -Message "<msg>" -Authorize "I_AUTHORIZE_COMMIT"'
         fi
     else
         echo "Commit: Not yet allowed."
@@ -507,6 +507,17 @@ cmd_release_blocked() {
     echo "The guarded release executor is implemented in PowerShell only so one path owns the git mutation safety checks."
     echo "To dry-run:  pwsh scripts/handoff.ps1 release-check -Version vX.Y.Z"
     echo "To execute:  pwsh scripts/handoff.ps1 release -Version vX.Y.Z -Message \"<message>\" -Authorize \"I_AUTHORIZE_RELEASE_vX.Y.Z\""
+    echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+    echo ""
+    exit 1
+}
+
+cmd_commit_approved_blocked() {
+    echo ""
+    echo "commit-approved is not available in handoff.sh."
+    echo "The guarded commit executor is implemented in PowerShell only so one path owns the git mutation safety checks."
+    echo 'To dry-run:  pwsh scripts/handoff.ps1 commit-check -Message "<message>"'
+    echo 'To execute:  pwsh scripts/handoff.ps1 commit-approved -Message "<message>" -Authorize "I_AUTHORIZE_COMMIT"'
     echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
     echo ""
     exit 1
@@ -574,6 +585,7 @@ case "$COMMAND" in
     next)         cmd_next ;;
     start)        cmd_start ;;
     commit-check) cmd_commit_check ;;
+    commit-approved) cmd_commit_approved_blocked ;;
     release-check) cmd_release_blocked "release-check" ;;
     release)      cmd_release_blocked "release" ;;
     sequence-check)   cmd_sequence_blocked "sequence-check" ;;
@@ -597,6 +609,7 @@ case "$COMMAND" in
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'
         echo "  commit-check              Show whether a commit is allowed and what to commit."
+        echo "  commit-approved           Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  release-check             Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  release                   Not available in handoff.sh; requires PowerShell (pwsh)."
         echo "  sequence-check            Not available in handoff.sh; requires PowerShell (pwsh)."

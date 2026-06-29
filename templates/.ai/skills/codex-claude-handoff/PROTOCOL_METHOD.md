@@ -79,7 +79,7 @@ process.
 | Current handoff | `AI_HANDOFF.md` - one task per cycle |
 | Implementation | READY_FOR_IMPLEMENTATION -> Implementer turn(s) |
 | Review | READY_FOR_REVIEW -> Reviewer; Verification Gate |
-| Release | REVIEW_DONE (Reviewer attestation) -> user release authorization -> guarded operator commit/push/tag (Manual Approval Boundaries; since v0.19.1 this may use `handoff.ps1 release`) |
+| Release | REVIEW_DONE (Reviewer attestation) -> user commit authorization -> guarded local commit (since v2.2.0 this may use `handoff.ps1 commit-approved`); push/tag/release remain separate user authorizations (since v0.19.1 full release may use `handoff.ps1 release`) |
 | Sequence update | a Layer 2 progress note, recorded only AFTER the user's release approval (since v0.19.2 the Sequence Owner may use `handoff.ps1 sequence-advance` for this local update) |
 
 Rule: if a future phase cannot be expressed as a mapping to existing machinery, it
@@ -108,11 +108,14 @@ change.
   A conflict between a sequence and `AI_HANDOFF.md` is Protocol Repair: the handoff
   wins for the current task, automation stops, and the user resolves the conflict.
   Protocol Repair is a correction task, not a product decision.
-- **User Release Authorization** (since v0.18.2) - a STOP CATEGORY: the Reviewer has
+- **User Commit Authorization** (since v2.2.0) - a STOP CATEGORY: the Reviewer has
   attested technical readiness (REVIEW_DONE - see `MASTER.md`, "Review Outcomes")
-  and the only remaining step is the user's approval to turn reviewed work into a
-  commit, push, tag, or release. The user is the authority, not the technical
-  verifier: re-running verification is not the user's default duty.
+  and the remaining step is the user's approval to turn reviewed work into a local
+  commit. The user is the authority, not the technical verifier: re-running
+  verification is not the user's default duty.
+- **User Release Authorization** (since v0.18.2) - a STOP CATEGORY: the user has
+  already accepted the reviewed work for commit and now explicitly authorizes a
+  push, tag, or release action.
 - **User Decision** (since v0.18.2) - a STOP CATEGORY: a product, scope, business,
   or risk decision that only the user can make (WAITING_FOR_USER, a documented
   blocker, or a Decision Router user-decision outcome).
@@ -136,13 +139,21 @@ or automation-limitation stops.
 
 | Stop category | Typical trigger | Who/what acts next | User decision required? |
 |---|---|---|---|
-| User Release Authorization | REVIEW_DONE after Reviewer attestation | The user authorizes; an operator action performs the commit/push/tag | Authorization only - not technical re-verification |
+| User Commit Authorization | REVIEW_DONE after Reviewer attestation | The user authorizes; an operator action performs the guarded local commit | Authorization only - not technical re-verification |
+| User Release Authorization | Post-commit push/tag/release request | The user authorizes; an operator action performs push/tag/release | Authorization only - not technical re-verification |
 | User Decision | WAITING_FOR_USER, a documented blocker | The user decides | Yes |
 | Operator Manual Action | paste a prompt, run a script, execute an authorized commit | The user acting as operator (mechanical) | No |
 | Protocol Repair | Waiting For mismatch, unrecognized state, contradictory handoff or binding | The user corrects the handoff or binding | No product decision - a correction |
 | Environment / Preflight | dirty tree, missing dependency, NEXT_TURN.md failure, invalid arguments, tool unavailable | Whoever controls the environment | No |
 | Non-callable Actor | next role's tool has no adapter, or the turn type is not automatable | Operator pastes the prepared prompt into the bound tool | No - automation limitation |
 
+Approved commit execution model (implemented in v2.2.0): Reviewer attestation ->
+User Commit Authorization -> `handoff.ps1 commit-approved` may execute a guarded local
+commit only. The executor must fail closed unless the handoff is `REVIEW_DONE`, the
+changed-file scope matches git status, the actual task Reviewer and actual task
+Implementer recorded in `AI_HANDOFF.md` `Task Actors` are present and different, and
+the user supplies the exact `I_AUTHORIZE_COMMIT` token. It never pushes, tags,
+deploys, touches databases, handles secrets, or commits local coordination files.
 Release execution model (implemented in v0.19.1): Reviewer attestation ->
 User Release Authorization -> a guarded operator action may execute the
 commit/push/tag. The user remains the only authority for releases; the user is

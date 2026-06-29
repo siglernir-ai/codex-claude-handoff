@@ -3,6 +3,20 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.2.0 - Window Mode Approved Commit
+
+- Added `handoff.ps1 commit-approved`, a guarded local commit executor for Window Mode after
+  `REVIEW_DONE` / `Waiting For: User`.
+- `commit-approved` requires a commit message and the exact `I_AUTHORIZE_COMMIT` token, checks
+  that actual Reviewer and Implementer are present and different, verifies `Changed Files` equals
+  `git status` after excluding local coordination files, then runs only `git add` and `git commit`.
+- `commit-check` is now the dry-run gate for the same approved-commit plan and fails closed when
+  the handoff state, actor audit, or changed-file scope is not safe.
+- No push, tag, release, deploy, database, secret, or local coordination-file commit behavior is
+  automated by this feature.
+- Bash refuses `commit-approved` honestly and points to the PowerShell executor.
+- Tests: `protocol-tests.ps1` covers dry-run safety, missing authorization, missing message,
+  successful approved commit, actor-invariant blocking, and changed-file mismatch blocking.
 ## 2.1.1 - Windows npx Runner Resolution
 
 - Fixed the bounded Claude Code runner on Windows after the v2.1.0 child-process hardening:

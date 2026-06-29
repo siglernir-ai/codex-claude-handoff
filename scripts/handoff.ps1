@@ -366,7 +366,7 @@ function Get-AdapterProfile {
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
             Invocation = "Capture: handoff.ps1 review-run (read-only Codex review, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
             SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only, no --ask-for-approval / --dangerously-bypass / danger-full-access; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
-            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; release stays a separate User authorization";
+            StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; commit/release stay separate User authorizations";
             Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end, read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeReviewer; cycle never does.";
             NextStep = "Run review-run to capture a verdict, then review-apply to set REVIEW_DONE (approved) or READY_FOR_IMPLEMENTATION (blocked)."
         }
@@ -437,6 +437,15 @@ function Invoke-Adapters {
         Write-Host "Enable next: $($adapter.NextStep)"
         Write-Host ""
     }
+    Write-Host "Capability:  Approved commit executor"
+    Write-Host "Callable:    yes (PowerShell only)"
+    Write-Host "States:      REVIEW_DONE with Waiting For: User"
+    Write-Host "Invocation:  commit-check [-Message `"<msg>`"]; commit-approved -Message `"<msg>`" -Authorize `"I_AUTHORIZE_COMMIT`""
+    Write-Host "Safety:      Exact user authorization token; Reviewer != Implementer; Changed Files == git status; commits only approved files; no push/tag/deploy/db/secrets."
+    Write-Host "Stop:        User Commit Authorization until token is supplied; Environment/Preflight when unavailable."
+    Write-Host "User auth:   yes, exact token required for execution"
+    Write-Host "Enable next: Use commit-check for dry run; use commit-approved only after independent review has set REVIEW_DONE."
+    Write-Host ""
     Write-Host "Capability:  Authorized release executor"
     Write-Host "Callable:    yes (PowerShell only)"
     Write-Host "States:      REVIEW_DONE with Waiting For: User"
@@ -454,10 +463,10 @@ function Get-StopCategoryLine {
     param([string]$ForState, [string]$ActorTool, [bool]$Automation = $false)
     if ($ActorTool -eq "User") {
         if ($ForState -eq "REVIEW_DONE") {
-            return "Stop category: User Release Authorization - approve the release; technical readiness was attested by the Reviewer."
+            return "Stop category: User Commit Authorization - approve the guarded commit; technical readiness was attested by the Reviewer."
         }
         if ($ForState -eq "IMPLEMENTED") {
-            return "Stop category: User Release Authorization - this work did not require Reviewer review; check it yourself before approving the commit."
+            return "Stop category: User Commit Authorization - this work did not require Reviewer review; check it yourself before approving the commit."
         }
         return "Stop category: User Decision - see AI_HANDOFF.md."
     }
@@ -484,7 +493,7 @@ $WaitingFor    = $HandoffStatus.WaitingFor
 $CurrentTask   = $HandoffStatus.CurrentTask
 
 $CommitStatus = switch ($State) {
-    "REVIEW_DONE" { "ALLOWED - the Reviewer attested technical readiness; the remaining step is your release authorization. Commit only the files listed under Changed Files." }
+    "REVIEW_DONE" { "ALLOWED - the Reviewer attested technical readiness; the remaining step is your commit authorization. Commit only the files listed under Changed Files." }
     "IMPLEMENTED" { "ALLOWED - no Reviewer review required. Review the work before committing." }
     default       { "Blocked - $State requires action before committing." }
 }
@@ -529,8 +538,8 @@ $ActionMap = @{
     }
     "REVIEW_DONE"              = @{
         Role   = "User"
-        Action = "Release authorization: the Reviewer attested technical readiness. Approve and run the commit/push yourself. Do not commit AI_HANDOFF.md."
-        After  = "No handoff update required. Commit only the files listed under Changed Files."
+        Action = "Commit authorization: the Reviewer attested technical readiness. Approve the guarded commit if satisfied. Do not commit AI_HANDOFF.md."
+        After  = "No handoff update required. Commit only the files listed under Changed Files; push remains a separate user decision."
     }
     "QUESTION_FOR_MASTER"      = @{
         Role   = "Master"
@@ -723,132 +732,19 @@ function Invoke-Start {
 }
 
 function Invoke-CommitCheck {
-    Write-Host ""
-
-    if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
-        # Parse handoff Changed Files. Only markdown bullet lines ("- path") are files;
-        # skip group headings ("New (6):", "Modified (26):"), the "Total:" summary, and notes.
-        $localIgnored  = $LocalHandoffFiles
-        $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
-        $commitFiles = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in $changedFilesLines) {
-            $trimmed = $line.Trim()
-            if ($trimmed -notmatch '^-\s+') { continue }
-            $entry = $trimmed -replace '^-\s+', '' -replace '`', ''
-            if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
-            $entry = $entry.Trim()
-            if ($entry -ne "" -and $entry -ne "None yet" -and ($localIgnored -notcontains $entry)) {
-                $commitFiles.Add($entry)
-            }
-        }
-
-        # Also extract file guidance from Next Recommended Step (commit-scope lines).
-        # Track raw mentions (including AI_HANDOFF.md) so stale guidance is not silently dropped.
-        $nextStepLines   = Get-SectionLines -Lines $Lines -Heading "Next Recommended Step"
-        $nsRawMentioned  = [System.Collections.Generic.List[string]]::new()
-        foreach ($nsLine in $nextStepLines) {
-            if ($nsLine -imatch 'commit only|AI_HANDOFF\.md only') {
-                $tokens = [regex]::Matches($nsLine, '[\w./\\-]+\.\w+')
-                foreach ($token in $tokens) {
-                    $f = $token.Value.Trim()
-                    if ($f -ne "") { $nsRawMentioned.Add($f) }
-                }
-            }
-        }
-        # Merge real (non-handoff) NS files into commitFiles
-        foreach ($f in $nsRawMentioned) {
-            if ($f -ne "AI_HANDOFF.md" -and -not $commitFiles.Contains($f)) { $commitFiles.Add($f) }
-        }
-        # Stale NS indicator: NS has commit-scope guidance but mentions only AI_HANDOFF.md
-        $nsHasStaleGuidance = ($nsRawMentioned.Count -gt 0) -and
-            (($nsRawMentioned | Where-Object { $_ -ne "AI_HANDOFF.md" }).Count -eq 0)
-
-        # Get actual changed files from git status --short (modified AND new/untracked),
-        # excluding local ignored handoff/request files.
-        $actualTracked = [System.Collections.Generic.List[string]]::new()
-        try {
-            # --untracked-files=all expands untracked directories so new files under
-            # new directories (e.g. .ai/roles/ROLE_ASSIGNMENT.md) are listed individually
-            # rather than collapsed to the directory name.
-            $gitLines = & git status --short --untracked-files=all 2>$null
-            foreach ($gitLine in $gitLines) {
-                if ($gitLine.Length -lt 3) { continue }
-                $filePart = $gitLine.Substring(3).Trim()
-                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
-                if ($filePart -ne "" -and $localIgnored -notcontains $filePart) {
-                    $actualTracked.Add($filePart)
-                }
-            }
-        } catch {
-            # git unavailable - skip mismatch check
-        }
-
-        # Clean tree: no tracked source changes to commit
-        if ($actualTracked.Count -eq 0) {
-            Write-Host "Commit: No tracked changes to commit."
-            Write-Host "Working tree is clean."
-            Write-Host ""
-            return
-        }
-
-        # Compare sets to detect mismatch (Test-SameFileSet is null-safe for empty lists)
-        $mismatch = $false
-        if ($actualTracked.Count -gt 0) {
-            $mismatch = -not (Test-SameFileSet -Expected $commitFiles -Actual $actualTracked)
-            # Also warn if NS explicitly says commit only AI_HANDOFF.md while real files changed
-            if (-not $mismatch -and $nsHasStaleGuidance) { $mismatch = $true }
-        }
-
-        Write-Host "Commit: ALLOWED - the Reviewer attested technical readiness."
-        Write-Host "Stop category: User Release Authorization - you approve the release; running the commands is an Operator Manual Action."
+    $plan = Get-CommitPlan
+    Show-CommitPlan -CommitMessage $Message -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "commit-check: blocked."
+        foreach ($err in $plan.Errors) { Write-Host "Reason: $err" }
+        Write-Host "No git mutations were run."
         Write-Host ""
-
-        if ($mismatch) {
-            Write-Host "Handoff suggested files:"
-            if ($commitFiles.Count -eq 0 -and $nsHasStaleGuidance) {
-                Write-Host "  (none - Next Recommended Step references only AI_HANDOFF.md)"
-            } elseif ($commitFiles.Count -eq 0) {
-                Write-Host "  (none - handoff only lists AI_HANDOFF.md)"
-            } else {
-                foreach ($f in $commitFiles) { Write-Host "  $f" }
-            }
-            Write-Host ""
-            Write-Host "Actual changed tracked files:"
-            foreach ($f in $actualTracked) { Write-Host "  $f" }
-            Write-Host ""
-            Write-Host "WARNING:"
-            Write-Host "The handoff file list does not match git status."
-            Write-Host "Confirm the correct commit scope manually before committing."
-        } else {
-            Write-Host "Files to commit:"
-            foreach ($f in $commitFiles) { Write-Host "  $f" }
-            Write-Host ""
-            $fileArgs = $commitFiles -join " "
-            Write-Host "Suggested commands (reference only - run these yourself):"
-            Write-Host "  git add $fileArgs"
-            Write-Host '  git commit -m "<your commit message>"'
-            Write-Host "  git push"
-            Write-Host ""
-            Write-Host "These commands are shown for reference only. Run them yourself after confirming the file list."
-        }
+        exit 1
     }
-    else {
-        Write-Host "Commit: Not yet allowed."
-        Write-Host "State: $State - Waiting For: $WaitingFor"
-        $reason = switch ($State) {
-            "READY_FOR_REVIEW"         { "Waiting for the Reviewer to review." }
-            "PLAN_READY_FOR_REVIEW"    { "Waiting for the Reviewer to review the plan." }
-            "READY_FOR_IMPLEMENTATION" { "Waiting for the Implementer to implement." }
-            "PLAN_REQUIRED"            { "Waiting for the Implementer to write a plan." }
-            "NEEDS_INVESTIGATION"      { "Waiting for the Implementer to investigate." }
-            "NEEDS_ANALYSIS"           { "Waiting for the Master to analyze." }
-            "BLOCKED"                  { "Work is blocked. Resolve the issue in AI_HANDOFF.md." }
-            "WAITING_FOR_USER"         { "User decision or approval required. See AI_HANDOFF.md." }
-            default                    { "Inspect AI_HANDOFF.md for details." }
-        }
-        Write-Host "Reason: $reason"
-    }
-
+    Write-Host "commit-check: ready for explicit authorization."
+    Write-Host "To execute from Codex Window Mode after user approval, run:"
+    $shownMessage = if ([string]::IsNullOrWhiteSpace($Message)) { "<message>" } else { $Message }
+    Write-Host "  handoff.ps1 commit-approved -Message `"$shownMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
     Write-Host ""
 }
 
@@ -1067,6 +963,139 @@ function Get-ReleasePlan {
         GitFiles = $gitState.Files
         TaskActors = $taskActors
     }
+}
+
+function Get-CommitPlan {
+    $commitFiles = Get-ReleaseChangedFiles
+    $gitState = Get-GitChangedFilesForRelease
+    $taskActors = Get-TaskActors
+
+    $ok = $true
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if ($State -ne "REVIEW_DONE" -or $WaitingFor -ne "User") {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must be State: REVIEW_DONE and Waiting For: User before approved commit.")
+    }
+    if ($taskActors.ImplementerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Implementer for commit audit.")
+    }
+    if ($taskActors.ReviewerCount -ne 1) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer for commit audit.")
+    }
+    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+        $ok = $false
+        $errors.Add("Commit audit invariant violation: actual Reviewer must not equal actual Implementer.")
+    }
+    if (-not $gitState.Ok) {
+        $ok = $false
+        $errors.Add("Could not read git status.")
+    }
+    if ($commitFiles.Count -eq 0) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files has no committable files.")
+    }
+    if ($gitState.Ok -and $gitState.Files.Count -eq 0) {
+        $ok = $false
+        $errors.Add("Working tree has no committable changes after excluding local coordination files.")
+    }
+    if ($gitState.Ok -and -not (Test-SameFileSet -Expected $commitFiles -Actual $gitState.Files)) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files.")
+    }
+
+    return @{
+        Ok = $ok
+        Errors = $errors
+        CommitFiles = $commitFiles
+        GitFiles = $gitState.Files
+        TaskActors = $taskActors
+    }
+}
+
+function Show-CommitPlan {
+    param([string]$CommitMessage, [hashtable]$Plan)
+
+    Write-Host ""
+    Write-Host "Approved commit plan"
+    Write-Host "Commit message: $(if ([string]::IsNullOrWhiteSpace($CommitMessage)) { '(required for commit-approved)' } else { $CommitMessage })"
+    Write-Host "State:          $State"
+    Write-Host "Waiting For:    $WaitingFor"
+    Write-Host "Current Task:   $CurrentTask"
+    Write-Host "Global binding Reviewer:    $($Binding.Reviewer)"
+    Write-Host "Global binding Implementer: $($Binding.Implementer)"
+    Write-Host "Actual Reviewer:            $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
+    Write-Host "Actual Implementer:         $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    Write-Host ""
+
+    Write-Host "Files from AI_HANDOFF.md Changed Files (local coordination files excluded):"
+    if ($Plan.CommitFiles.Count -eq 0) {
+        Write-Host "  (none)"
+    } else {
+        foreach ($f in $Plan.CommitFiles) { Write-Host "  $f" }
+    }
+    Write-Host ""
+    Write-Host "Git status files to commit (local coordination files excluded):"
+    if ($Plan.GitFiles.Count -eq 0) {
+        Write-Host "  (none)"
+    } else {
+        foreach ($f in $Plan.GitFiles) { Write-Host "  $f" }
+    }
+    Write-Host ""
+
+    Write-Host "Exact mutating commands if authorized:"
+    Write-Host "  git add -- <files listed above>"
+    Write-Host "  git commit -m `"$CommitMessage`""
+    Write-Host ""
+    Write-Host "Safety: no git push, no git tag, no deploy/db/secrets, and local coordination files are excluded."
+    Write-Host ""
+}
+
+function Invoke-CommitApproved {
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        Write-Host ""
+        Write-Host "commit-approved: blocked."
+        Write-Host "Reason: Missing -Message."
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    $expectedToken = "I_AUTHORIZE_COMMIT"
+    if ($Authorize -ne $expectedToken) {
+        Write-Host ""
+        Write-Host "commit-approved: blocked."
+        Write-Host "Reason: Missing exact authorization token."
+        Write-Host "Expected: -Authorize `"$expectedToken`""
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    $plan = Get-CommitPlan
+    Show-CommitPlan -CommitMessage $Message -Plan $plan
+    if (-not $plan.Ok) {
+        Write-Host "commit-approved: blocked."
+        foreach ($err in $plan.Errors) { Write-Host "Reason: $err" }
+        Write-Host "No git mutations were run."
+        Write-Host ""
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "Authorization accepted. Creating approved commit."
+    $fileArray = [string[]]$plan.CommitFiles
+    & git add -- @fileArray
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git add"; exit 1 }
+    & git commit -m $Message
+    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git commit"; exit 1 }
+
+    Write-Host ""
+    Write-Host "commit-approved: complete."
+    Write-Host "No push/tag/release action was run."
+    Write-Host "Next step: continue with the next handoff task, or push manually when you decide."
+    Write-Host ""
 }
 
 function Show-ReleasePlan {
@@ -2133,9 +2162,9 @@ function Invoke-ReviewApply {
     )
     if ($verdict.Verdict -eq "APPROVED") {
         $nextStepBody = @(
-            "- User: the Reviewer (Codex) attested technical readiness (REVIEW_DONE). Grant release",
-            "  authorization and perform the commit/push yourself; do not commit AI_HANDOFF.md. The",
-            "  guarded executor is 'handoff.ps1 release-check' then 'handoff.ps1 release'."
+            "- User: the Reviewer (Codex) attested technical readiness (REVIEW_DONE). Grant commit",
+            "  authorization, then use 'handoff.ps1 commit-approved' to commit only Changed Files.",
+            "  Do not commit AI_HANDOFF.md. Push/release remains a separate user decision."
         )
     } else {
         $nextStepBody = @(
@@ -2170,8 +2199,8 @@ function Invoke-ReviewApply {
     Write-Host ""
     Write-Host "Next steps:"
     if ($verdict.Verdict -eq "APPROVED") {
-        Write-Host "  1. User: grant release authorization; the Reviewer attested technical readiness."
-        Write-Host "  2. Use handoff.ps1 release-check / release for the guarded executor when ready."
+        Write-Host "  1. User: grant commit authorization; the Reviewer attested technical readiness."
+        Write-Host "  2. Use handoff.ps1 commit-check, then commit-approved with the exact authorization token when ready."
     } else {
         Write-Host "  1. Implementer (Claude Code): address the BLOCKED findings, then return to READY_FOR_REVIEW."
     }
@@ -2760,16 +2789,17 @@ function Invoke-Menu {
     Write-Host "2. Continue next turn             - prepare prompt for the Master/Implementer if needed"
     Write-Host "3. Show status                    - show current state and next actor"
     Write-Host "4. Check commit                   - verify whether commit is allowed"
-    Write-Host "5. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
-    Write-Host "6. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
-    Write-Host "7. Show adapter status            - callable/manual automation status"
-    Write-Host "8. Check authorized release       - dry-run release plan (release-check)"
-    Write-Host "9. Check sequence advance         - dry-run local sequence advance (sequence-check)"
-    Write-Host "10. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
-    Write-Host "11. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
-    Write-Host "12. Check Codex Master             - dry-run Codex Master capture plan (master-check)"
-    Write-Host "13. Apply captured Master route    - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
-    Write-Host "14. Exit"
+    Write-Host "5. Create approved commit         - commit reviewed files after explicit authorization"
+    Write-Host "6. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
+    Write-Host "7. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
+    Write-Host "8. Show adapter status            - callable/manual automation status"
+    Write-Host "9. Check authorized release       - dry-run release plan (release-check)"
+    Write-Host "10. Check sequence advance         - dry-run local sequence advance (sequence-check)"
+    Write-Host "11. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
+    Write-Host "12. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
+    Write-Host "13. Check Codex Master             - dry-run Codex Master capture plan (master-check)"
+    Write-Host "14. Apply captured Master route    - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
+    Write-Host "15. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -2781,15 +2811,22 @@ function Invoke-Menu {
         "2" { Invoke-Next -MenuMode $true }
         "3" { Invoke-Status }
         "4" { Invoke-CommitCheck }
-        "5" { Invoke-Cycle }
-        "6" { Invoke-Loop }
-        "7" { Invoke-Adapters }
-        "8" { Invoke-ReleaseCheck }
-        "9" { Invoke-SequenceCheck }
-        "10" { Invoke-ReviewCheck }
-        "11" { Invoke-ReviewApply }
-        "12" { Invoke-MasterCheck }
-        "13" { Invoke-MasterApply }
+        "5" {
+            $msg = Read-Host "Commit message"
+            $auth = Read-Host 'Type I_AUTHORIZE_COMMIT to commit reviewed files'
+            $script:Message = $msg
+            $script:Authorize = $auth
+            Invoke-CommitApproved
+        }
+        "6" { Invoke-Cycle }
+        "7" { Invoke-Loop }
+        "8" { Invoke-Adapters }
+        "9" { Invoke-ReleaseCheck }
+        "10" { Invoke-SequenceCheck }
+        "11" { Invoke-ReviewCheck }
+        "12" { Invoke-ReviewApply }
+        "13" { Invoke-MasterCheck }
+        "14" { Invoke-MasterApply }
         "14" { }
         default {
             Write-Host ""
@@ -3154,10 +3191,10 @@ function Invoke-Loop {
     }
     if ($IncludeReviewer) {
         Write-Host "Reviewer mode:      -IncludeReviewer ON - the Codex Reviewer's READY_FOR_REVIEW turn will be auto-run in-session (read-only review-run capture + review-apply). APPROVED stops at REVIEW_DONE / Waiting For: User; BLOCKED returns to READY_FOR_IMPLEMENTATION and the loop continues under MaxTurns/budget."
-        Write-Host "Never automated:    User turns, commit/push/tag/deploy/db/secrets (Reviewer release authorization is still the User's)."
+        Write-Host "Never automated:    User turns, push/tag/deploy/db/secrets. Commit requires explicit commit-approved authorization."
     } else {
         Write-Host "Reviewer mode:      -IncludeReviewer OFF (default) - loop stops at the Reviewer turn and every other non-Implementer turn."
-        Write-Host "Never automated:    User turns, commit/push/tag/deploy/db/secrets."
+        Write-Host "Never automated:    User turns, push/tag/deploy/db/secrets. Commit requires explicit commit-approved authorization."
     }
     Write-Host ""
     Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
@@ -3459,6 +3496,7 @@ switch ($Command) {
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
+    "commit-approved" { Invoke-CommitApproved }
     "release-check" { Invoke-ReleaseCheck }
     "release"      { Invoke-Release }
     "sequence-check"   { Invoke-SequenceCheck }
@@ -3484,7 +3522,10 @@ switch ($Command) {
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
-            Write-Host "  commit-check              Show whether a commit is allowed and what to commit."
+            Write-Host "  commit-check [-Message `"<msg>`"]"
+            Write-Host "                            Dry-run the guarded commit plan after REVIEW_DONE. Never mutates git."
+            Write-Host "  commit-approved -Message `"<msg>`" -Authorize `"I_AUTHORIZE_COMMIT`""
+            Write-Host "                            Create the approved local commit after REVIEW_DONE. No push/tag/release."
             Write-Host "  release-check -Version vX.Y.Z"
             Write-Host "                            Dry-run the guarded release plan. Never mutates git."
             Write-Host "  release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""

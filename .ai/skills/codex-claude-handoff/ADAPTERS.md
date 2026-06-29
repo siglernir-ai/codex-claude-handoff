@@ -36,7 +36,17 @@ orchestrator exists.
 |---|---|---|---|---|---|---|---|
 | Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
-| Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; release stays a separate User authorization |
+| Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
+
+## Approved Commit Execution Adapter
+
+Commit execution is an authorized operator action, not a protocol role turn. It is
+documented here because Window Mode needs one guarded local capability after Reviewer
+approval without forcing the user to type raw git commands.
+
+| Capability | Callable | Eligible state | Invocation | Safety limits | Stop category when unavailable or unauthorized | User authorization required |
+|---|---|---|---|---|---|---|
+| Approved commit executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 commit-check [-Message "<msg>"]`. Execute: `handoff.ps1 commit-approved -Message "<msg>" -Authorize "I_AUTHORIZE_COMMIT"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files vs git status match, explicit authorization token, and no push/tag/deploy/db/secrets actions. Commits only the approved Changed Files and excludes local coordination files. | Environment/Preflight when PowerShell is unavailable; User Commit Authorization until the token is supplied | yes, exact token required for execution |
 
 ## Release Execution Adapter
 
@@ -99,12 +109,12 @@ Workflow scripts must resolve automation through this adapter model:
    enablement step.
 
 The `adapters` command in `scripts/handoff.ps1` and `scripts/handoff.sh` prints
-the current resolved role registry plus the release-executor capability for the
-local project.
+the current resolved role registry plus the approved commit and release executor
+capabilities for the local project.
 
-Release execution is not a role turn and does not approve work. It is a guarded
-operator action after the Reviewer has attested technical readiness and the user
-has supplied the exact release authorization token.
+Commit/release execution is not a role turn and does not approve work. It is a
+guarded operator action after the Reviewer has attested technical readiness and
+the user has supplied the exact authorization token.
 
 For release audit, the executor reads the current task's actual actors from
 `AI_HANDOFF.md`:
@@ -233,12 +243,12 @@ narrowly scoped.
 
 | Capability | Callable | Auto-loop eligible | Eligible state | Invocation | Safety limits | Stop category when blocked | User authorization required |
 |---|---|---|---|---|---|---|---|
-| Automated Reviewer turn (capture + apply) | yes, explicit-command only | no | `READY_FOR_REVIEW` with `Waiting For: Reviewer` | Capture: `handoff.ps1 review-run` (explicit `yes`). Apply: `handoff.ps1 review-apply` (explicit `yes`, or `-Yes` for automation). | All `review-run` guards re-checked at apply time (bound + actual Reviewer is Codex and != actual Implementer; exactly one Task Actors Implementer + Reviewer; Changed Files == git status); the captured verdict must parse to exactly one strict block (one `VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:` matching the current task, non-empty `REASON:`); `review-apply` edits ONLY `AI_HANDOFF.md`; no Codex re-invocation; no git add/commit/push/tag; no deploy/db/secrets; no release action; not auto-run by `loop`/`cycle` by default; since v1.4.0 only `loop -IncludeReviewer` may opt this Reviewer turn into one loop session, and `cycle` never does. | Protocol guard / Environment-Preflight (no usable verdict) - not a user decision; Protocol Repair when a required handoff section is missing. | yes, explicit `yes` (or `-Yes`) before `review-apply`; release stays a separate User authorization |
+| Automated Reviewer turn (capture + apply) | yes, explicit-command only | no | `READY_FOR_REVIEW` with `Waiting For: Reviewer` | Capture: `handoff.ps1 review-run` (explicit `yes`). Apply: `handoff.ps1 review-apply` (explicit `yes`, or `-Yes` for automation). | All `review-run` guards re-checked at apply time (bound + actual Reviewer is Codex and != actual Implementer; exactly one Task Actors Implementer + Reviewer; Changed Files == git status); the captured verdict must parse to exactly one strict block (one `VERDICT:` APPROVED/BLOCKED, `REVIEWER: Codex`, `TASK:` matching the current task, non-empty `REASON:`); `review-apply` edits ONLY `AI_HANDOFF.md`; no Codex re-invocation; no git add/commit/push/tag; no deploy/db/secrets; no release action; not auto-run by `loop`/`cycle` by default; since v1.4.0 only `loop -IncludeReviewer` may opt this Reviewer turn into one loop session, and `cycle` never does. | Protocol guard / Environment-Preflight (no usable verdict) - not a user decision; Protocol Repair when a required handoff section is missing. | yes, explicit `yes` (or `-Yes`) before `review-apply`; commit/release stay separate User authorizations |
 
 State transitions applied by `review-apply`:
 
 - `VERDICT: APPROVED` -> `State: REVIEW_DONE`, `Waiting For: User`. The Reviewer attests
-  technical readiness; the user still grants release authorization. `review-apply` performs
+  technical readiness; the user still grants commit authorization. `review-apply` performs
   NO release action.
 - `VERDICT: BLOCKED` -> `State: READY_FOR_IMPLEMENTATION`, `Waiting For: Implementer`, with
   the captured `REASON` recorded under Last Update so the Implementer sees why.

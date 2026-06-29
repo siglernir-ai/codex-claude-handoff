@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.1.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.2.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -320,7 +320,7 @@ Check "Release executor advertised as PowerShell-only, REVIEW_DONE-gated" (($r.O
 Write-Host "[4] Stop categories"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
-Check "REVIEW_DONE prints User Release Authorization stop category" ($r.Out -match "Stop category: User Release Authorization")
+Check "REVIEW_DONE prints User Commit Authorization stop category" ($r.Out -match "Stop category: User Commit Authorization")
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
 Check "Callable-tool handoff prints Operator Manual Action stop category" ($r.Out -match "Stop category: Operator Manual Action")
@@ -344,6 +344,46 @@ $badHandoff = $badHandoff -replace "- Reviewer: Codex", "- Reviewer: Claude Code
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v0.20.0")
 Check "release-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "Reviewer must not equal actual Implementer"))
+
+# === 5B. Approved commit executor guards (commit-check / commit-approved) ===
+Write-Host "[5B] Approved commit executor guards (commit-check / commit-approved)"
+$commitHandoff = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
+$commitHandoff = $commitHandoff -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- COMMIT_TARGET.md"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $commitHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "COMMIT_TARGET.md") -Value "# approved commit fixture" -Encoding utf8
+$beforeCommits = (& git -C $fx rev-list --all --count 2>$null)
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "Complete approved commit fixture")
+$afterCommits = (& git -C $fx rev-list --all --count 2>$null)
+Check "commit-check allows matching REVIEW_DONE scope without mutating git" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready") -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
+
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-approved", "-Message", "Complete approved commit fixture")
+$afterBlockedCommits = (& git -C $fx rev-list --all --count 2>$null)
+Check "commit-approved requires exact authorization token" (($r.Code -eq 1) -and ($r.Out -match "Missing exact authorization token") -and ("$afterBlockedCommits".Trim() -eq "$beforeCommits".Trim()))
+
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-approved", "-Authorize", "I_AUTHORIZE_COMMIT")
+$afterMissingMessageCommits = (& git -C $fx rev-list --all --count 2>$null)
+Check "commit-approved requires a commit message" (($r.Code -eq 1) -and ($r.Out -match "Missing -Message") -and ("$afterMissingMessageCommits".Trim() -eq "$beforeCommits".Trim()))
+
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-approved", "-Message", "Complete approved commit fixture", "-Authorize", "I_AUTHORIZE_COMMIT")
+$finalCommits = (& git -C $fx rev-list --all --count 2>$null)
+$statusAfterCommit = (& git -C $fx status --short --untracked-files=all 2>$null | Out-String)
+$headFiles = (& git -C $fx show --name-only --format= HEAD 2>$null | Out-String)
+Check "commit-approved commits only the reviewed Changed Files" (($r.Code -eq 0) -and ($r.Out -match "commit-approved: complete") -and ([int]"$finalCommits".Trim() -eq ([int]"$beforeCommits".Trim() + 1)) -and ($statusAfterCommit.Trim() -eq "") -and ($headFiles -match "COMMIT_TARGET.md") -and ($headFiles -notmatch "AI_HANDOFF.md"))
+
+$badCommitHandoff = $commitHandoff -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badCommitHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "COMMIT_TARGET.md") -Value "# approved commit fixture" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "Bad actor fixture")
+Check "commit-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "Reviewer must not equal actual Implementer"))
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $commitHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "COMMIT_TARGET.md") -Value "# approved commit fixture" -Encoding utf8
+Set-Content -Path (Join-Path $fx "EXTRA.md") -Value "# extra" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "Mismatch fixture")
+Check "commit-check blocks when Changed Files does not match git status" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
 
 # === 6. Sequence advance guards (fail closed) ===
 Write-Host "[6] Sequence advance guards (sequence-check)"
