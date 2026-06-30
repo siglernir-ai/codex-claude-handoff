@@ -40,7 +40,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `CODEX.md` | Codex entry pointer - resolves Codex's current role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
-| `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, model/subagent evidence rules, and continuity artifacts |
+| `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, command transparency, model/subagent evidence rules, and continuity artifacts |
 | `README.md` | Human-facing overview of this folder |
 | `VERSION` | Installed protocol version |
 

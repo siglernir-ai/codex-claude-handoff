@@ -1,6 +1,6 @@
 # Claude Execution Policy
 
-Since v2.3.0. This file defines how the protocol records Claude Code execution context
+Since v2.3.0; expanded in v2.4.0. This file defines how the protocol records Claude Code execution context
 without hard-coding provider model names into the method.
 
 ## Purpose
@@ -42,7 +42,7 @@ After each Implementer turn, Claude should report these fields in its response a
 - Skills/capabilities consulted: relevant project/global Claude skills or `none needed`
 - Why / decisions / risks: concise rationale for the implementation path
 
-If evidence is not directly available, write `unknown` or `not observed`. Never infer a concrete model,
+If evidence is not directly available, write `unknown/not exposed` or `not observed`. Strip ANSI/control noise from observed model strings before recording them. Never infer a concrete model,
 subagent, or tool invocation from silence.
 
 ## Continuity Artifacts
@@ -83,3 +83,24 @@ them and the task warrants delegation. The required behavior is evidence discipl
 
 Future versions may define a project-local `.claude/agents/` set. Until then, this file requires auditability,
 not forced delegation.
+## Command Transparency
+
+Since v2.4.0, automated CLI Implementer turns record sanitized invocation evidence.
+This is not a raw terminal transcript. It is a safe, local record of how the handoff
+adapter invoked Claude Code.
+
+Required command evidence surfaces:
+
+- `CLAUDE_IMPLEMENTER_COMMAND.md` for the latest human-readable sanitized invocation
+- `CLAUDE_IMPLEMENTER.jsonl.commands[]` for structured append-only command evidence
+
+Minimum `commands[]` fields:
+
+- `cmd`: sanitized command string; redact prompt, secrets, tokens, credentials, and sensitive arguments
+- `exitCode`: process exit code when available
+- `purpose`: why the command was run
+- `sanitized`: boolean, must be true for stored command evidence
+- `redactions`: list of redacted field categories
+
+Do not log raw secrets, tokens, credential-bearing commands, or full prompt-bearing invocations.
+When in doubt, redact and preserve only the command name, purpose, and safe flags.

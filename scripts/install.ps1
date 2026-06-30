@@ -53,8 +53,8 @@ foreach ($FileName in $RequiredTemplates) {
 $GitignorePath = Join-Path $TargetPath ".gitignore"
 
 if (-not (Test-Path $GitignorePath)) {
-    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md`nCODEX_REVIEW.jsonl`nCODEX_REVIEW_LAST.md`nCODEX_MASTER.jsonl`nCODEX_MASTER_LAST.md`nCLAUDE_IMPLEMENTER.jsonl`nCLAUDE_IMPLEMENTER_LAST.md`nIMPLEMENTER_CLI_BRIEF.md" -Encoding utf8
-    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, CODEX_MASTER_LAST.md, CLAUDE_IMPLEMENTER.jsonl, CLAUDE_IMPLEMENTER_LAST.md, and IMPLEMENTER_CLI_BRIEF.md rules"
+    Set-Content -Path $GitignorePath -Value "# Local AI handoff context`nAI_HANDOFF.md`nNEXT_TURN.md`nUSER_REQUEST.md`nHANDOFF_LOOP.log`nAI_SEQUENCE.md`nCODEX_REVIEW.jsonl`nCODEX_REVIEW_LAST.md`nCODEX_MASTER.jsonl`nCODEX_MASTER_LAST.md`nCLAUDE_IMPLEMENTER.jsonl`nCLAUDE_IMPLEMENTER_LAST.md`nCLAUDE_IMPLEMENTER_COMMAND.md`nIMPLEMENTER_CLI_BRIEF.md" -Encoding utf8
+    Write-Host "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, CODEX_MASTER_LAST.md, CLAUDE_IMPLEMENTER.jsonl, CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, and IMPLEMENTER_CLI_BRIEF.md rules"
 }
 else {
     $GitignoreContent = Get-Content -Path $GitignorePath -Raw
@@ -117,6 +117,11 @@ else {
         $addedRules.Add("CLAUDE_IMPLEMENTER_LAST.md")
     }
 
+    if ($lines -notcontains "CLAUDE_IMPLEMENTER_COMMAND.md") {
+        Add-Content -Path $GitignorePath -Value "CLAUDE_IMPLEMENTER_COMMAND.md"
+        $addedRules.Add("CLAUDE_IMPLEMENTER_COMMAND.md")
+    }
+
     if ($lines -notcontains "IMPLEMENTER_CLI_BRIEF.md") {
         Add-Content -Path $GitignorePath -Value "IMPLEMENTER_CLI_BRIEF.md"
         $addedRules.Add("IMPLEMENTER_CLI_BRIEF.md")
@@ -125,7 +130,7 @@ else {
     if ($addedRules.Count -gt 0) {
         Write-Host "Added to .gitignore: $($addedRules -join ', ')"
     } else {
-        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, CODEX_MASTER_LAST.md, CLAUDE_IMPLEMENTER.jsonl, CLAUDE_IMPLEMENTER_LAST.md, and IMPLEMENTER_CLI_BRIEF.md"
+        Write-Host ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, AI_SEQUENCE.md, CODEX_REVIEW.jsonl, CODEX_REVIEW_LAST.md, CODEX_MASTER.jsonl, CODEX_MASTER_LAST.md, CLAUDE_IMPLEMENTER.jsonl, CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, and IMPLEMENTER_CLI_BRIEF.md"
     }
 }
 

@@ -113,13 +113,14 @@ $ReviewLastName  = "CODEX_REVIEW_LAST.md"
 $MasterJsonlName = "CODEX_MASTER.jsonl"
 $MasterLastName  = "CODEX_MASTER_LAST.md"
 
-# Local Claude Implementer capture artifacts (v2.3.0). Local, gitignored, never committed.
+# Local Claude Implementer capture artifacts (v2.3.0/v2.4.0). Local, gitignored, never committed.
 $ClaudeImplementerJsonlName = "CLAUDE_IMPLEMENTER.jsonl"
 $ClaudeImplementerLastName  = "CLAUDE_IMPLEMENTER_LAST.md"
+$ClaudeImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
 
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName)
 
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
@@ -195,6 +196,69 @@ function Stop-ProcessTree {
     }
 }
 
+function Remove-AnsiEscape {
+    param([string]$Value)
+    if ($null -eq $Value) { return "" }
+    return ([regex]::Replace($Value, "\x1B\[[0-?]*[ -/]*[@-~]", ""))
+}
+
+function Get-ClaudeEvidenceField {
+    param([string]$Text, [string]$Label, [string]$Default = "unknown/not exposed")
+    $clean = Remove-AnsiEscape -Value $Text
+    $pattern = "(?im)^\s*-?\s*" + [regex]::Escape($Label) + "\s*:\s*(.+?)\s*$"
+    $m = [regex]::Match($clean, $pattern)
+    if ($m.Success -and -not [string]::IsNullOrWhiteSpace($m.Groups[1].Value)) {
+        return $m.Groups[1].Value.Trim()
+    }
+    return $Default
+}
+
+function New-ClaudeCommandEvidence {
+    param([int]$ExitCode)
+    return @([ordered]@{
+        cmd = "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text"
+        exitCode = $ExitCode
+        purpose = "run Claude Code Implementer turn through the bounded handoff adapter"
+        sanitized = $true
+        redactions = @("prompt", "budget value")
+    })
+}
+
+function Write-ClaudeCommandCapture {
+    param([string]$Timestamp, [int]$ExitCode, [bool]$TimedOut)
+    try {
+        $commandPath = Join-Path (Get-Location) $ClaudeImplementerCommandName
+        $timeoutText = if ($TimedOut) { "true" } else { "false" }
+        $body = @(
+            "# Claude Implementer Command Capture",
+            "",
+            "- Timestamp: $Timestamp",
+            "- Current Task: $CurrentTask",
+            "- Runner: bounded PowerShell runner",
+            "- Adapter: Claude Code Implementer",
+            "- Sanitized: true",
+            "- Exit Code: $ExitCode",
+            "- Timed Out: $timeoutText",
+            "- Timeout Seconds: $TimeoutSeconds",
+            "- Budget USD: $BudgetUsd",
+            "",
+            "## Sanitized Invocation",
+            "",
+            '```text',
+            "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text",
+            '```',
+            "",
+            "## Redaction Rules",
+            "",
+            "- Prompt content is redacted from the command line view; see CLAUDE_IMPLEMENTER_LAST.md for the captured prompt.",
+            "- Secret-like values, tokens, credentials, and dangerous full commands must be redacted before writing command evidence.",
+            "- This file is local coordination evidence only and must never be committed."
+        )
+        Set-Content -Path $commandPath -Value ($body -join "`n") -Encoding utf8 -ErrorAction Stop
+    } catch {
+        Write-Host "WARNING: could not write Claude Implementer command capture artifact: $_"
+    }
+}
 function Write-ClaudeImplementerCapture {
     param(
         [string]$Prompt,
@@ -208,8 +272,16 @@ function Write-ClaudeImplementerCapture {
         $ts = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
         $lastPath = Join-Path (Get-Location) $ClaudeImplementerLastName
         $jsonlPath = Join-Path (Get-Location) $ClaudeImplementerJsonlName
-        $stdoutForMd = if ([string]::IsNullOrWhiteSpace($StdoutText)) { "(empty)" } else { $StdoutText.TrimEnd() }
+        $cleanStdout = Remove-AnsiEscape -Value $StdoutText
+        $stdoutForMd = if ([string]::IsNullOrWhiteSpace($cleanStdout)) { "(empty)" } else { $cleanStdout.TrimEnd() }
         $stderrForMd = if ([string]::IsNullOrWhiteSpace($StderrText)) { "(empty)" } else { $StderrText.TrimEnd() }
+        $modelPolicyRequested = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model policy requested" -Default "inherit"
+        $modelRequestedViaCli = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model requested via CLI" -Default "none"
+        $actualModelObserved = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Actual model observed" -Default "unknown/not exposed"
+        $modelSource = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model source" -Default "not exposed"
+        $modelConfidence = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model confidence" -Default "low"
+        $commands = New-ClaudeCommandEvidence -ExitCode $ExitCode
+        Write-ClaudeCommandCapture -Timestamp $ts -ExitCode $ExitCode -TimedOut $TimedOut
         $body = @(
             "# Claude Implementer Turn Capture",
             "",
@@ -219,6 +291,19 @@ function Write-ClaudeImplementerCapture {
             "- Current Task: $CurrentTask",
             "- Exit Code: $ExitCode",
             "- Timed Out: $TimedOut",
+            "",
+            "## Command Transparency",
+            "",
+            "- Command Evidence: $ClaudeImplementerCommandName",
+            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text",
+            "",
+            "## Model Evidence",
+            "",
+            "- Requested policy/profile: $modelPolicyRequested",
+            "- Requested concrete model: $modelRequestedViaCli",
+            "- Actual model observed: $actualModelObserved",
+            "- Model source: $modelSource",
+            "- Confidence: $modelConfidence",
             "",
             "## Prompt",
             "",
@@ -249,8 +334,16 @@ function Write-ClaudeImplementerCapture {
             timedOut = $TimedOut
             stdout = $StdoutText
             stderr = $StderrText
+            commands = $commands
+            modelEvidence = [ordered]@{
+                requestedProfile = $modelPolicyRequested
+                requestedConcreteModel = $modelRequestedViaCli
+                actualModelObserved = $actualModelObserved
+                source = $modelSource
+                confidence = $modelConfidence
+            }
         }
-        Add-Content -Path $jsonlPath -Value ($record | ConvertTo-Json -Compress -Depth 4) -Encoding utf8 -ErrorAction Stop
+        Add-Content -Path $jsonlPath -Value ($record | ConvertTo-Json -Compress -Depth 6) -Encoding utf8 -ErrorAction Stop
     } catch {
         Write-Host "WARNING: could not write Claude Implementer capture artifacts: $_"
     }
@@ -264,7 +357,7 @@ function Invoke-ClaudeTurn {
         return 1
     }
 
-    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Do not invent evidence."
+    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()

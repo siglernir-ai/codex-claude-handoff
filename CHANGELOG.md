@@ -3,6 +3,19 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.4.0 - Command and Model Evidence
+
+- Added local command transparency for automated Claude Implementer turns via
+  `CLAUDE_IMPLEMENTER_COMMAND.md` and a structured `commands` array in
+  `CLAUDE_IMPLEMENTER.jsonl`.
+- Command evidence is sanitized by design: prompts, secrets, tokens, credentials,
+  budget values, and sensitive arguments are redacted rather than logged raw.
+- Strengthened model evidence with `source` and `confidence` fields and explicit
+  `unknown/not exposed` behavior when the actual model is not directly visible.
+- Claude Implementer prompts now ask for model source/confidence and ANSI/control-noise
+  cleanup instead of accepting noisy or guessed model names.
+- Tests: `protocol-tests.ps1` covers command capture creation, JSONL command/model fields,
+  timeout command capture, and clean-tree exemption for the new local artifact.
 ## 2.3.0 - Claude Execution Policy and Continuity Capture
 
 - Added `CLAUDE_EXECUTION_POLICY.md` to define dynamic model-policy labels (`inherit`,

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.3.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.4.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -1097,7 +1097,7 @@ Check "cycle still refuses a Reviewer turn (no -IncludeReviewer opt-in for cycle
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
 
-# === 15. Safe Claude process runner and Implementer capture (v2.0.0/v2.3.0) ===
+# === 15. Safe Claude process runner and Implementer capture (v2.0.0/v2.3.0/v2.4.0) ===
 Write-Host "[15] Safe Claude process runner and Implementer capture"
 
 $fastBin = Join-Path $FixtureRoot "fake-npx-fast"
@@ -1140,12 +1140,16 @@ try {
     $runnerSource = Get-Content -Raw -Path $HandoffScript
     Check "bounded Claude runner source keeps the Claude safety flags" (($runnerSource -match "'--permission-mode'") -and ($runnerSource -match "'acceptEdits'") -and ($runnerSource -match "'--disallowed-tools'") -and ($runnerSource -match "'Bash'") -and ($runnerSource -match "'--no-session-persistence'"))
     $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
+    $claudeCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
     $claudeJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"
     $captureText = if (Test-Path $claudeLast) { Get-Content -Raw -Path $claudeLast } else { "" }
+    $commandText = if (Test-Path $claudeCommand) { Get-Content -Raw -Path $claudeCommand } else { "" }
     [string[]]$jsonLines = if (Test-Path $claudeJsonl) { [regex]::Split((Get-Content -Raw -Path $claudeJsonl).Trim(), "`r?`n") | Where-Object { $_ -ne "" } } else { @() }
     $captureRecord = if ($jsonLines.Count -gt 0) { $jsonLines[$jsonLines.Count - 1] | ConvertFrom-Json } else { $null }
-    Check "cycle writes Claude Implementer last capture" ((Test-Path $claudeLast) -and ($captureText -match "FAKE_CLAUDE_FAST_STDOUT") -and ($captureText -match "CLAUDE_EXECUTION_POLICY.md") -and ($captureText -match "Claude Execution Evidence"))
+    Check "cycle writes Claude Implementer last capture" ((Test-Path $claudeLast) -and ($captureText -match "FAKE_CLAUDE_FAST_STDOUT") -and ($captureText -match "CLAUDE_EXECUTION_POLICY.md") -and ($captureText -match "Claude Execution Evidence") -and ($captureText -match "Command Transparency") -and ($captureText -match "Model Evidence"))
+    Check "cycle writes sanitized Claude command capture" ((Test-Path $claudeCommand) -and ($commandText -match "Claude Implementer Command Capture") -and ($commandText -match "<prompt:redacted>") -and ($commandText -match "--permission-mode acceptEdits") -and ($commandText -match "--disallowed-tools Bash") -and ($commandText -match "Sanitized: true"))
     Check "cycle appends Claude Implementer JSONL capture" ((Test-Path $claudeJsonl) -and ($null -ne $captureRecord) -and ($captureRecord.exitCode -eq 0) -and ($captureRecord.timedOut -eq $false) -and ($captureRecord.stdout -match "FAKE_CLAUDE_FAST_STDOUT"))
+    Check "JSONL capture includes command and model evidence" (($null -ne $captureRecord.commands) -and ($captureRecord.commands[0].sanitized -eq $true) -and ($captureRecord.commands[0].cmd -match "<prompt:redacted>") -and ($null -ne $captureRecord.modelEvidence) -and ($captureRecord.modelEvidence.actualModelObserved -eq "unknown/not exposed") -and ($captureRecord.modelEvidence.source -eq "not exposed") -and ($captureRecord.modelEvidence.confidence -eq "low"))
     $r2 = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
     Check "Claude capture artifacts are clean-tree exempt for cycle" (($r2.Code -eq 0) -and ($r2.Out -notmatch "Working tree is not clean"))
 } finally {
@@ -1187,11 +1191,13 @@ try {
     Check "timeout does not transition AI_HANDOFF.md to a false review state" (($before -eq $after) -and ($after -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($after -notmatch "State:\s+READY_FOR_REVIEW"))
     Check "timeout kills the hanging fake Claude before completion" ($markerText -notmatch "finished")
     $timeoutLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
+    $timeoutCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
     $timeoutJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"
     $timeoutText = if (Test-Path $timeoutLast) { Get-Content -Raw -Path $timeoutLast } else { "" }
     [string[]]$timeoutLines = if (Test-Path $timeoutJsonl) { [regex]::Split((Get-Content -Raw -Path $timeoutJsonl).Trim(), "`r?`n") | Where-Object { $_ -ne "" } } else { @() }
     $timeoutRecord = if ($timeoutLines.Count -gt 0) { $timeoutLines[$timeoutLines.Count - 1] | ConvertFrom-Json } else { $null }
     Check "timeout writes Claude Implementer capture as timed out" ((Test-Path $timeoutLast) -and (Test-Path $timeoutJsonl) -and ($timeoutText -match "Timed Out: True") -and ($null -ne $timeoutRecord) -and ($timeoutRecord.timedOut -eq $true))
+    Check "timeout writes Claude command capture as timed out" ((Test-Path $timeoutCommand) -and ((Get-Content -Raw -Path $timeoutCommand) -match "Timed Out: true"))
 } finally {
     $env:Path = $prevPath
     if ($null -eq $prevMarker) { Remove-Item Env:\FAKE_NPX_MARKER -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_MARKER = $prevMarker }

@@ -63,7 +63,7 @@ authorization is required.
 Current local status:
 
 - Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout.
-- Since v2.3.0, Claude Code Implementer turns write local continuity captures (CLAUDE_IMPLEMENTER_LAST.md and CLAUDE_IMPLEMENTER.jsonl) and follow CLAUDE_EXECUTION_POLICY.md for dynamic model-policy labels, model relevance reporting, subagent evidence, and CLI/window context reconstruction. These files are gitignored and clean-tree-exempt.
+- Since v2.3.0, Claude Code Implementer turns write local continuity captures (CLAUDE_IMPLEMENTER_LAST.md and CLAUDE_IMPLEMENTER.jsonl) and follow CLAUDE_EXECUTION_POLICY.md for dynamic model-policy labels, model relevance reporting, subagent evidence, and CLI/window context reconstruction. These files are gitignored and clean-tree-exempt. Since v2.4.0, automated Claude Code Implementer turns also write sanitized command evidence to `CLAUDE_IMPLEMENTER_COMMAND.md` and `CLAUDE_IMPLEMENTER.jsonl.commands[]`, plus model evidence with source/confidence fields.
 - Master bound to Codex is callable for `NEEDS_ANALYSIS` through explicit
   `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. Since v2.1.0 the operator
   may also opt this exact turn into one loop session with `loop -IncludeMaster`
