@@ -3,6 +3,22 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.3.0 - Claude Execution Policy and Continuity Capture
+
+- Added `CLAUDE_EXECUTION_POLICY.md` to define dynamic model-policy labels (`inherit`,
+  `standard`, `high_reasoning`, `cheap_readonly`, and `explicit_user_choice`) without
+  hard-coding vendor model names into the protocol.
+- Claude Code Implementer turns now write local, gitignored continuity artifacts:
+  `CLAUDE_IMPLEMENTER_LAST.md` and `CLAUDE_IMPLEMENTER.jsonl` with prompt, stdout,
+  stderr, exit code, timeout status, state, waiting-for, and current task.
+- The Claude Implementer prompt now asks Claude to reconstruct recent CLI/window context
+  from local captures and to include a concise execution-evidence block covering model
+  relevance, observed/requested model information, subagent evidence, consulted skills,
+  decisions, and risks. The protocol explicitly forbids inventing evidence.
+- Installers and `.gitignore` snippets now include the Claude Implementer capture files
+  and the local `IMPLEMENTER_CLI_BRIEF.md` research note.
+- Tests: `protocol-tests.ps1` asserts Claude capture creation on successful turns,
+  timeout capture on killed turns, and clean-tree exemption for the new local artifacts.
 ## 2.2.0 - Window Mode Approved Commit
 
 - Added `handoff.ps1 commit-approved`, a guarded local commit executor for Window Mode after

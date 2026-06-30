@@ -365,7 +365,7 @@ If this skill is unavailable in a future session, the Master should:
 
 ## When the Implementer Adds Value
 
-The Implementer is the source of truth for what the repository actually does right now. The Master should treat the Implementer as a peer analyst for repo reality, not only as an executor. See `CAPABILITIES.md` for the full agent capability profile.
+The Implementer is the source of truth for what the repository actually does right now. The Master should treat the Implementer as a peer analyst for repo reality, not only as an executor. See `CAPABILITIES.md` for the full agent capability profile and `CLAUDE_EXECUTION_POLICY.md` for Claude execution profiles, continuity artifacts, and model/subagent evidence rules.
 
 The Master should consult the Implementer by default, before finalizing a task, whenever correctness depends on:
 
@@ -408,7 +408,7 @@ When asked, the Implementer should:
 - Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-The Master should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task.
+The Master should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task. For a new project, a changed tool setup, or a meaningful implementation delegation, the Master should read `CAPABILITIES.md` and `CLAUDE_EXECUTION_POLICY.md` before preparing the Claude Implementer turn.
 
 ## Handoff Operator
 

@@ -71,3 +71,10 @@ repository.
 ## How the Master Uses This Profile
 
 Before finalizing a task that touches the live codebase, the Master should check whether the Implementer's strengths above materially reduce risk. If correctness depends on current repo behavior, local implementation details, or verification constraints, the Master should default to a read-only `NEEDS_INVESTIGATION` pass first. See `MASTER.md` -> "When the Implementer Adds Value".
+## Startup Capability Awareness
+
+For new projects or changed tool setups, Codex/Master should read this file together with
+`CLAUDE_EXECUTION_POLICY.md` before delegating meaningful implementation work to Claude Code.
+This lets the Master choose tasks and handoff wording that match Claude Code's current strengths,
+known limits, model-policy needs, and available execution evidence without asking the user to
+repeat that context in every window.

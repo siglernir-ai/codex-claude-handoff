@@ -40,6 +40,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `CODEX.md` | Codex entry pointer - resolves Codex's current role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
+| `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, model/subagent evidence rules, and continuity artifacts |
 | `README.md` | Human-facing overview of this folder |
 | `VERSION` | Installed protocol version |
 
@@ -61,6 +62,7 @@ When this protocol is active, expect these files in the project root:
 - `AI_HANDOFF.md` - current state, which role acts next, changed files, verification, risks, and next step
 - `AI_SEQUENCE.md` - local multi-task ordering artifact (since v0.18.1): ordered task list, per-task status, release checkpoints. Local, gitignored, never committed; see `PROTOCOL_METHOD.md`
 - `.ai/skills/codex-claude-handoff/ADAPTERS.md` - adapter registry for callable/manual automation status (since v0.19.0)
+- `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` - Claude execution policy and continuity evidence (since v2.3.0)
 
 ## Encoding-Safe Handoff Rule
 

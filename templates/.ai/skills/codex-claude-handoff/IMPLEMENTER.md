@@ -7,6 +7,7 @@ follows this file.
 For the shared role split and protocol index, see `SKILL.md` in this folder.
 For the Master + Reviewer role, see `MASTER.md` in this folder.
 For the current role-to-tool binding, see `.ai/roles/ROLE_ASSIGNMENT.md`.
+For Claude execution evidence, model-policy labels, subagent evidence, and CLI/window continuity artifacts, see `CLAUDE_EXECUTION_POLICY.md`.
 The operating method and lifecycle vocabulary are defined in `PROTOCOL_METHOD.md`
 in this folder (since v0.18.0); it does not change Implementer behavior in this file.
 
@@ -30,13 +31,15 @@ Before significant work:
 
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm you hold the Implementer role.
 2. Read `AI_HANDOFF.md` if it exists.
-3. Check:
+3. If present, read `CLAUDE_IMPLEMENTER_LAST.md`, `CODEX_MASTER_LAST.md`, `CODEX_REVIEW_LAST.md`, and recent `HANDOFF_LOOP.log` to reconstruct recent CLI/window context.
+4. Read `.ai/skills/codex-claude-handoff/CAPABILITIES.md` and `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` if present.
+5. Check:
    - `State`
    - `Waiting For`
    - `Current Task`
    - `Next Recommended Step`
-4. Act only if `Waiting For: Implementer`.
-5. If the handoff says another role should act next, stop and report that clearly.
+6. Act only if `Waiting For: Implementer`.
+7. If the handoff says another role should act next, stop and report that clearly.
 
 ## Implementation Rules
 
@@ -47,6 +50,19 @@ Before significant work:
 - Do not modify secrets or local environment files.
 - Do not run deploys, live migrations, database resets or destructive data operations, file deletions, production configuration changes, or secret/env changes without explicit user approval. If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
 
+## Claude Execution Evidence
+
+After each Implementer turn, include a concise execution evidence note in your response and, when updating `AI_HANDOFF.md`, under verification or risks as appropriate:
+
+- Model policy requested: `inherit` / `standard` / `high_reasoning` / `cheap_readonly` / `explicit_user_choice`
+- Model requested via CLI: `none` or the value passed to the CLI
+- Actual model observed: `unknown` unless directly exposed by Claude Code output
+- Model relevance: `relevant` / `not relevant` / `unknown`
+- Subagent evidence: `used` / `not observed` / `unavailable`
+- Skills/capabilities consulted: relevant skills/capabilities or `none needed`
+- Why / decisions / risks: short rationale
+
+Do not invent model, subagent, or skill evidence. Use `unknown` or `not observed` when the evidence is not directly available.
 ## Investigation Mode
 
 When `State: NEEDS_INVESTIGATION` and `Waiting For: Implementer`:

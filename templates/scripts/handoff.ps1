@@ -113,9 +113,13 @@ $ReviewLastName  = "CODEX_REVIEW_LAST.md"
 $MasterJsonlName = "CODEX_MASTER.jsonl"
 $MasterLastName  = "CODEX_MASTER_LAST.md"
 
+# Local Claude Implementer capture artifacts (v2.3.0). Local, gitignored, never committed.
+$ClaudeImplementerJsonlName = "CLAUDE_IMPLEMENTER.jsonl"
+$ClaudeImplementerLastName  = "CLAUDE_IMPLEMENTER_LAST.md"
+
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName)
 
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
@@ -191,6 +195,66 @@ function Stop-ProcessTree {
     }
 }
 
+function Write-ClaudeImplementerCapture {
+    param(
+        [string]$Prompt,
+        [string]$StdoutText,
+        [string]$StderrText,
+        [int]$ExitCode,
+        [bool]$TimedOut
+    )
+
+    try {
+        $ts = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+        $lastPath = Join-Path (Get-Location) $ClaudeImplementerLastName
+        $jsonlPath = Join-Path (Get-Location) $ClaudeImplementerJsonlName
+        $stdoutForMd = if ([string]::IsNullOrWhiteSpace($StdoutText)) { "(empty)" } else { $StdoutText.TrimEnd() }
+        $stderrForMd = if ([string]::IsNullOrWhiteSpace($StderrText)) { "(empty)" } else { $StderrText.TrimEnd() }
+        $body = @(
+            "# Claude Implementer Turn Capture",
+            "",
+            "- Timestamp: $ts",
+            "- State Before Turn: $State",
+            "- Waiting For Before Turn: $WaitingFor",
+            "- Current Task: $CurrentTask",
+            "- Exit Code: $ExitCode",
+            "- Timed Out: $TimedOut",
+            "",
+            "## Prompt",
+            "",
+            '```text',
+            $Prompt.TrimEnd(),
+            '```',
+            "",
+            "## Stdout",
+            "",
+            '```text',
+            $stdoutForMd,
+            '```',
+            "",
+            "## Stderr",
+            "",
+            '```text',
+            $stderrForMd,
+            '```'
+        )
+        Set-Content -Path $lastPath -Value ($body -join "`n") -Encoding utf8 -ErrorAction Stop
+
+        $record = [ordered]@{
+            ts = $ts
+            state = $State
+            waitingFor = $WaitingFor
+            currentTask = $CurrentTask
+            exitCode = $ExitCode
+            timedOut = $TimedOut
+            stdout = $StdoutText
+            stderr = $StderrText
+        }
+        Add-Content -Path $jsonlPath -Value ($record | ConvertTo-Json -Compress -Depth 4) -Encoding utf8 -ErrorAction Stop
+    } catch {
+        Write-Host "WARNING: could not write Claude Implementer capture artifacts: $_"
+    }
+}
 # Run one Claude Code Implementer turn with the standard safety constraints.
 function Invoke-ClaudeTurn {
     if ($TimeoutSeconds -lt 1) {
@@ -200,7 +264,7 @@ function Invoke-ClaudeTurn {
         return 1
     }
 
-    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+    $prompt = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Do not invent evidence."
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
@@ -288,6 +352,7 @@ try {
     if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
     $stderrText = ""
     if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    Write-ClaudeImplementerCapture -Prompt $prompt -StdoutText $stdoutText -StderrText $stderrText -ExitCode $claudeExit -TimedOut $timedOut
     Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
 
     if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {

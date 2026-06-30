@@ -14,7 +14,8 @@ This folder is the canonical shared protocol source for the `codex-claude-handof
 | `ADAPTERS.md` | Adapter registry and automation capability contract (since v0.19.0) |
 | `CODEX.md` | Codex entry pointer - resolves Codex's role(s) and points to the role file |
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role(s) and points to the role file |
-| `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
+| CAPABILITIES.md | Agent capability profile: what each tool is good at and the default role binding |
+| `CLAUDE_EXECUTION_POLICY.md` | Claude model-policy labels, subagent evidence rules, and CLI/window continuity artifacts |
 | `VERSION` | Installed protocol version |
 
 The role-to-tool binding lives one level up:

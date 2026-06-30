@@ -65,6 +65,7 @@ SKILL_FILES=(
     ".ai/skills/codex-claude-handoff/CODEX.md"
     ".ai/skills/codex-claude-handoff/CLAUDE.md"
     ".ai/skills/codex-claude-handoff/CAPABILITIES.md"
+    ".ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md"
     ".agents/skills/codex-claude-handoff/SKILL.md"
     ".claude/skills/codex-claude-handoff/SKILL.md"
 )
@@ -89,10 +90,10 @@ done
 
 # .gitignore: create or update
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"
-RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md" "CODEX_REVIEW.jsonl" "CODEX_REVIEW_LAST.md" "CODEX_MASTER.jsonl" "CODEX_MASTER_LAST.md")
+RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md" "CODEX_REVIEW.jsonl" "CODEX_REVIEW_LAST.md" "CODEX_MASTER.jsonl" "CODEX_MASTER_LAST.md" "CLAUDE_IMPLEMENTER.jsonl" "CLAUDE_IMPLEMENTER_LAST.md" "IMPLEMENTER_CLI_BRIEF.md")
 
 if [ ! -f "$GITIGNORE_PATH" ]; then
-    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\nCODEX_REVIEW.jsonl\nCODEX_REVIEW_LAST.md\nCODEX_MASTER.jsonl\nCODEX_MASTER_LAST.md\n' > "$GITIGNORE_PATH"
+    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\nCODEX_REVIEW.jsonl\nCODEX_REVIEW_LAST.md\nCODEX_MASTER.jsonl\nCODEX_MASTER_LAST.md\nCLAUDE_IMPLEMENTER.jsonl\nCLAUDE_IMPLEMENTER_LAST.md\nIMPLEMENTER_CLI_BRIEF.md\n' > "$GITIGNORE_PATH"
     echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
 else
     ADDED=()
