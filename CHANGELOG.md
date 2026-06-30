@@ -3,6 +3,17 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.5.0 - User Next Guidance
+
+- Added `handoff.ps1 user-next`, a read-only user-facing command that prints the single
+  next action for the current handoff state.
+- At `REVIEW_DONE / Waiting For: User`, `user-next` prints the exact guarded
+  `commit-approved` command with a generated commit message and the required authorization
+  token, while preserving the no-push/no-tag/no-deploy safety boundary.
+- For tool-owned states, `user-next` points the user to the next tool and suggests
+  `handoff.ps1 next -Clip` to refresh `NEXT_TURN.md` and copy the handoff prompt.
+- Tests: `protocol-tests.ps1` covers REVIEW_DONE commit guidance and implementation-state
+  next-tool guidance.
 ## 2.4.0 - Command and Model Evidence
 
 - Added local command transparency for automated Claude Implementer turns via

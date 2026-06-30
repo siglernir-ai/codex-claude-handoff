@@ -54,6 +54,10 @@ Behavior is defined by role, not by tool name:
 
 Root `CLAUDE.md` remains the Claude Code operational entry file. It is separate from this skill folder.
 
+## User Guidance
+
+Since v2.5.0, `handoff.ps1 user-next` shows the single next user action for the current state, including the guarded commit command when review is done.
+
 ## Version
 
 See `VERSION` for the installed protocol version.

@@ -728,6 +728,55 @@ $ActionMap = @{
 
 # --- Commands ---
 
+function Get-SafeCommitMessage {
+    $task = if ([string]::IsNullOrWhiteSpace($CurrentTask) -or $CurrentTask -eq "(unknown)") { "handoff task" } else { $CurrentTask }
+    $msg = "Complete $task"
+    $msg = $msg -replace '[\r\n\"]', ''
+    return $msg.Trim()
+}
+
+function Invoke-UserNext {
+    $entry = $ActionMap[$State]
+    $commitMessage = Get-SafeCommitMessage
+    Write-Host ""
+    Write-Host "User Next"
+    Write-Host "State:        $State"
+    Write-Host "Waiting For:  $WaitingFor"
+    Write-Host "Task:         $CurrentTask"
+    Write-Host ""
+
+    if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+        Write-Host "Do this next: approve the guarded local commit if you are satisfied with the review."
+        Write-Host ""
+        Write-Host "Command:"
+        Write-Host "  .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
+        Write-Host "  git status --short --branch"
+        Write-Host ""
+        Write-Host "Safety: commits only AI_HANDOFF.md Changed Files after scope checks; no push/tag/deploy/db/secrets."
+        Write-Host "Do not commit local coordination/evidence files."
+        Write-Host ""
+        return
+    }
+
+    if ($entry) {
+        $role = $entry.Role
+        $actor = Resolve-Actor -Role $role -Binding $Binding
+        $isMismatch = ($WaitingFor -ne "(unknown)") -and ($WaitingFor -ne $role) -and ($WaitingFor -ne $actor)
+        if ($isMismatch) {
+            Write-Host "Do this next: repair the handoff state before continuing."
+            Write-Host "Expected Waiting For: $role ($actor); found: $WaitingFor."
+        } elseif ($actor -eq "User") {
+            Write-Host "Do this next: $($entry.Action)"
+        } else {
+            Write-Host "Do this next: open $actor and paste the standard handoff prompt."
+            Write-Host "Prompt: Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
+            Write-Host "Tip: run '.\scripts\handoff.ps1 next -Clip' to refresh NEXT_TURN.md and copy the prompt."
+        }
+    } else {
+        Write-Host "Do this next: inspect AI_HANDOFF.md manually; the state is not recognized by this protocol version."
+    }
+    Write-Host ""
+}
 function Invoke-Status {
     Write-Host ""
     Write-Host "State:        $State"
@@ -3650,6 +3699,7 @@ function Invoke-Loop {
 
 switch ($Command) {
     "status"       { Invoke-Status }
+    "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
@@ -3677,6 +3727,7 @@ switch ($Command) {
             Write-Host ""
             Write-Host "Commands:"
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
+            Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'

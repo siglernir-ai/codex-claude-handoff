@@ -95,6 +95,8 @@ Current local status:
 - Since v0.19.1.1, release audit uses the current task's structured `Task Actors`
   in `AI_HANDOFF.md`, not only the global role binding used for routing/adapters.
 
+Since v2.5.0, `handoff.ps1 user-next` prints the single next user action for the current state, including the exact guarded `commit-approved` command when a reviewed task is ready to commit.
+
 Run:
 
 ```powershell
@@ -850,7 +852,9 @@ The Reviewer reviews the plan. Outcomes: approve (`READY_FOR_IMPLEMENTATION`), r
 After every Implementer implementation, the Reviewer should verify using safe read-only commands (`git status`, `git diff`, typecheck, lint, tests where available). The Reviewer must compare actual changes against `Changed Files` and detect scope creep or unlisted edits before approving.
 
 Good verification evidence includes:
-- **Commands Run:** list each command and a short result summary (e.g. "git diff: 3 files changed, 28 insertions, 4 deletions")
+- **Commands Since v2.5.0, `handoff.ps1 user-next` prints the single next user action for the current state, including the exact guarded `commit-approved` command when a reviewed task is ready to commit.
+
+Run:** list each command and a short result summary (e.g. "git diff: 3 files changed, 28 insertions, 4 deletions")
 - **Skipped commands:** state why (e.g. "lint: not run - documentation change only")
 - **Manual Check:** state expected vs actual, not just "looks good"
 

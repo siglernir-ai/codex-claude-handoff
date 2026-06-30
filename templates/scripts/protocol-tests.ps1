@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.4.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.5.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -325,6 +325,17 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REV
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
 Check "Callable-tool handoff prints Operator Manual Action stop category" ($r.Out -match "Stop category: Operator Manual Action")
 
+# === 4B. User next guidance ===
+Write-Host "[4B] User next guidance"
+$h = New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "v2.5.0 user flow pilot"
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- USER_NEXT_TARGET.md"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $h; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
+Check "user-next prints guarded commit command for REVIEW_DONE" (($r.Code -eq 0) -and ($r.Out -match "User Next") -and ($r.Out -match "commit-approved") -and ($r.Out -match "I_AUTHORIZE_COMMIT") -and ($r.Out -match "Complete v2.5.0 user flow pilot"))
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.5.0 user flow pilot"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
+Check "user-next points to Implementer tool for implementation state" (($r.Code -eq 0) -and ($r.Out -match "open Claude Code") -and ($r.Out -match "next -Clip"))
 # === 5. Release executor guards (fail closed) ===
 Write-Host "[5] Release executor guards (release-check)"
 # Missing -Version: must block, no git mutation.
