@@ -1327,6 +1327,13 @@ try {
     if ($null -eq $prevHandoff) { Remove-Item Env:\FAKE_HANDOFF -ErrorAction SilentlyContinue } else { $env:FAKE_HANDOFF = $prevHandoff }
 }
 
+# === v2.7.0 Claude Implementer prompt grounding ===
+Write-Host "[grounding] v2.7.0 non-interactive prompt grounding"
+$handoffSource = Get-Content -Raw -Path $HandoffScript
+Check "Invoke-ClaudeTurn prompt declares a non-interactive headless turn" ($handoffSource -match "NON-INTERACTIVE")
+Check "Invoke-ClaudeTurn prompt forbids greeting and asking the operator" (($handoffSource -match "do NOT greet") -and ($handoffSource -match "do NOT ask what to work on"))
+Check "Invoke-ClaudeTurn prompt still requires the Claude Execution Evidence block" ($handoffSource -match "Claude Execution Evidence")
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

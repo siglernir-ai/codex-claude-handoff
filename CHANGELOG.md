@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.7.0 - Claude CLI Prompt Grounding
+
+- Strengthened the automated Claude Implementer prompt with an explicit non-interactive/headless directive.
+- The prompt now tells Claude not to greet, ask what to work on, ask for plugin choices, wait for input, or treat `cycle` as an interactive session start.
+- Preserved existing invocation flags, `-p` prompt delivery, no-op guard behavior, and Claude Execution Evidence capture.
+- Documented the behavior in `ADAPTERS.md` and added protocol tests that assert the grounding directive is present.
 ## 2.6.0 - Cycle No-Op Guard
 
 - Added a fail-closed no-op/no-progress guard for automated Claude Implementer turns through `cycle`, `run-next`, and `loop`.

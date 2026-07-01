@@ -438,3 +438,24 @@ Exit code 7 is reserved for no-op/no-progress and does not collide with the exis
 The guard reads only local state and mutates nothing; it adds no commit/push/tag/deploy/db/secrets path.
 Local coordination artifacts (`AI_HANDOFF.md`, `NEXT_TURN.md`, `HANDOFF_LOOP.log`, and the Claude/Codex
 capture files) never count as source progress. Tested in `protocol-tests.ps1`.
+
+## Claude Implementer Prompt Grounding (v2.7.0)
+
+The automated Claude Code Implementer prompt (built in `Invoke-ClaudeTurn`) opens with an explicit
+non-interactive directive. In headless `-p` mode the turn otherwise inherits the operator's global/project
+Claude context (global `CLAUDE.md`, memory, plugins), whose start-of-session behavior can hijack a thin
+prompt: an observed cycle turn received the prompt and ran in the correct repo but responded with an
+interactive greeting ("what are you working on? which plugins?") and asked the operator a question instead
+of executing the handoff task, so it made no progress (correctly caught by the v2.6.0 no-op guard, exit 7).
+
+To make the turn deterministic regardless of ambient context, the prompt now states up front that this is a
+NON-INTERACTIVE, headless turn with no human to talk to: do not greet, do not ask what to work on, do not
+ask for plugin choices, do not wait for input, and do not treat it as the start of an interactive session.
+It must immediately read `NEXT_TURN.md` and `AI_HANDOFF.md`, follow the current state, and either complete
+the required Implementer action or update `AI_HANDOFF.md` with a protocol-valid blocker/question. The
+Claude Execution Evidence requirement is preserved.
+
+This is a prompt-only change: the invocation flags, `-p` argv delivery, and the safety model are unchanged.
+`--bare` (skipping global/project Claude context entirely) is intentionally NOT used yet - it is a future
+hardening option if a live cycle still greets or asks. Tested in `protocol-tests.ps1` by asserting the
+non-interactive guard text is present in the prompt source.
