@@ -1147,7 +1147,8 @@ try {
     $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.0.0 - Safe Runner Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
     Initialize-FixtureGitBaseline -Dir $fx
     $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
-    Check "cycle -Yes uses bounded Claude runner and succeeds with fake fast npx" (($r.Code -eq 0) -and ($r.Out -match "bounded PowerShell runner") -and ($r.Out -match "FAKE_CLAUDE_FAST_STDOUT"))
+    Check "cycle -Yes runs the bounded Claude runner (fake fast npx stdout captured)" (($r.Out -match "bounded PowerShell runner") -and ($r.Out -match "FAKE_CLAUDE_FAST_STDOUT"))
+    Check "cycle flags a no-op turn (exit 7) when the fake fast npx makes no progress (v2.6.0)" (($r.Code -eq 7) -and ($r.Out -match "no-op"))
     $runnerSource = Get-Content -Raw -Path $HandoffScript
     Check "bounded Claude runner source keeps the Claude safety flags" (($runnerSource -match "'--permission-mode'") -and ($runnerSource -match "'acceptEdits'") -and ($runnerSource -match "'--disallowed-tools'") -and ($runnerSource -match "'Bash'") -and ($runnerSource -match "'--no-session-persistence'"))
     $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
@@ -1162,7 +1163,7 @@ try {
     Check "cycle appends Claude Implementer JSONL capture" ((Test-Path $claudeJsonl) -and ($null -ne $captureRecord) -and ($captureRecord.exitCode -eq 0) -and ($captureRecord.timedOut -eq $false) -and ($captureRecord.stdout -match "FAKE_CLAUDE_FAST_STDOUT"))
     Check "JSONL capture includes command and model evidence" (($null -ne $captureRecord.commands) -and ($captureRecord.commands[0].sanitized -eq $true) -and ($captureRecord.commands[0].cmd -match "<prompt:redacted>") -and ($null -ne $captureRecord.modelEvidence) -and ($captureRecord.modelEvidence.actualModelObserved -eq "unknown/not exposed") -and ($captureRecord.modelEvidence.source -eq "not exposed") -and ($captureRecord.modelEvidence.confidence -eq "low"))
     $r2 = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
-    Check "Claude capture artifacts are clean-tree exempt for cycle" (($r2.Code -eq 0) -and ($r2.Out -notmatch "Working tree is not clean"))
+    Check "Claude capture artifacts are clean-tree exempt for cycle (2nd run still reaches the turn)" (($r2.Code -eq 7) -and ($r2.Out -notmatch "Working tree is not clean"))
 } finally {
     $env:Path = $prevPath
     if ($null -eq $prevArgv) { Remove-Item Env:\FAKE_NPX_ARGV -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_ARGV = $prevArgv }
@@ -1214,6 +1215,117 @@ try {
     if ($null -eq $prevMarker) { Remove-Item Env:\FAKE_NPX_MARKER -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_MARKER = $prevMarker }
 }
 
+
+# === v2.6.0 cycle/loop no-op / no-progress guard ===
+Write-Host "[no-op] v2.6.0 cycle/loop no-op / no-progress guard"
+
+# Fake npx that exits 0 but does nothing (no handoff transition, no source change) => no-op.
+$noopBin = Join-Path $FixtureRoot "fake-npx-noop"
+New-Item -ItemType Directory -Path $noopBin -Force | Out-Null
+Set-Content -Path (Join-Path $noopBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%*"
+if not "!ALL:--version=!"=="!ALL!" (
+  echo claude-code-test
+  exit /b 0
+)
+echo FAKE_CLAUDE_NOOP
+exit /b 0
+"@
+
+# Fake npx that edits a source file but does NOT transition the handoff => incomplete.
+$incompleteBin = Join-Path $FixtureRoot "fake-npx-incomplete"
+New-Item -ItemType Directory -Path $incompleteBin -Force | Out-Null
+Set-Content -Path (Join-Path $incompleteBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%*"
+if not "!ALL:--version=!"=="!ALL!" (
+  echo claude-code-test
+  exit /b 0
+)
+echo FAKE_CLAUDE_INCOMPLETE
+echo changed> "%FAKE_SRC%"
+exit /b 0
+"@
+
+# Fake npx that transitions the handoff to READY_FOR_REVIEW (copies a pre-staged file) => progress.
+$transitionBin = Join-Path $FixtureRoot "fake-npx-transition"
+New-Item -ItemType Directory -Path $transitionBin -Force | Out-Null
+Set-Content -Path (Join-Path $transitionBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%*"
+if not "!ALL:--version=!"=="!ALL!" (
+  echo claude-code-test
+  exit /b 0
+)
+echo FAKE_CLAUDE_TRANSITION
+copy /Y "%FAKE_AFTER%" "%FAKE_HANDOFF%" >nul
+exit /b 0
+"@
+
+# 1. cycle: an exit-0 no-op turn is flagged (exit 7), not reported as success.
+$prevPath = $env:Path
+$env:Path = $noopBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.6.0 - No-op Guard Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $before = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    $after = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    Check "cycle no-op turn fails closed with exit 7" (($r.Code -eq 7) -and ($r.Out -match "no-op"))
+    Check "cycle no-op leaves the handoff state unchanged" (($before -eq $after) -and ($after -match "State:\s+READY_FOR_IMPLEMENTATION"))
+
+    # 2. loop: a no-op turn stops the loop instead of re-running the identical turn.
+    $fx2 = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.6.0 - Loop No-op Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx2
+    $r = Invoke-Handoff -WorkDir $fx2 -Arguments @("loop", "-Yes", "-MaxTurns", "3", "-TimeoutSeconds", "5")
+    Check "loop stops after the first no-op turn (exit 7)" (($r.Code -eq 7) -and ($r.Out -match "no-op"))
+    Check "loop does not re-run the same turn after a no-op" (($r.Out -match "turn 1 of 3") -and ($r.Out -notmatch "turn 2 of 3"))
+} finally {
+    $env:Path = $prevPath
+}
+
+# 3. cycle: source changed but no transition => incomplete (exit 6), not success.
+$prevPath = $env:Path
+$prevSrc = $env:FAKE_SRC
+$env:Path = $incompleteBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.6.0 - Incomplete Turn Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $env:FAKE_SRC = Join-Path $fx "src_change.txt"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "cycle treats source-change-without-transition as incomplete (exit 6)" (($r.Code -eq 6) -and ($r.Out -match "incomplete"))
+} finally {
+    $env:Path = $prevPath
+    if ($null -eq $prevSrc) { Remove-Item Env:\FAKE_SRC -ErrorAction SilentlyContinue } else { $env:FAKE_SRC = $prevSrc }
+}
+
+# 4. cycle: a legitimate transition (READY_FOR_REVIEW) is NOT flagged as a no-op.
+$prevPath = $env:Path
+$prevAfter = $env:FAKE_AFTER
+$prevHandoff = $env:FAKE_HANDOFF
+$env:Path = $transitionBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md"   = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.6.0 legit transition test");
+        "HANDOFF_AFTER.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "v2.6.0 legit transition test");
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $env:FAKE_AFTER = Join-Path $fx "HANDOFF_AFTER.md"
+    $env:FAKE_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    $after = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    Check "cycle does NOT flag a legitimate transition as a no-op" (($r.Out -notmatch "no-op") -and ($after -match "State:\s+READY_FOR_REVIEW"))
+    Check "cycle routes a transitioned turn to the Reviewer (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "Reviewer"))
+} finally {
+    $env:Path = $prevPath
+    if ($null -eq $prevAfter) { Remove-Item Env:\FAKE_AFTER -ErrorAction SilentlyContinue } else { $env:FAKE_AFTER = $prevAfter }
+    if ($null -eq $prevHandoff) { Remove-Item Env:\FAKE_HANDOFF -ErrorAction SilentlyContinue } else { $env:FAKE_HANDOFF = $prevHandoff }
+}
 
 # --- Summary ---
 Write-Host ""

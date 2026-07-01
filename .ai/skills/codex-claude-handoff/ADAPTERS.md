@@ -35,7 +35,7 @@ orchestrator exists.
 | Role | Default tool | Callable | Supported states | Invocation or manual instruction | Safety limits | Stop category when not callable | User authorization required |
 |---|---|---|---|---|---|---|---|
 | Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
-| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
+| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0) - an exit-0 turn that does not transition the handoff fails closed (exit 7 no-op, exit 6 incomplete); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
 ## Approved Commit Execution Adapter
@@ -413,3 +413,28 @@ git commit; `cycle` still refuses a Reviewer turn; and Reviewer/Codex stays `cal
 The Claude Code Implementer path is still the only default auto-loop-eligible agent turn, but it now runs through a bounded PowerShell process runner instead of a direct `npx` call. The runner starts a real child process, captures stdout/stderr to temporary files, enforces `-TimeoutSeconds`, and terminates the process tree on timeout before failing closed. The Claude Code safety flags remain unchanged: `--permission-mode acceptEdits`, `--disallowed-tools "Bash"`, `--max-budget-usd`, `--no-session-persistence`, and `--output-format text`.
 
 This does not add Master automation, does not make planning/investigation/question turns callable, and does not add any commit/push/tag/deploy/db/secrets path.
+
+## No-Op / No-Progress Guard (v2.6.0)
+
+The automated Claude Code Implementer path (`cycle`, `run-next`, `loop`) fails closed when a turn exits 0
+but does not actually advance the task. Before v2.6.0 such a turn looked like success: `cycle` printed a
+benign "next actor" line and exited 0, and `loop` re-ran the identical turn every iteration until
+MaxTurns/budget, burning spend on repeated no-ops.
+
+After each exit-0 Claude Implementer turn, the runner compares the pre-turn and post-turn handoff `State`
+and the working tree (via `Get-WorkingTreeState`, which already excludes local coordination artifacts):
+
+- **Progressed** - the handoff `State` changed (any legitimate transition: `READY_FOR_REVIEW`,
+  `QUESTION_FOR_MASTER`, `RE_GATE_REQUESTED`, `BLOCKED`, `WAITING_FOR_USER`, `IMPLEMENTED`, or a PLAN
+  state). Routing continues as before; these are never flagged.
+- **No-op** (exit code **7**) - `State` unchanged and no non-exempt source files changed. `cycle` stops
+  with a "no-op / no-progress" message; `loop` stops instead of repeating the turn.
+- **Incomplete** (exit code **6**, Protocol Repair) - `State` unchanged but non-exempt source files were
+  modified (edits made, handoff not moved to `READY_FOR_REVIEW`), or git could not be read. Not treated
+  as success.
+
+Exit code 7 is reserved for no-op/no-progress and does not collide with the existing codes (1 blocked,
+2 cancelled, 3 runner-start failure, 4 timeout, 5 Claude error, 6 protocol repair / mismatch / incomplete).
+The guard reads only local state and mutates nothing; it adds no commit/push/tag/deploy/db/secrets path.
+Local coordination artifacts (`AI_HANDOFF.md`, `NEXT_TURN.md`, `HANDOFF_LOOP.log`, and the Claude/Codex
+capture files) never count as source progress. Tested in `protocol-tests.ps1`.

@@ -3,6 +3,13 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.6.0 - Cycle No-Op Guard
+
+- Added a fail-closed no-op/no-progress guard for automated Claude Implementer turns through `cycle`, `run-next`, and `loop`.
+- Exit-0 Claude turns that do not transition the handoff and do not change non-exempt source files now stop with exit code 7 instead of looking successful.
+- Source changes without a handoff transition are treated as incomplete protocol repair cases and stop with exit code 6.
+- `loop` stops after the first no-op rather than repeating the same Implementer turn and burning budget.
+- Documented the guard in `ADAPTERS.md` and added focused protocol coverage for cycle no-op, loop no-op, incomplete turns, and legitimate transitions.
 ## 2.5.0 - User Next Guidance
 
 - Added `handoff.ps1 user-next`, a read-only user-facing command that prints the single

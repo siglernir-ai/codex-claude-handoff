@@ -3043,6 +3043,31 @@ function Invoke-Menu {
     }
 }
 
+# No-op / no-progress classifier for automated Implementer turns (v2.6.0).
+# Called only after a clean (exit 0) Claude Code turn. Compares the pre-turn and
+# post-turn handoff state and the working tree to decide whether the turn advanced
+# the task. Reuses Get-WorkingTreeState, which already excludes local handoff
+# artifacts, so only real source changes count as progress.
+#   progressed - the handoff state changed (any legitimate transition, e.g.
+#                READY_FOR_REVIEW, QUESTION_FOR_MASTER, BLOCKED). Route normally.
+#   incomplete - state unchanged but non-exempt source files changed (edits made,
+#                handoff not transitioned), or git could not be read. Fail closed.
+#   noop       - state unchanged and no non-exempt source change. No progress at all.
+function Get-TurnProgress {
+    param([string]$PreState, [string]$PostState)
+    if ($PostState -ne $PreState) {
+        return @{ Kind = "progressed"; SourceChanged = $false; TreeOk = $true }
+    }
+    $tree = Get-WorkingTreeState
+    if (-not $tree.Ok) {
+        return @{ Kind = "incomplete"; SourceChanged = $false; TreeOk = $false }
+    }
+    if ($tree.Files.Count -gt 0) {
+        return @{ Kind = "incomplete"; SourceChanged = $true; TreeOk = $true }
+    }
+    return @{ Kind = "noop"; SourceChanged = $false; TreeOk = $true }
+}
+
 function Invoke-Cycle {
     param([string]$CommandLabel = "cycle")
 
@@ -3206,6 +3231,7 @@ function Invoke-Cycle {
     Write-Host "Running Claude Code assisted turn..."
     Write-Host ""
 
+    $preTurnState = $State
     $claudeExit = Invoke-ClaudeTurn
 
     Write-Host ""
@@ -3220,6 +3246,36 @@ function Invoke-Cycle {
         $script:State       = $freshStatus.State
         $script:WaitingFor  = $freshStatus.WaitingFor
         $script:CurrentTask = $freshStatus.CurrentTask
+
+        # No-op / no-progress guard (v2.6.0): a turn that exits 0 but neither transitions
+        # the handoff nor changes non-exempt source files must fail closed, not look like
+        # progress. Legitimate transitions (READY_FOR_REVIEW, QUESTION_FOR_MASTER, BLOCKED,
+        # etc.) change the state and pass through as "progressed".
+        $progress = Get-TurnProgress -PreState $preTurnState -PostState $script:State
+        if ($progress.Kind -eq "noop") {
+            Write-Host "${CommandLabel}: no-op - the Implementer turn exited 0 but made no progress."
+            Write-Host "State:       $($script:State) (unchanged)"
+            Write-Host "Changed:     none (no non-exempt source files were created or modified)"
+            Write-Host "Reason:      Claude Code exited 0 without transitioning the handoff or editing source files."
+            Write-Host "Stop category: No-Op / No-Progress - fail closed; this turn did not advance the task."
+            Write-Host "Next step:   Inspect AI_HANDOFF.md and the turn output; re-run only after the task or prompt is corrected."
+            Write-Host "$CommandLabel stops here."
+            Write-Host ""
+            exit 7
+        } elseif ($progress.Kind -eq "incomplete") {
+            Write-Host "${CommandLabel}: incomplete - source changed but the handoff did not transition."
+            Write-Host "State:       $($script:State) (unchanged)"
+            if ($progress.TreeOk) {
+                Write-Host "Changed:     non-exempt source files were modified, but AI_HANDOFF.md was not moved to READY_FOR_REVIEW."
+            } else {
+                Write-Host "Changed:     could not read the git working tree to confirm progress."
+            }
+            Write-Host "Stop category: Protocol Repair - the turn did not complete a valid handoff transition; do not treat as success."
+            Write-Host "Next step:   Inspect the changes and AI_HANDOFF.md; complete the transition or revert before continuing."
+            Write-Host "$CommandLabel stops here."
+            Write-Host ""
+            exit 6
+        }
 
         # Refresh NEXT_TURN.md with the updated state. Fail closed: do not print
         # Reviewer handoff instructions for a NEXT_TURN.md that was never written.
@@ -3692,6 +3748,31 @@ function Invoke-Loop {
         # Log the post-turn state; the next iteration re-reads and routes it
         $postStatus = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
         Write-LoopLog "turn=$turnNo post state=$($postStatus.State) waitingFor=$($postStatus.WaitingFor)"
+
+        # No-op / no-progress guard (v2.6.0): if the turn exited 0 but the handoff did not
+        # transition, stop the loop instead of re-running the identical turn and burning budget.
+        # $script:State here is still the pre-turn state read at the top of this iteration.
+        $loopProgress = Get-TurnProgress -PreState $script:State -PostState $postStatus.State
+        if ($loopProgress.Kind -eq "noop") {
+            Write-Host ""
+            Write-Host "loop: stop - no-op turn (exit 0 but no progress)."
+            Write-Host "State:      $($postStatus.State) (unchanged from before the turn)"
+            Write-Host "Reason:     Claude Code exited 0 without transitioning the handoff or editing non-exempt source files."
+            Write-Host "Stop category: No-Op / No-Progress - fail closed; re-running would repeat the same no-op."
+            Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+            Write-LoopLog "turn=$turnNo stop reason=no-op state=$($postStatus.State) exit=7"
+            Write-Host ""
+            exit 7
+        } elseif ($loopProgress.Kind -eq "incomplete") {
+            Write-Host ""
+            Write-Host "loop: stop - incomplete turn (source changed but no handoff transition)."
+            Write-Host "State:      $($postStatus.State) (unchanged from before the turn)"
+            Write-Host "Stop category: Protocol Repair - the turn did not complete a valid handoff transition; do not treat as success."
+            Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+            Write-LoopLog "turn=$turnNo stop reason=incomplete state=$($postStatus.State) exit=6"
+            Write-Host ""
+            exit 6
+        }
     }
 }
 
