@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.8.0 - Claude CLI Context Isolation
+
+- Added `--setting-sources "project,local"` to automated Claude Implementer turns to avoid user-global Claude context and memory hijacking headless `cycle` runs.
+- Kept the runtime process argument as a single `project,local` value while making command-transparency output PowerShell copy/paste safe with quotes.
+- Preserved OAuth-friendly behavior by not using `--bare`, and kept `-p` prompt delivery, safety flags, timeout handling, and no-op guard behavior unchanged.
+- Documented the isolation behavior in `ADAPTERS.md` and added protocol tests for the runtime argument and quoted command-transparency form.
 ## 2.7.0 - Claude CLI Prompt Grounding
 
 - Strengthened the automated Claude Implementer prompt with an explicit non-interactive/headless directive.

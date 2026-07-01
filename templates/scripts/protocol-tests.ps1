@@ -1334,6 +1334,11 @@ Check "Invoke-ClaudeTurn prompt declares a non-interactive headless turn" ($hand
 Check "Invoke-ClaudeTurn prompt forbids greeting and asking the operator" (($handoffSource -match "do NOT greet") -and ($handoffSource -match "do NOT ask what to work on"))
 Check "Invoke-ClaudeTurn prompt still requires the Claude Execution Evidence block" ($handoffSource -match "Claude Execution Evidence")
 
+# === v2.8.0 Claude Implementer context isolation ===
+Write-Host "[isolation] v2.8.0 --setting-sources project,local"
+Check "Invoke-ClaudeTurn passes the v2.8.0 isolation flag --setting-sources project,local" (($handoffSource -match "'--setting-sources'") -and ($handoffSource -match "'project,local'"))
+Check "Claude command transparency records the quoted setting-sources value (v2.8.0)" ($handoffSource -match 'setting-sources `"project,local`"')
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

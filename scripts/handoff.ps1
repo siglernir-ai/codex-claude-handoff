@@ -216,7 +216,7 @@ function Get-ClaudeEvidenceField {
 function New-ClaudeCommandEvidence {
     param([int]$ExitCode)
     return @([ordered]@{
-        cmd = "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text"
+        cmd = "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
         exitCode = $ExitCode
         purpose = "run Claude Code Implementer turn through the bounded handoff adapter"
         sanitized = $true
@@ -245,7 +245,7 @@ function Write-ClaudeCommandCapture {
             "## Sanitized Invocation",
             "",
             '```text',
-            "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text",
+            "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             '```',
             "",
             "## Redaction Rules",
@@ -295,7 +295,7 @@ function Write-ClaudeImplementerCapture {
             "## Command Transparency",
             "",
             "- Command Evidence: $ClaudeImplementerCommandName",
-            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text",
+            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             "",
             "## Model Evidence",
             "",
@@ -386,7 +386,9 @@ $argList = @(
     $BudgetUsdText,
     '--no-session-persistence',
     '--output-format',
-    'text'
+    'text',
+    '--setting-sources',
+    'project,local'
 )
 try {
     $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
@@ -490,7 +492,7 @@ function Get-AdapterProfile {
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
-            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text";
+            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
             SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
@@ -3210,7 +3212,7 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence"
+    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
     Write-Host ""
     Write-Host "Timeout:     ${TimeoutSeconds}s (process tree is killed on timeout)"
     Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."

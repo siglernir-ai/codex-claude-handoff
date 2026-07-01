@@ -459,3 +459,27 @@ This is a prompt-only change: the invocation flags, `-p` argv delivery, and the 
 `--bare` (skipping global/project Claude context entirely) is intentionally NOT used yet - it is a future
 hardening option if a live cycle still greets or asks. Tested in `protocol-tests.ps1` by asserting the
 non-interactive guard text is present in the prompt source.
+
+## Claude Implementer Context Isolation (v2.8.0)
+
+v2.7.0 prompt grounding proved insufficient on machines that carry an operator global `~/.claude/CLAUDE.md`
+and auto-memory: a live cycle turn received the NON-INTERACTIVE directive intact but still greeted the
+operator and asked what to work on, because the global start-of-session behavior outranks a user-message
+directive.
+
+v2.8.0 isolates the turn at the source: the Claude invocation adds `--setting-sources "project,local"`, so the
+headless turn loads only the project and local setting sources and NOT the `user` source (the global
+`CLAUDE.md` and auto-memory that caused the greeting), while preserving project-local context and the
+existing OAuth authentication. The v2.7.0 grounding prompt is kept as belt-and-suspenders.
+
+`--bare` is intentionally NOT used: on this environment it is higher risk because it forces
+`ANTHROPIC_API_KEY` / `apiKeyHelper` auth ("Sets strictly ANTHROPIC_API_KEY or apiKeyHelper"), and this
+machine authenticates via OAuth with no API key or apiKeyHelper configured, so `--bare` would likely fail to
+authenticate headlessly. `--bare` remains a future option only if API-key / apiKeyHelper headless auth is
+set up with explicit user approval.
+
+This is an invocation-only change: `-p` argv delivery and the safety model are unchanged, and the sanitized
+command-transparency output records the new flag. Tested in `protocol-tests.ps1` (the runner passes
+`--setting-sources "project,local"` and the sanitized/capture strings include it). Live verification (a tiny
+probe or a bounded `cycle`) is required to confirm OAuth still works and the greeting is gone, and is run
+only with explicit user budget authorization.
