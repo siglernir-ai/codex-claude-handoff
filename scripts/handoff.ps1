@@ -216,11 +216,11 @@ function Get-ClaudeEvidenceField {
 function New-ClaudeCommandEvidence {
     param([int]$ExitCode)
     return @([ordered]@{
-        cmd = "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
+        cmd = "npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
         exitCode = $ExitCode
         purpose = "run Claude Code Implementer turn through the bounded handoff adapter"
         sanitized = $true
-        redactions = @("prompt", "budget value")
+        redactions = @("prompt", "system prompt", "budget value")
     })
 }
 
@@ -245,7 +245,7 @@ function Write-ClaudeCommandCapture {
             "## Sanitized Invocation",
             "",
             '```text',
-            "npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            "npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             '```',
             "",
             "## Redaction Rules",
@@ -295,7 +295,7 @@ function Write-ClaudeImplementerCapture {
             "## Command Transparency",
             "",
             "- Command Evidence: $ClaudeImplementerCommandName",
-            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             "",
             "## Model Evidence",
             "",
@@ -358,9 +358,11 @@ function Invoke-ClaudeTurn {
     }
 
     $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available to talk to during this turn. Do NOT greet anyone, do NOT ask what to work on, do NOT ask for plugin choices, do NOT wait for input, and do NOT treat this as the start of an interactive session.`nRead NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: immediately either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. Do not stop to ask the operator.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
+    $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
+    $sysPromptFile = [System.IO.Path]::GetTempFileName()
     $childPidFile = [System.IO.Path]::GetTempFileName()
     $runnerScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".ps1")
     $budgetText = $BudgetUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture)
@@ -368,14 +370,18 @@ function Invoke-ClaudeTurn {
     $runnerBody = @'
 param(
     [string]$PromptFile,
+    [string]$SystemPromptFile,
     [string]$BudgetUsdText,
     [string]$ChildPidFile
 )
 $ErrorActionPreference = "Continue"
 $prompt = Get-Content -Raw -LiteralPath $PromptFile
+$sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
 $argList = @(
     '--yes',
     '@anthropic-ai/claude-code',
+    '--append-system-prompt',
+    $sysPrompt,
     '-p',
     $prompt,
     '--permission-mode',
@@ -409,20 +415,21 @@ try {
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: no PowerShell host (pwsh/powershell) is available for the bounded runner."
         Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
         return 3
     }
 
     try {
         Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -NoNewline -ErrorAction Stop
+        Set-Content -Path $sysPromptFile -Value $systemPrompt -Encoding utf8 -NoNewline -ErrorAction Stop
         Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile)
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile)
         $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
     } catch {
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: failed to start bounded Claude Code runner: $_"
         Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
         return 3
     }
 
@@ -448,7 +455,7 @@ try {
     $stderrText = ""
     if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
     Write-ClaudeImplementerCapture -Prompt $prompt -StdoutText $stdoutText -StderrText $stderrText -ExitCode $claudeExit -TimedOut $timedOut
-    Remove-Item $tmpOut, $tmpErr, $promptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
 
     if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
         ($stdoutText -split "`n") | ForEach-Object { Write-Host $_.TrimEnd() }
@@ -492,7 +499,7 @@ function Get-AdapterProfile {
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
-            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
+            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
             SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
@@ -3212,7 +3219,7 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
+    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
     Write-Host ""
     Write-Host "Timeout:     ${TimeoutSeconds}s (process tree is killed on timeout)"
     Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."

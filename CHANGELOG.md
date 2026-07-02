@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.9.0 - Claude CLI System Prompt Grounding
+
+- Added `--append-system-prompt` to automated Claude Implementer turns with a redacted system prompt that reinforces non-interactive headless behavior at higher authority than the user prompt.
+- Preserved v2.8.0 `--setting-sources "project,local"`, `-p` prompt delivery, safety flags, timeout handling, and the v2.6.0 no-op guard.
+- Kept `--bare` deferred because it requires user-approved headless API-key/apiKeyHelper auth on this OAuth machine.
+- Documented the behavior in `ADAPTERS.md` and added protocol tests for the system-prompt flag, guard phrases, and redacted command transparency.
 ## 2.8.0 - Claude CLI Context Isolation
 
 - Added `--setting-sources "project,local"` to automated Claude Implementer turns to avoid user-global Claude context and memory hijacking headless `cycle` runs.

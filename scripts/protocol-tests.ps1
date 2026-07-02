@@ -1339,6 +1339,12 @@ Write-Host "[isolation] v2.8.0 --setting-sources project,local"
 Check "Invoke-ClaudeTurn passes the v2.8.0 isolation flag --setting-sources project,local" (($handoffSource -match "'--setting-sources'") -and ($handoffSource -match "'project,local'"))
 Check "Claude command transparency records the quoted setting-sources value (v2.8.0)" ($handoffSource -match 'setting-sources `"project,local`"')
 
+# === v2.9.0 Claude Implementer system-prompt grounding ===
+Write-Host "[system-prompt] v2.9.0 --append-system-prompt"
+Check "Invoke-ClaudeTurn passes --append-system-prompt to the Claude runner (v2.9.0)" ($handoffSource -match "'--append-system-prompt'")
+Check "System prompt carries the non-interactive / never-greet / read-files-exactly guards (v2.9.0)" (($handoffSource -match "non-interactive, headless") -and ($handoffSource -match "Never greet") -and ($handoffSource -match "Read the requested local files exactly"))
+Check "Command transparency redacts the system prompt (v2.9.0)" ($handoffSource -match "append-system-prompt <system-prompt:redacted>")
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

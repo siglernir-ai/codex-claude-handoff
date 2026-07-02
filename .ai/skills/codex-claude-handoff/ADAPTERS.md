@@ -483,3 +483,25 @@ command-transparency output records the new flag. Tested in `protocol-tests.ps1`
 `--setting-sources "project,local"` and the sanitized/capture strings include it). Live verification (a tiny
 probe or a bounded `cycle`) is required to confirm OAuth still works and the greeting is gone, and is run
 only with explicit user budget authorization.
+
+## Claude Implementer System-Prompt Grounding (v2.9.0)
+
+v2.8.0's `--setting-sources "project,local"` proved insufficient in the full live `cycle`: the turn still
+greeted and cited global `CLAUDE.md` / memory content, so `--setting-sources` does not actually exclude the
+user-global `CLAUDE.md` / auto-memory (it only layers settings.json sources). `--bare` would exclude them but
+skips keychain reads and forces `ANTHROPIC_API_KEY` / `apiKeyHelper`, which this OAuth machine lacks, so it
+stays deferred.
+
+v2.9.0 adds `--append-system-prompt` with a concise directive injected at the SYSTEM-prompt level (a higher
+authority than the v2.7.0 user-message directive): non-interactive headless run; never greet; never ask what
+to work on; never ask for plugins/input; read the requested local files exactly; follow the `AI_HANDOFF.md`
+state and act now, or record a protocol-valid blocker/question. A user-run handoff-shaped probe confirmed
+this reads `AI_HANDOFF.md` exactly and returns the correct status with no greeting. The v2.8.0
+`--setting-sources "project,local"` and the v2.7.0 user prompt are kept as layered belt-and-suspenders.
+
+Command transparency shows `--append-system-prompt "<system-prompt:redacted>"` (the system prompt is
+redacted, never dumped). This is an invocation-only change: `-p` argv delivery and the safety model are
+unchanged; no secret / API key is configured. `--bare` remains deferred until a user-approved headless
+API-key / apiKeyHelper auth path exists (or a user-approved global `CLAUDE.md` headless exception). Tested in
+`protocol-tests.ps1` (the runner passes `--append-system-prompt`; the system prompt carries the guard
+phrases; transparency redacts it).
