@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.11.0 - Timeout Partial Progress Repair Guidance
+
+- Added explicit repair guidance when a Claude Code `cycle` or `loop` times out after modifying source files but before transitioning `AI_HANDOFF.md`.
+- Timeout remains fail-closed with exit code 4; the command now distinguishes "plain timeout" from "partial progress that needs Reviewer/repair".
+- The guidance tells the user not to commit yet and to open Codex as Reviewer/repair to inspect the diff and approve, block, or repair the local handoff state.
+- Added protocol coverage for a fake Claude timeout that writes a source file before hanging.
 ## 2.10.0 - Windows Claude CLI argv Quoting
 
 - Fixed automated Claude Implementer turns on Windows PowerShell 5.1 by explicitly quoting every `npx` argument before `Start-Process` launches `npx.cmd`.

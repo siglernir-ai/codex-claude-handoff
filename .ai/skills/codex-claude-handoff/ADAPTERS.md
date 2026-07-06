@@ -525,3 +525,20 @@ v2.10.0 keeps the same safety model and Claude Code flags, but the bounded runne
 
 `protocol-tests.ps1` includes a fake `npx.cmd` argv check proving that `--append-system-prompt`, the
 multi-word system prompt, `-p`, and the multi-word user prompt arrive as the expected single argv values.
+
+## Timeout Partial Progress Repair Guidance (v2.11.0)
+
+Live pilots showed that Claude Code can complete an approved source edit and then time out before updating
+`AI_HANDOFF.md`. This is not safe to treat as success, but it is also more informative than a plain timeout.
+
+v2.11.0 keeps timeout as exit code 4, but after a timeout `cycle` and `loop` inspect the working tree. If
+non-exempt source files changed while the handoff state did not transition, the command prints explicit
+partial-progress repair guidance:
+
+- source files changed;
+- `AI_HANDOFF.md` did not complete a valid transition;
+- do not commit yet;
+- open Codex as Reviewer/repair to inspect the diff and either approve, block, or repair the local handoff
+  state.
+
+This preserves fail-closed behavior while making the next operator action obvious.

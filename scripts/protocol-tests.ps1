@@ -1189,6 +1189,7 @@ if defined IS_VERSION (
   exit /b 0
 )
 echo started> "%FAKE_NPX_MARKER%"
+if not "%FAKE_NPX_TOUCH%"=="" echo partial progress> "%FAKE_NPX_TOUCH%"
 cmd /c "ping -n 31 127.0.0.1 > nul"
 echo finished> "%FAKE_NPX_MARKER%"
 exit /b 0
@@ -1196,6 +1197,7 @@ exit /b 0
 $marker = Join-Path $hangBin "marker.txt"
 $prevPath = $env:Path
 $prevMarker = $env:FAKE_NPX_MARKER
+$prevTouch = $env:FAKE_NPX_TOUCH
 $env:Path = $hangBin + [System.IO.Path]::PathSeparator + $env:Path
 $env:FAKE_NPX_MARKER = $marker
 try {
@@ -1216,9 +1218,16 @@ try {
     $timeoutRecord = if ($timeoutLines.Count -gt 0) { $timeoutLines[$timeoutLines.Count - 1] | ConvertFrom-Json } else { $null }
     Check "timeout writes Claude Implementer capture as timed out" ((Test-Path $timeoutLast) -and (Test-Path $timeoutJsonl) -and ($timeoutText -match "Timed Out: True") -and ($null -ne $timeoutRecord) -and ($timeoutRecord.timedOut -eq $true))
     Check "timeout writes Claude command capture as timed out" ((Test-Path $timeoutCommand) -and ((Get-Content -Raw -Path $timeoutCommand) -match "Timed Out: true"))
+
+    $fxPartial = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.11.0 - Timeout Partial Progress Test"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fxPartial
+    $env:FAKE_NPX_TOUCH = Join-Path $fxPartial "PARTIAL_PROGRESS.md"
+    $rPartial = Invoke-Handoff -WorkDir $fxPartial -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "1")
+    Check "timeout with source changes reports partial progress repair guidance (v2.11.0)" (($rPartial.Code -eq 4) -and ($rPartial.Out -match "partial progress detected after timeout") -and ($rPartial.Out -match "Protocol Repair") -and ($rPartial.Out -match "Open Codex as Reviewer/repair"))
 } finally {
     $env:Path = $prevPath
     if ($null -eq $prevMarker) { Remove-Item Env:\FAKE_NPX_MARKER -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_MARKER = $prevMarker }
+    if ($null -eq $prevTouch) { Remove-Item Env:\FAKE_NPX_TOUCH -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_TOUCH = $prevTouch }
 }
 
 

@@ -3103,6 +3103,27 @@ function Get-TurnProgress {
     return @{ Kind = "noop"; SourceChanged = $false; TreeOk = $true }
 }
 
+function Write-PartialProgressRepairGuidance {
+    param(
+        [string]$CommandLabel,
+        [hashtable]$Progress,
+        [string]$StateText,
+        [string]$Reason
+    )
+
+    if ($Progress.Kind -ne "incomplete") { return }
+    Write-Host ""
+    Write-Host "${CommandLabel}: partial progress detected after $Reason."
+    Write-Host "State:       $StateText"
+    if ($Progress.TreeOk) {
+        Write-Host "Changed:     non-exempt source files were modified, but AI_HANDOFF.md did not transition."
+    } else {
+        Write-Host "Changed:     could not read the git working tree to confirm the exact source changes."
+    }
+    Write-Host "Stop category: Protocol Repair - do not treat this as success or commit yet."
+    Write-Host "Next step:   Open Codex as Reviewer/repair, inspect git diff and AI_HANDOFF.md, then approve, block, or repair the handoff state."
+}
+
 function Invoke-Cycle {
     param([string]$CommandLabel = "cycle")
 
@@ -3380,6 +3401,13 @@ function Invoke-Cycle {
             exit 3
         } elseif ($claudeExit -eq 4) {
             Write-Host "Claude Code turn timed out (exit 4)."
+            $script:Lines       = Get-Content -Path $HandoffFile
+            $freshStatus        = Read-HandoffState -Lines $script:Lines
+            $script:State       = $freshStatus.State
+            $script:WaitingFor  = $freshStatus.WaitingFor
+            $script:CurrentTask = $freshStatus.CurrentTask
+            $progress = Get-TurnProgress -PreState $preTurnState -PostState $script:State
+            Write-PartialProgressRepairGuidance -CommandLabel $CommandLabel -Progress $progress -StateText "$($script:State) / Waiting For: $($script:WaitingFor)" -Reason "timeout"
             Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
             exit 4
         } else {
@@ -3769,6 +3797,9 @@ function Invoke-Loop {
                 exit 3
             } elseif ($claudeExit -eq 4) {
                 Write-Host "Claude Code turn timed out (exit 4)."
+                $postStatus = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
+                $loopProgress = Get-TurnProgress -PreState $script:State -PostState $postStatus.State
+                Write-PartialProgressRepairGuidance -CommandLabel "loop" -Progress $loopProgress -StateText "$($postStatus.State) / Waiting For: $($postStatus.WaitingFor)" -Reason "timeout"
                 Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
                 Write-LoopLog "turn=$turnNo stop reason=claude-timeout exit=4"
                 exit 4
