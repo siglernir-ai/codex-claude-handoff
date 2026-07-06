@@ -1131,11 +1131,15 @@ if defined IS_VERSION (
   exit /b 0
 )
 echo FAKE_CLAUDE_FAST_STDOUT
-if not "%FAKE_NPX_ARGV%"=="" (
-  echo permission=!SAW_PERMISSION! > "%FAKE_NPX_ARGV%"
-  echo disallowed=!SAW_DISALLOWED! >> "%FAKE_NPX_ARGV%"
-  echo nosession=!SAW_NOSESSION! >> "%FAKE_NPX_ARGV%"
-)
+if "%FAKE_NPX_ARGV%"=="" goto after_arg_capture
+echo permission=!SAW_PERMISSION! > "%FAKE_NPX_ARGV%"
+echo disallowed=!SAW_DISALLOWED! >> "%FAKE_NPX_ARGV%"
+echo nosession=!SAW_NOSESSION! >> "%FAKE_NPX_ARGV%"
+echo arg3=%~3 >> "%FAKE_NPX_ARGV%"
+echo arg4=%~4 >> "%FAKE_NPX_ARGV%"
+echo arg5=%~5 >> "%FAKE_NPX_ARGV%"
+echo arg6=%~6 >> "%FAKE_NPX_ARGV%"
+:after_arg_capture
 exit /b 0
 "@
 $fastArgv = Join-Path $fastBin "argv.txt"
@@ -1151,6 +1155,8 @@ try {
     Check "cycle flags a no-op turn (exit 7) when the fake fast npx makes no progress (v2.6.0)" (($r.Code -eq 7) -and ($r.Out -match "no-op"))
     $runnerSource = Get-Content -Raw -Path $HandoffScript
     Check "bounded Claude runner source keeps the Claude safety flags" (($runnerSource -match "'--permission-mode'") -and ($runnerSource -match "'acceptEdits'") -and ($runnerSource -match "'--disallowed-tools'") -and ($runnerSource -match "'Bash'") -and ($runnerSource -match "'--no-session-persistence'"))
+    $argvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
+    Check "bounded Claude runner preserves multi-word system and user prompts as single argv values (v2.10.0)" (($argvText -match "arg3=--append-system-prompt") -and ($argvText -match "arg4=You are a non-interactive, headless automation agent") -and ($argvText -match "arg5=-p") -and ($argvText -match "arg6=You are running as the Implementer"))
     $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
     $claudeCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
     $claudeJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"

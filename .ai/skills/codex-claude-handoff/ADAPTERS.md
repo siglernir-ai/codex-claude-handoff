@@ -505,3 +505,23 @@ unchanged; no secret / API key is configured. `--bare` remains deferred until a 
 API-key / apiKeyHelper auth path exists (or a user-approved global `CLAUDE.md` headless exception). Tested in
 `protocol-tests.ps1` (the runner passes `--append-system-prompt`; the system prompt carries the guard
 phrases; transparency redacts it).
+
+## Claude Implementer Windows argv Quoting (v2.10.0)
+
+The first full live v2.9.0 `cycle` still failed closed, but for a different reason than the original global
+memory greeting. Claude Code reported that the message was cut off and that it received only `are`. The
+runner capture showed the intended prompt was present before launch, so the failure was in Windows process
+argument delivery.
+
+Root cause: Windows PowerShell 5.1 does not expose `ProcessStartInfo.ArgumentList`, and `Start-Process
+-ArgumentList` can collapse an array into one command-line string without preserving multi-word prompt
+arguments for `npx.cmd`. As a result, `--append-system-prompt` / `-p` values were split into stray words.
+
+v2.10.0 keeps the same safety model and Claude Code flags, but the bounded runner now:
+
+- flattens the user prompt to a single command-line-safe line before passing it to `-p`;
+- converts every `npx` argument through explicit Windows command-line quoting;
+- passes the quoted command line to `Start-Process`, while still recording the child PID for timeout cleanup.
+
+`protocol-tests.ps1` includes a fake `npx.cmd` argv check proving that `--append-system-prompt`, the
+multi-word system prompt, `-p`, and the multi-word user prompt arrive as the expected single argv values.

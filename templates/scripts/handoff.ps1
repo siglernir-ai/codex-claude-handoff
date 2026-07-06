@@ -375,7 +375,7 @@ param(
     [string]$ChildPidFile
 )
 $ErrorActionPreference = "Continue"
-$prompt = Get-Content -Raw -LiteralPath $PromptFile
+$prompt = (Get-Content -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
 $sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
 $argList = @(
     '--yes',
@@ -396,10 +396,36 @@ $argList = @(
     '--setting-sources',
     'project,local'
 )
+function ConvertTo-WindowsCommandLineArgument {
+    param([AllowNull()][string]$Argument)
+    if ($null -eq $Argument -or $Argument.Length -eq 0) { return '""' }
+    if ($Argument -notmatch '[\s"]') { return $Argument }
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('"')
+    $backslashes = 0
+    foreach ($ch in $Argument.ToCharArray()) {
+        if ($ch -eq '\') {
+            $backslashes++
+        } elseif ($ch -eq '"') {
+            if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
+            [void]$sb.Append('\"')
+            $backslashes = 0
+        } else {
+            if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes) }
+            $backslashes = 0
+            [void]$sb.Append($ch)
+        }
+    }
+    if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
 try {
     $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
     if (-not $npxCommand) { $npxCommand = Get-Command npx -ErrorAction Stop }
-    $child = Start-Process -FilePath $npxCommand.Source -ArgumentList $argList -NoNewWindow -PassThru
+    $argumentLine = ($argList | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' '
+    $child = Start-Process -FilePath $npxCommand.Source -ArgumentList $argumentLine -NoNewWindow -PassThru
     Set-Content -LiteralPath $ChildPidFile -Value $child.Id -Encoding ascii -NoNewline -ErrorAction SilentlyContinue
     $child.WaitForExit()
     exit $child.ExitCode

@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 2.10.0 - Windows Claude CLI argv Quoting
+
+- Fixed automated Claude Implementer turns on Windows PowerShell 5.1 by explicitly quoting every `npx` argument before `Start-Process` launches `npx.cmd`.
+- Flattened the user prompt to a single command-line-safe line before passing it to `-p`, avoiding `cmd`/batch newline and word-splitting edge cases.
+- Preserved the v2.6.0 no-op guard, v2.8.0 `--setting-sources "project,local"`, v2.9.0 `--append-system-prompt`, timeout child PID tracking, and command redaction behavior.
+- Documented the live v2.9.0 failure mode where Claude received only `are`, and added protocol coverage proving the system prompt and user prompt arrive as single argv values.
 ## 2.9.0 - Claude CLI System Prompt Grounding
 
 - Added `--append-system-prompt` to automated Claude Implementer turns with a redacted system prompt that reinforces non-interactive headless behavior at higher authority than the user prompt.
