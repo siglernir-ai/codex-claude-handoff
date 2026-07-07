@@ -37,12 +37,15 @@ if ($env:OS -eq "Windows_NT") {
 
 $HandoffFile = Join-Path (Get-Location) "AI_HANDOFF.md"
 
-if (-not (Test-Path $HandoffFile)) {
+if (-not (Test-Path $HandoffFile) -and $Command -ne "doctor") {
     Write-Host "No AI_HANDOFF.md found. Run from your project root."
     exit 1
 }
 
-$Lines = Get-Content -Path $HandoffFile
+$Lines = @()
+if (Test-Path $HandoffFile) {
+    $Lines = Get-Content -Path $HandoffFile
+}
 
 # --- Shared parser ---
 
@@ -468,7 +471,8 @@ try {
         $timedOut = $true
         $childPid = $null
         if (Test-Path $childPidFile) {
-            $childPidText = (Get-Content -Raw -Path $childPidFile -ErrorAction SilentlyContinue).Trim()
+            $childPidRaw = Get-Content -Raw -Path $childPidFile -ErrorAction SilentlyContinue
+            $childPidText = if ($null -eq $childPidRaw) { "" } else { $childPidRaw.Trim() }
             if ($childPidText -match '^\d+$') { $childPid = [int]$childPidText }
         }
         if ($childPid) { Stop-ProcessTree -ProcessId $childPid }
@@ -810,6 +814,135 @@ function Invoke-UserNext {
     } else {
         Write-Host "Do this next: inspect AI_HANDOFF.md manually; the state is not recognized by this protocol version."
     }
+    Write-Host ""
+}
+
+function Invoke-Work {
+    $entry = $ActionMap[$State]
+    $commitMessage = Get-SafeCommitMessage
+    Write-Host ""
+    Write-Host "Handoff Work"
+    Write-Host "State:        $State"
+    Write-Host "Waiting For:  $WaitingFor"
+    Write-Host "Current Task: $CurrentTask"
+    Write-Host ""
+
+    if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+        Write-Host "Next action: approve the guarded local commit if you are satisfied with the review."
+        Write-Host ""
+        Write-Host "Run:"
+        Write-Host "  .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
+        Write-Host ""
+        Write-Host "Safety: commits only AI_HANDOFF.md Changed Files after scope checks; no push/tag/deploy/db/secrets."
+        Write-Host ""
+        return
+    }
+
+    if ($entry) {
+        $role = $entry.Role
+        $actor = Resolve-Actor -Role $role -Binding $Binding
+        $isMismatch = ($WaitingFor -ne "(unknown)") -and ($WaitingFor -ne $role) -and ($WaitingFor -ne $actor)
+        if ($isMismatch) {
+            Write-Host "Next action: repair the handoff state before continuing."
+            Write-Host "Expected Waiting For: $role ($actor); found: $WaitingFor."
+        } elseif ($actor -eq "User") {
+            Write-Host "Next action: $($entry.Action)"
+        } else {
+            Write-Host "Next action: open $actor and use the standard handoff prompt."
+            Write-Host ""
+            Write-Host "Run:"
+            Write-Host "  .\scripts\handoff.ps1 next -Clip"
+        }
+    } else {
+        Write-Host "Next action: inspect AI_HANDOFF.md manually; the state is not recognized by this protocol version."
+    }
+    Write-Host ""
+}
+
+function Write-DoctorLine {
+    param([string]$Level, [string]$Message)
+    Write-Host "$Level  $Message"
+}
+
+function Invoke-Doctor {
+    Write-Host ""
+    Write-Host "Handoff Doctor"
+    Write-Host ""
+
+    $gitOk = $false
+    try {
+        $inside = (& git rev-parse --is-inside-work-tree 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $inside -eq "true") { $gitOk = $true }
+    } catch { }
+    if ($gitOk) {
+        Write-DoctorLine "OK" "Git repo detected."
+    } else {
+        Write-DoctorLine "WARN" "Git repo not detected from this directory."
+    }
+
+    if (Test-Path $HandoffFile) {
+        $doctorStatus = Read-HandoffState -Lines $Lines
+        if ($doctorStatus.State -ne "(unknown)" -and $doctorStatus.WaitingFor -ne "(unknown)") {
+            Write-DoctorLine "OK" "AI_HANDOFF.md status: State=$($doctorStatus.State); Waiting For=$($doctorStatus.WaitingFor); Current Task=$($doctorStatus.CurrentTask)"
+        } else {
+            Write-DoctorLine "WARN" "AI_HANDOFF.md exists, but its Status section could not be fully read."
+        }
+    } else {
+        Write-DoctorLine "WARN" "AI_HANDOFF.md is missing."
+    }
+
+    $versionPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/VERSION"
+    if (Test-Path $versionPath) {
+        $protocolVersion = (Get-Content -Raw -Path $versionPath).Trim()
+        Write-DoctorLine "OK" "Protocol version: $protocolVersion"
+    } else {
+        Write-DoctorLine "WARN" "Protocol VERSION file missing: .ai/skills/codex-claude-handoff/VERSION"
+    }
+
+    $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (Test-Path $rolesPath) {
+        Write-DoctorLine "OK" "Role assignment: Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    } else {
+        Write-DoctorLine "WARN" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
+    }
+
+    $tree = Get-WorkingTreeState
+    if (-not $tree.Ok) {
+        Write-DoctorLine "WARN" "Git working tree status could not be read."
+    } elseif ($tree.Files.Count -eq 0) {
+        Write-DoctorLine "OK" "Git working tree clean after local coordination exclusions."
+    } else {
+        Write-DoctorLine "WARN" "Git working tree has non-local changes after coordination exclusions:"
+        foreach ($f in $tree.Files) { Write-Host "      $f" }
+    }
+
+    $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
+    if (-not $npxCmd) { $npxCmd = Get-Command npx.cmd -ErrorAction SilentlyContinue }
+    if ($npxCmd) {
+        $npxVersion = ""
+        try { $npxVersion = (& $npxCmd.Source --version 2>$null | Out-String).Trim() } catch { }
+        if ([string]::IsNullOrWhiteSpace($npxVersion)) {
+            Write-DoctorLine "OK" "npx available for Claude Code automation: $($npxCmd.Source)"
+        } else {
+            Write-DoctorLine "OK" "npx available for Claude Code automation: $npxVersion ($($npxCmd.Source))"
+        }
+    } else {
+        Write-DoctorLine "WARN" "npx not found; Claude Code automation cannot start through the local runner."
+    }
+
+    if (Get-Command Resolve-CodexCli -ErrorAction SilentlyContinue) {
+        $codex = Resolve-CodexCli
+        if ($codex.Ok) {
+            Write-DoctorLine "OK" "Codex CLI available: $($codex.Path) ($($codex.Source))"
+        } else {
+            Write-DoctorLine "INFO" "Codex CLI not available or not runnable for exec --help: $($codex.Error)"
+        }
+    } else {
+        Write-DoctorLine "INFO" "Codex CLI helper is not present in this script; skipping Codex CLI availability."
+    }
+
+    Write-Host ""
+    Write-Host "Read-only check complete. No files, AI tools, git commits, pushes, tags, deploys, databases, or secrets were changed."
     Write-Host ""
 }
 function Invoke-Status {
@@ -3027,49 +3160,53 @@ function Invoke-Menu {
     Write-Host "Use this menu for local workflow actions."
     Write-Host "For questions, planning, or decisions, continue chatting with the Master."
     Write-Host ""
-    Write-Host "1. Start new request              - begin a new task from natural language"
-    Write-Host "2. Continue next turn             - prepare prompt for the Master/Implementer if needed"
-    Write-Host "3. Show status                    - show current state and next actor"
-    Write-Host "4. Check commit                   - verify whether commit is allowed"
-    Write-Host "5. Create approved commit         - commit reviewed files after explicit authorization"
-    Write-Host "6. Run one handoff cycle          - one Implementer turn, then Reviewer handoff prep (cycle)"
-    Write-Host "7. Run bounded loop session       - up to MaxTurns automated Implementer turns (loop)"
-    Write-Host "8. Show adapter status            - callable/manual automation status"
-    Write-Host "9. Check authorized release       - dry-run release plan (release-check)"
-    Write-Host "10. Check sequence advance         - dry-run local sequence advance (sequence-check)"
-    Write-Host "11. Check Codex review (POC)       - dry-run Codex Reviewer plan (review-check)"
-    Write-Host "12. Apply captured Codex verdict   - apply review-run verdict to AI_HANDOFF.md (review-apply)"
-    Write-Host "13. Check Codex Master             - dry-run Codex Master capture plan (master-check)"
-    Write-Host "14. Apply captured Master route    - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
-    Write-Host "15. Exit"
+    Write-Host "1. Daily work view               - show state and the exact next human action"
+    Write-Host "2. Doctor health check           - read-only local protocol health check"
+    Write-Host "3. Start new request             - begin a new task from natural language"
+    Write-Host "4. Continue next turn            - prepare prompt for the Master/Implementer if needed"
+    Write-Host "5. Show status                   - show current state and next actor"
+    Write-Host "6. Check commit                  - verify whether commit is allowed"
+    Write-Host "7. Create approved commit        - commit reviewed files after explicit authorization"
+    Write-Host "8. Run one handoff cycle         - one Implementer turn, then Reviewer handoff prep (cycle)"
+    Write-Host "9. Run bounded loop session      - up to MaxTurns automated Implementer turns (loop)"
+    Write-Host "10. Show adapter status           - callable/manual automation status"
+    Write-Host "11. Check authorized release      - dry-run release plan (release-check)"
+    Write-Host "12. Check sequence advance        - dry-run local sequence advance (sequence-check)"
+    Write-Host "13. Check Codex review (POC)      - dry-run Codex Reviewer plan (review-check)"
+    Write-Host "14. Apply captured Codex verdict  - apply review-run verdict to AI_HANDOFF.md (review-apply)"
+    Write-Host "15. Check Codex Master            - dry-run Codex Master capture plan (master-check)"
+    Write-Host "16. Apply captured Master route   - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
+    Write-Host "17. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
     switch ($choice.Trim()) {
-        "1" {
+        "1" { Invoke-Work }
+        "2" { Invoke-Doctor }
+        "3" {
             $userRequest = Read-Host "Enter your request"
             Invoke-Start -Request $userRequest
         }
-        "2" { Invoke-Next -MenuMode $true }
-        "3" { Invoke-Status }
-        "4" { Invoke-CommitCheck }
-        "5" {
+        "4" { Invoke-Next -MenuMode $true }
+        "5" { Invoke-Status }
+        "6" { Invoke-CommitCheck }
+        "7" {
             $msg = Read-Host "Commit message"
             $auth = Read-Host 'Type I_AUTHORIZE_COMMIT to commit reviewed files'
             $script:Message = $msg
             $script:Authorize = $auth
             Invoke-CommitApproved
         }
-        "6" { Invoke-Cycle }
-        "7" { Invoke-Loop }
-        "8" { Invoke-Adapters }
-        "9" { Invoke-ReleaseCheck }
-        "10" { Invoke-SequenceCheck }
-        "11" { Invoke-ReviewCheck }
-        "12" { Invoke-ReviewApply }
-        "13" { Invoke-MasterCheck }
-        "14" { Invoke-MasterApply }
-        "14" { }
+        "8" { Invoke-Cycle }
+        "9" { Invoke-Loop }
+        "10" { Invoke-Adapters }
+        "11" { Invoke-ReleaseCheck }
+        "12" { Invoke-SequenceCheck }
+        "13" { Invoke-ReviewCheck }
+        "14" { Invoke-ReviewApply }
+        "15" { Invoke-MasterCheck }
+        "16" { Invoke-MasterApply }
+        "17" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -3845,6 +3982,8 @@ function Invoke-Loop {
 # --- Dispatch ---
 
 switch ($Command) {
+    "work"         { Invoke-Work }
+    "doctor"      { Invoke-Doctor }
     "status"       { Invoke-Status }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
@@ -3873,6 +4012,8 @@ switch ($Command) {
             Write-Host "Usage: handoff.ps1 <command> [options]"
             Write-Host ""
             Write-Host "Commands:"
+            Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
+            Write-Host "  doctor                    Run a read-only local protocol health check."
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."

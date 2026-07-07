@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v2.5.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.0.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -10,7 +10,8 @@
 
     Coverage: state routing, turn-ownership mismatch routing, adapter decisions,
     stop categories, release executor guards, sequence advance guards, mirror parity,
-    safety boundaries (dry runs change no files and run no git mutations), the Codex
+    safety boundaries (dry runs change no files and run no git mutations), the v3.0.0
+    productized `work` / `doctor` read-only commands, the Codex
     Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
     transitions fail-closed; loop stops rather than auto-running a Reviewer turn), the
     v1.3.1/v2.0.1 Codex Master turn (master-check/master-run guards, master-apply transitions,
@@ -336,6 +337,33 @@ Check "user-next prints guarded commit command for REVIEW_DONE" (($r.Code -eq 0)
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v2.5.0 user flow pilot"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
 Check "user-next points to Implementer tool for implementation state" (($r.Code -eq 0) -and ($r.Out -match "open Claude Code") -and ($r.Out -match "next -Clip"))
+
+# === 4C. Productized daily commands ===
+Write-Host "[4C] Productized daily commands (work / doctor)"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.0.0 productization"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$beforeHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$beforeCommits = (& git -C $fx rev-list --all --count 2>$null)
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("work")
+$afterHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$afterCommits = (& git -C $fx rev-list --all --count 2>$null)
+Check "work prints Handoff Work, current state, and next action" (($r.Code -eq 0) -and ($r.Out -match "Handoff Work") -and ($r.Out -match "READY_FOR_IMPLEMENTATION") -and ($r.Out -match "Next action") -and ($r.Out -match [regex]::Escape(".\scripts\handoff.ps1 next -Clip")))
+Check "work does not mutate AI_HANDOFF.md or create git commits" (($beforeHash -eq $afterHash) -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
+
+$doctorFiles = @{
+    "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "v3.0.0 productization");
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles;
+    ".ai/skills/codex-claude-handoff/VERSION" = "3.0.0"
+}
+$fx = New-Fixture -Files $doctorFiles -InitGit
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$beforeHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$beforeCommits = (& git -C $fx rev-list --all --count 2>$null)
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("doctor")
+$afterHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$afterCommits = (& git -C $fx rev-list --all --count 2>$null)
+Check "doctor prints Handoff Doctor, protocol version, role assignment, and AI_HANDOFF status" (($r.Code -eq 0) -and ($r.Out -match "Handoff Doctor") -and ($r.Out -match "Protocol version:\s+3\.0\.0") -and ($r.Out -match "Role assignment: Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -match "AI_HANDOFF.md status"))
+Check "doctor does not mutate AI_HANDOFF.md or create git commits" (($beforeHash -eq $afterHash) -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
 # === 5. Release executor guards (fail closed) ===
 Write-Host "[5] Release executor guards (release-check)"
 # Missing -Version: must block, no git mutation.
@@ -519,7 +547,9 @@ $prevPath = $env:Path
 $hadLocalAppData = Test-Path Env:\LOCALAPPDATA
 $prevLocalAppData = $env:LOCALAPPDATA
 try {
-    $env:Path = "$fakeBrokenPathDir;$prevPath"
+    $gitCmd = Get-Command git -ErrorAction Stop
+    $gitDir = Split-Path -Parent $gitCmd.Source
+    $env:Path = "$fakeBrokenPathDir;$gitDir"
     $env:LOCALAPPDATA = $emptyLocalAppData
     Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 

@@ -112,6 +112,17 @@ The `adapters` command in `scripts/handoff.ps1` and `scripts/handoff.sh` prints
 the current resolved role registry plus the approved commit and release executor
 capabilities for the local project.
 
+Since v3.0.0, the PowerShell helper also exposes two user-facing read-only local
+commands for supervised daily operation:
+
+- `handoff.ps1 doctor` checks the local protocol install and environment health
+  with OK/WARN/INFO output. It never mutates files, runs AI tools, commits, pushes,
+  tags, deploys, touches databases, or changes secrets.
+- `handoff.ps1 work` prints the daily workflow view: State, Waiting For, Current
+  Task, and the exact next action. For tool turns it points to
+  `.\scripts\handoff.ps1 next -Clip`; for `REVIEW_DONE / Waiting For: User` it
+  prints the guarded `commit-approved` command.
+
 Commit/release execution is not a role turn and does not approve work. It is a
 guarded operator action after the Reviewer has attested technical readiness and
 the user has supplied the exact authorization token.

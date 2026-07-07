@@ -3,6 +3,22 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.0.0 - Productized Supervised Workflow
+
+- Added `handoff.ps1 doctor`, a read-only local health check that reports OK/WARN/INFO
+  lines for Git detection, `AI_HANDOFF.md` status parsing, protocol version, role
+  binding, working tree status after local coordination exclusions, `npx`, and Codex
+  CLI availability when the existing helper can check it.
+- Added `handoff.ps1 work`, a read-only daily workflow view that prints State,
+  Waiting For, Current Task, and the exact next action.
+- `work` points tool turns to the standard `.\scripts\handoff.ps1 next -Clip` and
+  prints the guarded `commit-approved` command at `REVIEW_DONE / Waiting For: User`.
+- Updated dispatch, help text, and the interactive menu to expose `work` and `doctor`.
+- Added protocol tests proving `work` / `doctor` print the expected user-facing
+  output and do not mutate `AI_HANDOFF.md` or create git commits.
+- Documented v3.0.0 as productization for supervised human-in-the-loop real use, not
+  unattended autonomy, and synced templates.
+
 ## 2.11.0 - Timeout Partial Progress Repair Guidance
 
 - Added explicit repair guidance when a Claude Code `cycle` or `loop` times out after modifying source files but before transitioning `AI_HANDOFF.md`.

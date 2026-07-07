@@ -14,6 +14,25 @@ The goal is to avoid copy-pasting long context between tools.
 > dialogue is still being built in narrow, reviewed slices. See [CHANGELOG.md](CHANGELOG.md)
 > and [ROADMAP.md](ROADMAP.md).
 
+## Quick Start / Daily Use
+
+For supervised real use, start each session from your project root with:
+
+```powershell
+.\scripts\handoff.ps1 doctor
+.\scripts\handoff.ps1 work
+```
+
+`doctor` is a read-only health check for the local protocol install, role binding,
+working tree, and CLI prerequisites. `work` is the daily workflow view: it prints
+the current handoff state, who the protocol is waiting for, the current task, and
+the exact next action.
+
+v3.0.0 is a productization release for supervised, human-in-the-loop use. It makes
+the local workflow easier to trust and operate, but it is not unattended autonomy:
+user authorization is still required for commits, pushes, tags, releases, deploys,
+database work, secrets, role swaps, and product decisions.
+
 ## Concept
 
 The protocol is organized around three roles, bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`:
@@ -95,7 +114,11 @@ Current local status:
 - Since v0.19.1.1, release audit uses the current task's structured `Task Actors`
   in `AI_HANDOFF.md`, not only the global role binding used for routing/adapters.
 
-Since v2.5.0, `handoff.ps1 user-next` prints the single next user action for the current state, including the exact guarded `commit-approved` command when a reviewed task is ready to commit.
+Since v3.0.0, `handoff.ps1 doctor` checks the local install read-only and
+`handoff.ps1 work` prints the daily workflow view with the exact next action. Since
+v2.5.0, `handoff.ps1 user-next` prints the single next user action for the current
+state, including the exact guarded `commit-approved` command when a reviewed task
+is ready to commit.
 
 Run:
 
@@ -258,6 +281,38 @@ Commit:       ALLOWED - the Reviewer attested technical readiness; the remaining
 Roles:        Master=Codex, Reviewer=Codex, Implementer=Claude Code
 Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status
 ```
+
+### `doctor`
+
+Run a read-only health check for the local protocol install.
+
+```powershell
+.\scripts\handoff.ps1 doctor
+```
+
+It reports OK/WARN/INFO lines for the Git repo, `AI_HANDOFF.md` status, installed
+protocol version, role assignment, working tree after local coordination
+exclusions, `npx`, and Codex CLI availability when the helper can check it. It
+does not mutate files, run AI tools, commit, push, tag, deploy, touch databases, or
+change secrets.
+
+### `work`
+
+Print the daily workflow view: state, waiting party, current task, and the exact
+next action.
+
+```powershell
+.\scripts\handoff.ps1 work
+```
+
+For tool turns, it points to the standard:
+
+```powershell
+.\scripts\handoff.ps1 next -Clip
+```
+
+For `REVIEW_DONE / Waiting For: User`, it prints the guarded
+`commit-approved` command with the required authorization token.
 
 ### `adapters`
 
