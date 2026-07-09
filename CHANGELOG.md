@@ -3,6 +3,21 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.0 - One-Command Install and Beginner Onboarding
+
+- Added root `install.ps1` for one-command installation into a target project.
+- The installer copies the tracked template protocol files, creates the target
+  directory when needed, warns when the target is not a Git repository, updates
+  `.gitignore` with local coordination-file exclusions, and blocks overwrites
+  unless `-Force` is supplied.
+- Added `QUICKSTART.md` for the shortest install-to-first-task path.
+- Added `HOW_IT_WORKS.md` to explain the shared-folder model, Codex/Claude roles,
+  safety gates, and the current supervised automation boundary.
+- Updated README onboarding so new users start with install, `doctor`, and `work`
+  instead of digging through protocol history.
+- Added protocol tests for installer success, no-overwrite safety, and user-facing
+  next-step output.
+
 ## 3.0.0 - Productized Supervised Workflow
 
 - Added `handoff.ps1 doctor`, a read-only local health check that reports OK/WARN/INFO

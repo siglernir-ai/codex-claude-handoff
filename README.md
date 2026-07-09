@@ -16,6 +16,21 @@ The goal is to avoid copy-pasting long context between tools.
 
 ## Quick Start / Daily Use
 
+If you just downloaded this repo, install the protocol into the project you want
+Codex and Claude Code to share:
+
+```powershell
+.\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT
+```
+
+Then open that target project in Codex and Claude Code, and run:
+
+```powershell
+cd C:\Users\Nir\projects\MY_PROJECT
+.\scripts\handoff.ps1 doctor
+.\scripts\handoff.ps1 work
+```
+
 For supervised real use, start each session from your project root with:
 
 ```powershell
@@ -28,7 +43,11 @@ working tree, and CLI prerequisites. `work` is the daily workflow view: it print
 the current handoff state, who the protocol is waiting for, the current task, and
 the exact next action.
 
-v3.0.0 is a productization release for supervised, human-in-the-loop use. It makes
+For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
+model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+
+v3.1.0 adds one-command installation and beginner onboarding. v3.0.0 is the
+productized supervised, human-in-the-loop workflow release. It makes
 the local workflow easier to trust and operate, but it is not unattended autonomy:
 user authorization is still required for commits, pushes, tags, releases, deploys,
 database work, secrets, role swaps, and product decisions.

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.0.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -11,7 +11,7 @@
     Coverage: state routing, turn-ownership mismatch routing, adapter decisions,
     stop categories, release executor guards, sequence advance guards, mirror parity,
     safety boundaries (dry runs change no files and run no git mutations), the v3.0.0
-    productized `work` / `doctor` read-only commands, the Codex
+    productized `work` / `doctor` read-only commands, the v3.1.0 installer, the Codex
     Reviewer POC capture guards, the v1.3.0 automated Reviewer turn (review-apply verdict
     transitions fail-closed; loop stops rather than auto-running a Reviewer turn), the
     v1.3.1/v2.0.1 Codex Master turn (master-check/master-run guards, master-apply transitions,
@@ -364,6 +364,29 @@ $afterHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $afterCommits = (& git -C $fx rev-list --all --count 2>$null)
 Check "doctor prints Handoff Doctor, protocol version, role assignment, and AI_HANDOFF status" (($r.Code -eq 0) -and ($r.Out -match "Handoff Doctor") -and ($r.Out -match "Protocol version:\s+3\.0\.0") -and ($r.Out -match "Role assignment: Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -match "AI_HANDOFF.md status"))
 Check "doctor does not mutate AI_HANDOFF.md or create git commits" (($beforeHash -eq $afterHash) -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
+
+# === 4D. One-command installer ===
+Write-Host "[4D] One-command installer"
+$installScript = Join-Path $RepoRoot "install.ps1"
+$installTarget = Join-Path $FixtureRoot "install-target"
+$installOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget 2>&1 | Out-String
+$installCode = $LASTEXITCODE
+$installedHandoff = Join-Path $installTarget "AI_HANDOFF.md"
+$installedScript = Join-Path $installTarget "scripts/handoff.ps1"
+$installedVersion = Join-Path $installTarget ".ai/skills/codex-claude-handoff/VERSION"
+$installedGitignore = Join-Path $installTarget ".gitignore"
+$installedGitignoreText = if (Test-Path $installedGitignore) { Get-Content -Raw -Path $installedGitignore } else { "" }
+Check "install.ps1 installs protocol files into an empty target" (($installCode -eq 0) -and (Test-Path $installedHandoff) -and (Test-Path $installedScript) -and (Test-Path $installedVersion))
+Check "install.ps1 adds local coordination files to .gitignore" (($installedGitignoreText -match "AI_HANDOFF\.md") -and ($installedGitignoreText -match "NEXT_TURN\.md"))
+Check "install.ps1 prints doctor/work/start next steps" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape(".\scripts\handoff.ps1 work")) -and ($installOut -match [regex]::Escape(".\scripts\handoff.ps1 start")))
+
+$blockedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget 2>&1 | Out-String
+$blockedCode = $LASTEXITCODE
+Check "install.ps1 blocks overwriting an existing install without -Force" (($blockedCode -eq 1) -and ($blockedOut -match "blocked to avoid overwriting"))
+
+$forcedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget -Force 2>&1 | Out-String
+$forcedCode = $LASTEXITCODE
+Check "install.ps1 refreshes an existing install with -Force" (($forcedCode -eq 0) -and ($forcedOut -match "codex-claude-handoff installed into"))
 # === 5. Release executor guards (fail closed) ===
 Write-Host "[5] Release executor guards (release-check)"
 # Missing -Version: must block, no git mutation.
