@@ -784,6 +784,17 @@ function Invoke-UserNext {
     Write-Host "Task:         $CurrentTask"
     Write-Host ""
 
+    if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
+        Write-Host "Do this next: start the first task from this fresh install."
+        Write-Host ""
+        Write-Host "Command:"
+        Write-Host "  .\scripts\handoff.ps1 start `"Describe the change you want`""
+        Write-Host ""
+        Write-Host "Then paste the printed Master prompt into Codex."
+        Write-Host ""
+        return
+    }
+
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
         Write-Host "Do this next: approve the guarded local commit if you are satisfied with the review."
         Write-Host ""
@@ -826,6 +837,17 @@ function Invoke-Work {
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Current Task: $CurrentTask"
     Write-Host ""
+
+    if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
+        Write-Host "Next action: start the first task from this fresh install."
+        Write-Host ""
+        Write-Host "Run:"
+        Write-Host "  .\scripts\handoff.ps1 start `"Describe the change you want`""
+        Write-Host ""
+        Write-Host "Then paste the printed Master prompt into Codex."
+        Write-Host ""
+        return
+    }
 
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
         Write-Host "Next action: approve the guarded local commit if you are satisfied with the review."

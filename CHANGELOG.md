@@ -3,6 +3,13 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.1 - First-Run Work Guidance
+
+- Improved `handoff.ps1 work` and `handoff.ps1 user-next` for a fresh install.
+- When the handoff is still at `WAITING_FOR_USER / Initial setup`, the commands now
+  tell the user to start a first task with `handoff.ps1 start "..."` instead of
+  sending them to inspect `AI_HANDOFF.md` manually.
+- Added protocol coverage for the first-run guidance path.
 ## 3.1.0 - One-Command Install and Beginner Onboarding
 
 - Added root `install.ps1` for one-command installation into a target project.
