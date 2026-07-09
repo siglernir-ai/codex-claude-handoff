@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.1
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.2
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -355,6 +355,21 @@ Check "work prints first-run fresh install guidance" (($r.Code -eq 0) -and ($r.O
 
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
 Check "user-next prints first-run fresh install guidance" (($r.Code -eq 0) -and ($r.Out -match "start the first task") -and ($r.Out -match [regex]::Escape(".\scripts\handoff.ps1 start")) -and ($r.Out -match "printed Master prompt"))
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Completed old task"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "New clean task")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+Check "start prepares AI_HANDOFF.md for a clean new task" (($r.Code -eq 0) -and ($r.Out -match "AI_HANDOFF.md prepared for Master analysis") -and ($h -match "State: NEEDS_ANALYSIS") -and ($h -match "Waiting For: Master") -and ($h -match "Current Task: New clean task") -and ($h -match "Implementer: TBD"))
+
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("work")
+Check "work after start points to Codex Master" (($r.Code -eq 0) -and ($r.Out -match "NEEDS_ANALYSIS") -and ($r.Out -match "open Codex") -and ($r.Out -match "next -Clip"))
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Completed old task"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "UNCOMMITTED.md") -Value "dirty" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "Blocked new task")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+Check "start does not reset AI_HANDOFF.md when non-local changes exist" (($r.Code -eq 0) -and ($r.Out -match "was not reset") -and ($h -match "State: REVIEW_DONE") -and ($h -match "Current Task: Completed old task"))
 
 $doctorFiles = @{
     "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "v3.0.0 productization");

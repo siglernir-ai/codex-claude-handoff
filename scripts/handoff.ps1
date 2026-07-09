@@ -1110,6 +1110,73 @@ function Invoke-Start {
         }
     }
 
+    $handoffPath = Join-Path (Get-Location) "AI_HANDOFF.md"
+    if (Test-Path $handoffPath) {
+        $safeToOpenNewTask = (
+            ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") -or
+            ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") -or
+            ($State -eq "BLOCKED" -and $WaitingFor -eq "User")
+        )
+        if ($safeToOpenNewTask) {
+            $tree = Get-WorkingTreeState
+            if ($tree.Ok -and $tree.Files.Count -eq 0) {
+                $date = (Get-Date).ToString("yyyy-MM-dd")
+                $taskLine = ($Request -replace '[\r\n]+', ' ').Trim()
+                $handoffContent = @"
+# AI Handoff
+
+## Status
+- State: NEEDS_ANALYSIS
+- Waiting For: Master
+- Last Updated By: User
+- Last Updated At: $date
+- Current Task: $taskLine
+
+## Last Update
+- Actor: User
+- Date: $date
+- Task: Started a new handoff request with `handoff.ps1 start`.
+
+## Task Actors
+- Implementer: TBD
+- Reviewer: TBD
+
+## Done
+- None yet - this task has not started.
+
+## Changed Files
+- None yet
+
+## Verification
+- Commands Run: none yet
+- Build: not run
+- Lint: not run
+- Tests: not run
+- Manual Check: not run
+
+## Dialogue / Open Questions
+- None
+
+## Open Issues
+- None.
+
+## Risks / Notes
+- AI_HANDOFF.md is local coordination and must not be committed.
+
+## Next Recommended Step
+- Master: read USER_REQUEST.md, route through the Decision Router, assign Task Actors, and set the appropriate next state.
+"@
+                Set-Content -Path $handoffPath -Value $handoffContent -Encoding utf8
+                Write-Host "AI_HANDOFF.md prepared for Master analysis."
+            } elseif ($tree.Ok) {
+                Write-Host "WARNING: AI_HANDOFF.md was not reset because non-local working-tree changes exist."
+                Write-Host "Commit, stash, or resolve these files first:"
+                foreach ($f in $tree.Files) { Write-Host "  $f" }
+            } else {
+                Write-Host "WARNING: AI_HANDOFF.md was not reset because git status could not be checked."
+            }
+        }
+    }
     $masterTool = Resolve-Actor -Role "Master" -Binding $Binding
     $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 

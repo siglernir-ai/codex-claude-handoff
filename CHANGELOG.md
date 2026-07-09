@@ -3,6 +3,17 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.2 - Start Opens a Clean New Task
+
+- Improved `handoff.ps1 start` so it prepares `AI_HANDOFF.md` for a new task when
+  the previous handoff is complete or at initial setup and the working tree has no
+  non-local changes.
+- `start` now sets `State: NEEDS_ANALYSIS`, `Waiting For: Master`, `Current Task`
+  from the user request, and `Task Actors: TBD`, so `work` immediately points to
+  Codex/Master instead of showing stale completed-task guidance.
+- If non-local source changes are present, `start` leaves `AI_HANDOFF.md` unchanged
+  and warns the user instead of clobbering an in-progress task.
+- Added protocol coverage for clean restart and dirty-tree protection.
 ## 3.1.1 - First-Run Work Guidance
 
 - Improved `handoff.ps1 work` and `handoff.ps1 user-next` for a fresh install.
