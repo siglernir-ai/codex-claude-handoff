@@ -566,11 +566,10 @@ git/deploy action.
 **Exit criteria (honest status):**
 - Default `loop` still stops at the Reviewer turn; `loop -IncludeReviewer` captures + applies a
   verdict in-session and routes APPROVED -> `REVIEW_DONE`/User (stop) and BLOCKED ->
-  `READY_FOR_IMPLEMENTATION`/Implementer (continue) without involving the user. MET (pending
-  Reviewer-run tests).
+  `READY_FOR_IMPLEMENTATION`/Implementer (continue) without involving the user. MET.
 - Malformed/stale/missing verdicts and any guard violation fail closed with no transition; no
   test path creates a git commit; `cycle` still refuses Reviewer turns; Master/Codex stays
-  `callable: no` / `Auto-loop: no`. MET (pending Reviewer-run tests).
+  `callable: no` / `Auto-loop: no`. MET.
 
 ---
 

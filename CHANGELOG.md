@@ -3,6 +3,18 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.3 - Final Acceptance Cleanup
+
+- Stabilized the Windows timeout partial-progress fixture by giving the nested
+  PowerShell -> `npx.cmd` runner enough time to create its deliberate source edit
+  before the bounded turn times out.
+- Preserved the production timeout behavior and safety boundary; this release only
+  removes a cold-host false negative from the protocol acceptance harness.
+- Kept the canonical and template harnesses byte-for-byte synchronized.
+- Repaired the malformed `Commands run` item in the README Verification Gate.
+- Removed obsolete `pending Reviewer-run tests` qualifiers from completed v1.4.0
+  roadmap criteria now covered by the green acceptance suite.
+
 ## 3.1.2 - Start Opens a Clean New Task
 
 - Improved `handoff.ps1 start` so it prepares `AI_HANDOFF.md` for a new task when
