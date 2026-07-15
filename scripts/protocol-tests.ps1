@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.3
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.4
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -20,7 +20,11 @@
     master-apply in-session; default loop still stops at the Master turn), and the v1.4.0 opt-in Reviewer loop integration
     (loop -IncludeReviewer runs review-run + review-apply in-session: APPROVED -> REVIEW_DONE/
     User, BLOCKED -> READY_FOR_IMPLEMENTATION and continues under MaxTurns; default loop still
-    stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer), and the v2.0.0/v2.3.0 safe Claude process runner (bounded child process, stdout/stderr capture, timeout kill, durable Claude Implementer capture artifacts, and no false handoff transition).
+    stops at the Reviewer turn; malformed verdicts fail closed; cycle still refuses Reviewer),
+    the v3.1.4 BOM-less UTF-8 non-ASCII capture regressions for Master/Reviewer apply,
+    and the v2.0.0/v2.3.0 safe Claude process runner (bounded child process, stdout/stderr
+    capture, timeout kill, durable Claude Implementer capture artifacts, and no false
+    handoff transition).
 
     Usage:  pwsh -File scripts/protocol-tests.ps1
     Exit:   0 = all passed, 1 = one or more failures or a harness error.
@@ -750,6 +754,21 @@ Check "review-apply APPROVED records the verdict and source pointer" (($h -match
 Check "review-apply changes no file other than AI_HANDOFF.md (reviewed file untouched)" ($reviewedBefore -eq $reviewedAfter)
 Check "review-apply creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
 
+# Codex writes output-last-message as BOM-less UTF-8. Prove Windows PowerShell 5.1
+# preserves a non-ASCII task through the anti-stale comparison instead of reading
+# the capture through the active ANSI code page.
+$utf8ReviewTask = (-join @([char]0x05DE, [char]0x05E9, [char]0x05D9, [char]0x05DE, [char]0x05D4)) + " UTF-8"
+$utf8ReviewCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $utf8ReviewTask`nREASON: UTF-8 task matches"
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $utf8ReviewTask
+[System.IO.File]::WriteAllText(
+    (Join-Path $fx "CODEX_REVIEW_LAST.md"),
+    $utf8ReviewCapture,
+    [System.Text.UTF8Encoding]::new($false)
+)
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md") -Encoding utf8
+Check "review-apply preserves a BOM-less UTF-8 non-ASCII TASK" (($r.Code -eq 0) -and $h.Contains($utf8ReviewTask))
+
 # BLOCKED verdict -> READY_FOR_IMPLEMENTATION / Waiting For: Implementer; records the reason.
 $fx = New-ReviewApplyFixture -Capture $blockedCapture -CurrentTask $task
 $handoffPath = Join-Path $fx "AI_HANDOFF.md"
@@ -966,6 +985,19 @@ $afterCommits = & git -C $fx rev-list --count HEAD
 Check "master-apply READY_FOR_IMPLEMENTATION sets Waiting For: Implementer" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
 Check "master-apply records concrete Task Actors from the capture" (($h -match "Implementer:\s+Claude Code") -and ($h -match "Reviewer:\s+Codex"))
 Check "master-apply creates no git commit" ("$afterCommits".Trim() -eq "$beforeCommits".Trim())
+
+# Match the real Codex CLI encoding: output-last-message is UTF-8 without a BOM.
+$utf8MasterTask = (-join @([char]0x05DE, [char]0x05E9, [char]0x05D9, [char]0x05DE, [char]0x05D4)) + " UTF-8"
+$utf8MasterCapture = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: $utf8MasterTask`nREASON: UTF-8 task is ready"
+$fx = New-MasterApplyFixture -NoCapture -CurrentTask $utf8MasterTask
+[System.IO.File]::WriteAllText(
+    (Join-Path $fx "CODEX_MASTER_LAST.md"),
+    $utf8MasterCapture,
+    [System.Text.UTF8Encoding]::new($false)
+)
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md") -Encoding utf8
+Check "master-apply preserves a BOM-less UTF-8 non-ASCII TASK" (($r.Code -eq 0) -and $h.Contains($utf8MasterTask))
 
 $masterCaptureBlocked = @"
 MASTER_RECOMMENDATION: BLOCKED
@@ -1254,14 +1286,13 @@ New-Item -ItemType Directory -Path $hangBin -Force | Out-Null
 $hangCmd = Join-Path $hangBin "npx.cmd"
 Set-Content -Path $hangCmd -Encoding ascii -Value @"
 @echo off
-setlocal EnableDelayedExpansion
-set "ALL=%*"
-set IS_VERSION=
-if not "!ALL:--version=!"=="!ALL!" set IS_VERSION=1
-if defined IS_VERSION (
-  echo claude-code-test
-  exit /b 0
-)
+if "%~1"=="--version" goto version
+if "%~2"=="--version" goto version
+goto run
+:version
+echo claude-code-test
+exit /b 0
+:run
 echo started> "%FAKE_NPX_MARKER%"
 if not "%FAKE_NPX_TOUCH%"=="" echo partial progress> "%FAKE_NPX_TOUCH%"
 cmd /c "ping -n 31 127.0.0.1 > nul"

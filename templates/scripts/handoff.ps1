@@ -2437,7 +2437,9 @@ function Invoke-ReviewRun {
     Write-Host "  $ReviewLastName"
     Write-Host ""
     Write-Host "Codex final message:"
-    Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
+    # Codex writes UTF-8 without a BOM. Windows PowerShell 5.1 otherwise reads it
+    # using the active ANSI code page and corrupts non-ASCII task text.
+    Get-Content -Path $lastPath -Encoding utf8 | ForEach-Object { Write-Host "  $_" }
     Write-Host ""
     Write-Host "This step captured the review only. It made no git changes and did not modify AI_HANDOFF.md."
     Write-Host "To apply the captured verdict's local handoff transition, run:"
@@ -2464,7 +2466,10 @@ function Get-VerdictFromCapture {
         $result.Error = "No captured verdict file ($ReviewLastName) found. Run 'handoff.ps1 review-run' first to capture a Codex review verdict."
         return $result
     }
-    $raw = Get-Content -Raw -Path $Path -ErrorAction SilentlyContinue
+    # Codex output-last-message is UTF-8 without a BOM. Read it explicitly so the
+    # anti-stale TASK comparison works for Hebrew and other non-ASCII text on
+    # Windows PowerShell 5.1.
+    $raw = Get-Content -Raw -Path $Path -Encoding utf8 -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($raw)) {
         $result.Error = "Captured verdict file ($ReviewLastName) is empty; no verdict to apply."
         return $result
@@ -2952,7 +2957,9 @@ function Invoke-MasterRun {
     Write-Host "  $MasterLastName"
     Write-Host ""
     Write-Host "Codex final message:"
-    Get-Content -Path $lastPath | ForEach-Object { Write-Host "  $_" }
+    # Codex writes UTF-8 without a BOM. Windows PowerShell 5.1 otherwise reads it
+    # using the active ANSI code page and corrupts non-ASCII task text.
+    Get-Content -Path $lastPath -Encoding utf8 | ForEach-Object { Write-Host "  $_" }
     Write-Host ""
     Write-Host "This captured the Master recommendation only. It made no git changes and did not modify AI_HANDOFF.md."
     Write-Host "To apply the recommendation locally, run:"
@@ -2975,7 +2982,10 @@ function Get-MasterRecommendationFromCapture {
         $result.Error = "No captured Master recommendation file ($MasterLastName) found. Run 'handoff.ps1 master-run' first to capture a Codex Master recommendation."
         return $result
     }
-    $raw = Get-Content -Raw -Path $Path -ErrorAction SilentlyContinue
+    # Codex output-last-message is UTF-8 without a BOM. Read it explicitly so the
+    # anti-stale TASK comparison works for Hebrew and other non-ASCII text on
+    # Windows PowerShell 5.1.
+    $raw = Get-Content -Raw -Path $Path -Encoding utf8 -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($raw)) {
         $result.Error = "Captured Master recommendation file ($MasterLastName) is empty; no recommendation to apply."
         return $result

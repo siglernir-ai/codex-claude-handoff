@@ -3,6 +3,25 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.4 - UTF-8 Capture Integrity
+
+- Fixed `master-apply` and `review-apply` on Windows PowerShell 5.1 by reading
+  Codex `output-last-message` artifacts explicitly as UTF-8. Codex writes these
+  files without a BOM, so the previous default read corrupted Hebrew and other
+  non-ASCII task text before the anti-stale comparison.
+- Kept the exact TASK anti-stale guard and all existing safety boundaries intact;
+  the fix changes decoding only and does not weaken capture validation.
+- Added BOM-less UTF-8 non-ASCII regression coverage for both Master and Reviewer
+  apply paths and kept canonical/template scripts byte-for-byte synchronized.
+- Hardened the Windows hanging-runner fixture so version detection checks only
+  the leading arguments instead of expanding the complete prompt through `%*`;
+  this prevents the acceptance harness itself from stalling before its marker.
+- Forward-tested the candidate in a clean Node.js project: a Hebrew request ran
+  through Codex Master, Claude Code Implementer, and Codex Reviewer; 11 product
+  tests passed; commit gating stopped at the User. A risky Hebrew auth/database/
+  deploy request routed to `PLAN_REQUIRED` without invoking Claude or changing
+  source files.
+
 ## 3.1.3 - Final Acceptance Cleanup
 
 - Stabilized the Windows timeout partial-progress fixture by giving the nested
