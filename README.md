@@ -628,8 +628,9 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 **What cycle does:**
 1. Checks eligibility through the adapter registry: state, turn ownership, Implementer bound to Claude Code, the
    Reviewer != Implementer role invariant, and a clean working tree (tracked and untracked
-   files; only the local handoff files `AI_HANDOFF.md`, `NEXT_TURN.md`, `USER_REQUEST.md`,
-   and `HANDOFF_LOOP.log` are exempt).
+   files; local coordination files are exempt). Since v3.1.5, an exact `Changed Files`
+   match is also allowed when resuming a correction after a Reviewer `BLOCKED` verdict;
+   any unrelated dirty file still blocks.
 2. Refreshes `NEXT_TURN.md` (intentional local handoff-file write).
 3. Checks that Claude Code is available via `npx --yes @anthropic-ai/claude-code`.
 4. Prints the command it is about to run.
@@ -645,10 +646,10 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
    Otherwise it reports the next actor (tool + role) and stops, or routes an inconsistent
    handoff to the User with exit code 6. `cycle` never runs a second tool turn.
 
-**The Reviewer turn is not automated.** `cycle` prepares and displays the Reviewer handoff;
-you paste it into the Reviewer tool yourself. The default Reviewer (Codex) has no local CLI,
-and automatic review of an automated implementation would weaken the independent-review
-invariant.
+**The Reviewer turn is not automated by `cycle`.** `cycle` prepares and displays the Reviewer
+handoff. Run the guarded `review-run` + `review-apply` commands explicitly, paste manually,
+or use the per-session `loop -IncludeReviewer` opt-in. Codex remains a tool independent from
+the Claude Code Implementer in every mode.
 
 **Bash is blocked during the assisted turn.** Claude Code cannot run tests, typecheck, or lint. Run these manually after the turn completes.
 
@@ -660,7 +661,7 @@ invariant.
 
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `cycle` exits with code 3.
 
-**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or Claude Code timeout, 5 Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing).
+**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or unrecovered Claude Code timeout, 5 unrecovered Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing). Since v3.1.5, an interrupted exact-scope Reviewer correction may route to independent review instead of returning 4/5; it is never treated as approval.
 
 ### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]`
 
@@ -714,9 +715,13 @@ the exact next actor and paste instruction, and stops with exit 0. Investigation
 remain manual - the Claude Code CLI turn cannot be safely restricted to handoff-only edits.
 
 **Hard stops:** `REVIEW_DONE`, `WAITING_FOR_USER`, `BLOCKED`, `IMPLEMENTED`, unrecognized
-state, `Waiting For` mismatch, Reviewer == Implementer, dirty working tree (tracked or
-untracked), missing Claude Code/npx, Claude Code runner start failure, Claude Code timeout, Claude Code non-zero exit, `MaxTurns` reached, and
-the session budget cap.
+state, `Waiting For` mismatch, Reviewer == Implementer, an unapproved dirty working tree,
+missing Claude Code/npx, Claude Code runner start failure, an unrecovered timeout/non-zero
+exit, `MaxTurns` reached, and the session budget cap. Since v3.1.5 the only dirty-tree
+exception is a Reviewer-`BLOCKED` correction whose Git status equals `Changed Files`
+exactly. After an interrupted turn, automation may continue only to the independent Reviewer
+when the post-turn handoff and scope are exact, or when an exact-scope correction has a proven
+before/after content change. Extra files, no change, and malformed states still fail closed.
 
 **Budget semantics:** `-BudgetUsd` is the per-turn cap passed to `--max-budget-usd`.
 `-SessionBudgetUsd` is a conservative worst-case authorized-spend cap: before each turn,
@@ -728,8 +733,9 @@ session parameters, each turn's pre/post state, Claude exit codes, and the final
 reason. The file is local and ignored by Git (the installer adds the rule); never commit it.
 
 **Exit codes:** same meanings as `cycle` - 0 clean expected stop (non-callable next actor,
-MaxTurns, or session budget), 1 blocked (preflight, invalid arguments, invariant, dirty
-tree), 2 cancelled confirmation, 3 prerequisite missing, 4 NEXT_TURN.md failure, 5 Claude
+MaxTurns, session budget, or a safe route to Reviewer after validated recovery), 1 blocked
+(preflight, invalid arguments, invariant, unapproved dirty tree), 2 cancelled confirmation,
+3 prerequisite missing, 4 NEXT_TURN.md failure or unrecovered timeout, 5 unrecovered Claude
 Code error, 6 mismatch or unrecognized state.
 
 **Safety:** one explicit `yes` confirmation before the session starts (fail-closed - EOF,

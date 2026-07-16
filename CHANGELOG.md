@@ -3,6 +3,24 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.5 - Exact-Scope Autonomous Recovery
+
+- Fixed Windows Claude process execution to pass a real PowerShell argument array to
+  `npx.cmd`, preserving multi-word prompts and the true child exit code while retaining
+  bounded timeout and descendant-process cleanup.
+- Hardened the Claude Implementer prompt against unrequested helper/runner files and
+  invented verification when Bash is unavailable.
+- Allowed Reviewer-`BLOCKED` corrections to resume only when Git status matches the
+  approved `Changed Files` set exactly; arbitrary dirty trees still fail closed.
+- Added review-only recovery for interrupted corrections with proven exact-scope content
+  changes, and for non-zero exits that already produced a valid exact-scope review handoff.
+  Recovery never approves implementation; Codex remains the independent Reviewer.
+- Added regressions for resume, no-change failure, extra-file blocking, interrupted
+  exact-scope recovery, valid-handoff/non-zero continuation, and Windows argv/exit behavior.
+- Passed a clean real-user acceptance run in a new Node.js project: Hebrew task input,
+  Codex Master -> Claude Code Implementer -> Codex Reviewer, six tests passing, exactly two
+  approved files changed, `REVIEW_DONE / User`, commit gate ready, and no commit or release.
+
 ## 3.1.4 - UTF-8 Capture Integrity
 
 - Fixed `master-apply` and `review-apply` on Windows PowerShell 5.1 by reading

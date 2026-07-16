@@ -380,6 +380,39 @@ $doctorFiles = @{
     ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles;
     ".ai/skills/codex-claude-handoff/VERSION" = "3.0.0"
 }
+
+function New-BlockedCorrectionHandoff {
+    param([string]$State = "READY_FOR_IMPLEMENTATION", [string]$WaitingFor = "Implementer")
+    return @"
+# AI Handoff
+
+## Status
+- State: $State
+- Waiting For: $WaitingFor
+- Last Updated By: Reviewer
+- Last Updated At: 2026-07-15
+- Current Task: Correct the reviewed approved file
+
+## Last Update
+- Actor: Reviewer (Codex)
+- Date: 2026-07-15
+- Verdict: BLOCKED
+- Reason: approved.txt still needs one focused correction.
+
+## Task Actors
+- Implementer: Claude Code
+- Reviewer: Codex
+
+## Changed Files
+- approved.txt
+
+## Verification
+- Tests: not run
+
+## Next Recommended Step
+- Implementer: correct approved.txt, then return it to Reviewer.
+"@
+}
 $fx = New-Fixture -Files $doctorFiles -InitGit
 $handoffPath = Join-Path $fx "AI_HANDOFF.md"
 $beforeHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
@@ -1214,6 +1247,171 @@ Check "cycle still refuses a Reviewer turn (no -IncludeReviewer opt-in for cycle
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
 
+# === 14B. Reviewer BLOCKED correction resume and interrupted-turn recovery ===
+Write-Host "[14B] Reviewer BLOCKED correction resume and interrupted-turn recovery"
+
+$resumeBin = Join-Path $FixtureRoot "fake-npx-review-correction"
+New-Item -ItemType Directory -Path $resumeBin -Force | Out-Null
+Set-Content -Path (Join-Path $resumeBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+if "%~1"=="--version" goto version
+if "%~2"=="--version" goto version
+if "%~3"=="--version" goto version
+goto run
+:version
+echo claude-code-test
+exit /b 0
+:run
+if "%FAKE_CORRECTION_MODE%"=="transition" (
+  echo corrected> "%FAKE_CORRECTION_FILE%"
+  copy /y "%FAKE_CORRECTION_AFTER%" "%FAKE_CORRECTION_HANDOFF%" > nul
+  echo FAKE_CORRECTION_TRANSITION
+  exit /b 0
+)
+if "%FAKE_CORRECTION_MODE%"=="transition-error" (
+  echo corrected> "%FAKE_CORRECTION_FILE%"
+  copy /y "%FAKE_CORRECTION_AFTER%" "%FAKE_CORRECTION_HANDOFF%" > nul
+  exit /b 9
+)
+if "%FAKE_CORRECTION_MODE%"=="transition-error-extra" (
+  echo corrected> "%FAKE_CORRECTION_FILE%"
+  echo unapproved> "%FAKE_CORRECTION_EXTRA%"
+  copy /y "%FAKE_CORRECTION_AFTER%" "%FAKE_CORRECTION_HANDOFF%" > nul
+  exit /b 9
+)
+if "%FAKE_CORRECTION_MODE%"=="error-after-edit" (
+  echo corrected> "%FAKE_CORRECTION_FILE%"
+  exit /b 9
+)
+if "%FAKE_CORRECTION_MODE%"=="error-no-change" exit /b 9
+exit /b 8
+"@
+
+$prevPath = $env:Path
+$prevCorrectionMode = $env:FAKE_CORRECTION_MODE
+$prevCorrectionFile = $env:FAKE_CORRECTION_FILE
+$prevCorrectionAfter = $env:FAKE_CORRECTION_AFTER
+$prevCorrectionHandoff = $env:FAKE_CORRECTION_HANDOFF
+$prevCorrectionExtra = $env:FAKE_CORRECTION_EXTRA
+$env:Path = $resumeBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $blockedCorrection = New-BlockedCorrectionHandoff
+    $readyCorrection = New-BlockedCorrectionHandoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
+
+    # A new loop session may resume the exact dirty scope left by Reviewer BLOCKED.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+        "HANDOFF_AFTER.md" = $readyCorrection
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    $env:FAKE_CORRECTION_MODE = "transition"
+    $env:FAKE_CORRECTION_FILE = Join-Path $fx "approved.txt"
+    $env:FAKE_CORRECTION_AFTER = Join-Path $fx "HANDOFF_AFTER.md"
+    $env:FAKE_CORRECTION_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    Check "loop resumes exact dirty scope after Reviewer BLOCKED" (($r.Code -eq 0) -and ($r.Out -match "resuming the Reviewer's BLOCKED correction") -and ($r.Out -notmatch "Working tree is not clean"))
+    Check "resumed Reviewer correction reaches READY_FOR_REVIEW" (($h -match "State:\s+READY_FOR_REVIEW") -and ((Get-Content -Raw (Join-Path $fx "approved.txt")) -match "corrected"))
+
+    # A non-zero process exit after Claude already produced a protocol-valid,
+    # exact-scope review handoff must continue to the independent Reviewer.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+        "HANDOFF_AFTER.md" = $readyCorrection
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    $env:FAKE_CORRECTION_MODE = "transition-error"
+    $env:FAKE_CORRECTION_FILE = Join-Path $fx "approved.txt"
+    $env:FAKE_CORRECTION_AFTER = Join-Path $fx "HANDOFF_AFTER.md"
+    $env:FAKE_CORRECTION_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $env:FAKE_CORRECTION_EXTRA = Join-Path $fx "unapproved.tmp"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    Check "non-zero exit after a valid exact-scope review handoff continues safely" (($r.Code -eq 0) -and ($r.Out -match "valid exact-scope review handoff") -and ($h -match "State:\s+READY_FOR_REVIEW"))
+
+    # The same post-turn handoff with one extra source artifact is not valid scope
+    # and must not receive either recovery path.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+        "HANDOFF_AFTER.md" = $readyCorrection
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    $env:FAKE_CORRECTION_MODE = "transition-error-extra"
+    $env:FAKE_CORRECTION_FILE = Join-Path $fx "approved.txt"
+    $env:FAKE_CORRECTION_AFTER = Join-Path $fx "HANDOFF_AFTER.md"
+    $env:FAKE_CORRECTION_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $env:FAKE_CORRECTION_EXTRA = Join-Path $fx "unapproved.tmp"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    Check "non-zero review handoff with an extra file fails closed" (($r.Code -eq 5) -and ($r.Out -notmatch "valid exact-scope review handoff") -and (Test-Path (Join-Path $fx "unapproved.tmp")))
+
+    # A budget/error exit after a real exact-scope correction receives a review-only
+    # local recovery transition; it is never treated as technical approval.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    $env:FAKE_CORRECTION_MODE = "error-after-edit"
+    $env:FAKE_CORRECTION_FILE = Join-Path $fx "approved.txt"
+    $env:FAKE_CORRECTION_AFTER = ""
+    $env:FAKE_CORRECTION_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $recoveryOk = (($r.Code -eq 0) -and ($r.Out -match "Automation recovery") -and ($h -match "State:\s+READY_FOR_REVIEW") -and ($h -match "not attested here"))
+    Check "interrupted exact-scope correction recovers to independent review" $recoveryOk "exit=$($r.Code); stateReady=$($h -match 'State:\s+READY_FOR_REVIEW'); recoveryOutput=$($r.Out -match 'Automation recovery'); verificationMarker=$($h -match 'not attested here')"
+    Push-Location $fx
+    try { $recoveryCommitCount = (& git rev-list --all --count 2>$null).Trim() } finally { Pop-Location }
+    Check "interrupted correction recovery creates no commit" ($recoveryCommitCount -eq "1")
+
+    # No content change means no recovery: do not send the already-rejected diff
+    # back to Reviewer merely because Claude consumed budget or exited non-zero.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    $env:FAKE_CORRECTION_MODE = "error-no-change"
+    $env:FAKE_CORRECTION_FILE = Join-Path $fx "approved.txt"
+    $env:FAKE_CORRECTION_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    $noEditOk = (($r.Code -eq 5) -and ($r.Out -notmatch "Automation recovery") -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION"))
+    Check "interrupted correction without a new edit fails closed" $noEditOk "exit=$($r.Code); recoveryOutput=$($r.Out -match 'Automation recovery'); implementationState=$($h -match 'State:\s+READY_FOR_IMPLEMENTATION')"
+
+    # Exact scope is mandatory; one unrelated file keeps the original dirty-tree block.
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $blockedCorrection
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+        "approved.txt" = "baseline"
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    Set-Content -Path (Join-Path $fx "approved.txt") -Value "review rejected" -Encoding utf8
+    Set-Content -Path (Join-Path $fx "unapproved.tmp") -Value "extra" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1", "-TimeoutSeconds", "5")
+    Check "Reviewer correction resume blocks any unapproved extra file" (($r.Code -eq 1) -and ($r.Out -match "Working tree is not clean") -and ($r.Out -match "unapproved.tmp"))
+} finally {
+    $env:Path = $prevPath
+    if ($null -eq $prevCorrectionMode) { Remove-Item Env:\FAKE_CORRECTION_MODE -ErrorAction SilentlyContinue } else { $env:FAKE_CORRECTION_MODE = $prevCorrectionMode }
+    if ($null -eq $prevCorrectionFile) { Remove-Item Env:\FAKE_CORRECTION_FILE -ErrorAction SilentlyContinue } else { $env:FAKE_CORRECTION_FILE = $prevCorrectionFile }
+    if ($null -eq $prevCorrectionAfter) { Remove-Item Env:\FAKE_CORRECTION_AFTER -ErrorAction SilentlyContinue } else { $env:FAKE_CORRECTION_AFTER = $prevCorrectionAfter }
+    if ($null -eq $prevCorrectionHandoff) { Remove-Item Env:\FAKE_CORRECTION_HANDOFF -ErrorAction SilentlyContinue } else { $env:FAKE_CORRECTION_HANDOFF = $prevCorrectionHandoff }
+    if ($null -eq $prevCorrectionExtra) { Remove-Item Env:\FAKE_CORRECTION_EXTRA -ErrorAction SilentlyContinue } else { $env:FAKE_CORRECTION_EXTRA = $prevCorrectionExtra }
+}
+
+
 # === 15. Safe Claude process runner and Implementer capture (v2.0.0/v2.3.0/v2.4.0) ===
 Write-Host "[15] Safe Claude process runner and Implementer capture"
 
@@ -1261,6 +1459,7 @@ try {
     Check "cycle flags a no-op turn (exit 7) when the fake fast npx makes no progress (v2.6.0)" (($r.Code -eq 7) -and ($r.Out -match "no-op"))
     $runnerSource = Get-Content -Raw -Path $HandoffScript
     Check "bounded Claude runner source keeps the Claude safety flags" (($runnerSource -match "'--permission-mode'") -and ($runnerSource -match "'acceptEdits'") -and ($runnerSource -match "'--disallowed-tools'") -and ($runnerSource -match "'Bash'") -and ($runnerSource -match "'--no-session-persistence'"))
+    Check "Claude prompt forbids helper scripts and invented verification" (($runnerSource -match "Do NOT create temporary helper, capture, runner, or wrapper scripts") -and ($runnerSource -match "never claim a command or test passed without observed output"))
     $argvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
     Check "bounded Claude runner preserves multi-word system and user prompts as single argv values (v2.10.0)" (($argvText -match "arg3=--append-system-prompt") -and ($argvText -match "arg4=You are a non-interactive, headless automation agent") -and ($argvText -match "arg5=-p") -and ($argvText -match "arg6=You are running as the Implementer"))
     $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"

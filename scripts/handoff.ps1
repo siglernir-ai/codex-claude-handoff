@@ -362,6 +362,8 @@ function Invoke-ClaudeTurn {
 
     $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available to talk to during this turn. Do NOT greet anyone, do NOT ask what to work on, do NOT ask for plugin choices, do NOT wait for input, and do NOT treat this as the start of an interactive session.`nRead NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: immediately either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. Do not stop to ask the operator.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
     $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
+    $prompt += "`nBash is unavailable in this automated turn. Do NOT create temporary helper, capture, runner, or wrapper scripts to work around that restriction. Create or edit only files required by the approved task. If verification cannot run without Bash, record it as not run with the reason; never claim a command or test passed without observed output."
+    $systemPrompt += " Bash is unavailable: never create helper, capture, runner, or wrapper scripts to simulate shell verification, and never claim unobserved verification. Edit only task-required files and the local handoff."
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
@@ -399,39 +401,17 @@ $argList = @(
     '--setting-sources',
     'project,local'
 )
-function ConvertTo-WindowsCommandLineArgument {
-    param([AllowNull()][string]$Argument)
-    if ($null -eq $Argument -or $Argument.Length -eq 0) { return '""' }
-    if ($Argument -notmatch '[\s"]') { return $Argument }
-
-    $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.Append('"')
-    $backslashes = 0
-    foreach ($ch in $Argument.ToCharArray()) {
-        if ($ch -eq '\') {
-            $backslashes++
-        } elseif ($ch -eq '"') {
-            if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
-            [void]$sb.Append('\"')
-            $backslashes = 0
-        } else {
-            if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes) }
-            $backslashes = 0
-            [void]$sb.Append($ch)
-        }
-    }
-    if ($backslashes -gt 0) { [void]$sb.Append('\' * ($backslashes * 2)) }
-    [void]$sb.Append('"')
-    return $sb.ToString()
-}
 try {
     $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
     if (-not $npxCommand) { $npxCommand = Get-Command npx -ErrorAction Stop }
-    $argumentLine = ($argList | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' '
-    $child = Start-Process -FilePath $npxCommand.Source -ArgumentList $argumentLine -NoNewWindow -PassThru
-    Set-Content -LiteralPath $ChildPidFile -Value $child.Id -Encoding ascii -NoNewline -ErrorAction SilentlyContinue
-    $child.WaitForExit()
-    exit $child.ExitCode
+    # Invoke with a real PowerShell argument array. Passing the same values through
+    # Start-Process to npx.cmd builds a cmd.exe command line where prompt characters
+    # can be reinterpreted and the true child exit code can be lost on Windows.
+    # The outer bounded runner still owns this process and kills its full descendant
+    # tree on timeout, so a separate child PID is not required here.
+    & $npxCommand.Source @argList
+    if ($null -eq $LASTEXITCODE) { exit 3 }
+    exit ([int]$LASTEXITCODE)
 } catch {
     Write-Error $_
     exit 3
@@ -1213,7 +1193,8 @@ function Invoke-CommitCheck {
 }
 
 function Get-ReleaseChangedFiles {
-    $changedFilesLines = Get-SectionLines -Lines $Lines -Heading "Changed Files"
+    param([string[]]$FromLines = $Lines)
+    $changedFilesLines = Get-SectionLines -Lines $FromLines -Heading "Changed Files"
     $files = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $changedFilesLines) {
         $trimmed = $line.Trim()
@@ -1283,6 +1264,52 @@ function Test-SameFileSet {
     $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($a in $Actual) { [void]$actualSet.Add([string]$a) }
     return $expectedSet.SetEquals($actualSet)
+}
+
+# A dirty tree is expected after a Reviewer BLOCKED verdict: the Implementer must
+# correct the already-reviewed files in place. Permit that resume only when the
+# current dirty file set matches AI_HANDOFF.md Changed Files exactly. Arbitrary
+# dirty READY_FOR_IMPLEMENTATION states remain blocked.
+function Get-ReviewerBlockedResumePlan {
+    param(
+        [hashtable]$Tree,
+        [string]$StateValue = $State,
+        [string]$WaitingForValue = $WaitingFor,
+        [string[]]$HandoffLines = $Lines
+    )
+
+    $expected = @(Get-ReleaseChangedFiles -FromLines $HandoffLines)
+    $lastUpdate = (Get-SectionLines -Lines $HandoffLines -Heading "Last Update") -join "`n"
+    $implementer = Resolve-Actor -Role "Implementer" -Binding $Binding
+    $isBlockedCorrection = ($StateValue -eq "READY_FOR_IMPLEMENTATION") -and
+        (($WaitingForValue -eq "Implementer") -or ($WaitingForValue -eq $implementer)) -and
+        ($lastUpdate -match '(?im)^-\s*Verdict:\s*BLOCKED\s*$')
+    $exactScope = $Tree.Ok -and ($expected.Count -gt 0) -and
+        (Test-SameFileSet -Expected $expected -Actual $Tree.Files)
+
+    return @{
+        Allowed = ($isBlockedCorrection -and $exactScope)
+        IsBlockedCorrection = $isBlockedCorrection
+        ExactScope = $exactScope
+        ExpectedFiles = $expected
+    }
+}
+
+function Get-FileSetFingerprint {
+    param([object[]]$Files)
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($file in @($Files | Sort-Object)) {
+        $path = Join-Path (Get-Location) ([string]$file)
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+            $parts.Add("$file|file|$hash")
+        } elseif (Test-Path -LiteralPath $path) {
+            $parts.Add("$file|non-file")
+        } else {
+            $parts.Add("$file|missing")
+        }
+    }
+    return ($parts -join "`n")
 }
 
 function Test-FileContentMatch {
@@ -3360,6 +3387,50 @@ function Write-PartialProgressRepairGuidance {
     Write-Host "Next step:   Open Codex as Reviewer/repair, inspect git diff and AI_HANDOFF.md, then approve, block, or repair the handoff state."
 }
 
+# When an already-scoped Reviewer correction changes its approved files but the
+# Claude process is interrupted before updating AI_HANDOFF.md, move only the local
+# handoff to READY_FOR_REVIEW. This is not an approval: the independent Reviewer
+# must still inspect the exact diff and verification evidence.
+function Invoke-InterruptedCorrectionRecovery {
+    param([string]$Reason, [int]$ExitCode)
+
+    $date = (Get-Date).ToString("yyyy-MM-dd")
+    $statusBody = @(
+        "- State: READY_FOR_REVIEW",
+        "- Waiting For: Reviewer",
+        "- Last Updated By: Automation Recovery",
+        "- Last Updated At: $date",
+        "- Current Task: $CurrentTask"
+    )
+    $lastUpdateBody = @(
+        "- Actor: Automation Recovery after interrupted Claude correction",
+        "- Date: $date",
+        "- Task: Preserved the Reviewer's existing correction scope after $Reason.",
+        "- Claude Exit Code: $ExitCode",
+        "- Evidence: the approved Changed Files set matches git status exactly and those files changed during this correction turn.",
+        "- Verification: not attested here; the independent Reviewer must verify the diff and tests."
+    )
+    $nextStepBody = @(
+        "- Reviewer (Codex): independently review the corrected Changed Files, run safe verification,",
+        "  and approve or return focused changes. Do not rely on Automation Recovery as technical approval."
+    )
+
+    $cur = Get-Content -Path $HandoffFile
+    $r1 = Set-HandoffSectionBody -Lines $cur      -Heading "Status"                -NewBody $statusBody
+    $r2 = Set-HandoffSectionBody -Lines $r1.Lines -Heading "Last Update"           -NewBody $lastUpdateBody
+    $r3 = Set-HandoffSectionBody -Lines $r2.Lines -Heading "Next Recommended Step" -NewBody $nextStepBody
+    if (-not ($r1.Ok -and $r2.Ok -and $r3.Ok)) {
+        Write-Host "Automation recovery blocked: AI_HANDOFF.md is missing a required section."
+        Write-Host "AI_HANDOFF.md was not modified."
+        return $false
+    }
+
+    Set-Content -Path $HandoffFile -Value ($r3.Lines -join "`n") -Encoding utf8 -ErrorAction Stop
+    Write-Host "Automation recovery: interrupted Reviewer correction moved to READY_FOR_REVIEW."
+    Write-Host "Safety: exact Changed Files scope only; this is not approval and no Git mutation or commit was run."
+    return $true
+}
+
 function Invoke-Cycle {
     param([string]$CommandLabel = "cycle")
 
@@ -3395,7 +3466,6 @@ function Invoke-Cycle {
         Write-Host ""
         exit 1
     }
-
     # Turn ownership: Waiting For must indicate the Implementer's turn (role name or resolved tool)
     if ($WaitingFor -ne "Implementer" -and $WaitingFor -ne $implementerTool) {
         Write-Host ""
@@ -3452,7 +3522,8 @@ function Invoke-Cycle {
         exit 1
     }
 
-    if ($tree.Files.Count -gt 0) {
+    $cycleResumePlan = Get-ReviewerBlockedResumePlan -Tree $tree
+    if ($tree.Files.Count -gt 0 -and -not $cycleResumePlan.Allowed) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Working tree is not clean."
@@ -3464,6 +3535,10 @@ function Invoke-Cycle {
         Write-Host "Commit, stash, revert, or remove these files before running $CommandLabel."
         Write-Host ""
         exit 1
+    }
+    if ($cycleResumePlan.Allowed) {
+        Write-Host "${CommandLabel}: resuming the Reviewer's BLOCKED correction on the exact approved Changed Files scope."
+        Write-Host "Safety: unrelated dirty files would still block this turn."
     }
 
     Write-Host ""
@@ -3723,7 +3798,8 @@ function Invoke-Loop {
         Write-Host ""
         exit 1
     }
-    if ($tree.Files.Count -gt 0 -and -not $startsAtReviewerTurn) {
+    $initialBlockedResume = Get-ReviewerBlockedResumePlan -Tree $tree
+    if ($tree.Files.Count -gt 0 -and -not $startsAtReviewerTurn -and -not $initialBlockedResume.Allowed) {
         Write-Host ""
         Write-Host "loop: blocked."
         Write-Host "Working tree is not clean."
@@ -3735,6 +3811,10 @@ function Invoke-Loop {
         Write-Host "Commit, stash, revert, or remove these files before running loop."
         Write-Host ""
         exit 1
+    }
+    if ($initialBlockedResume.Allowed) {
+        Write-Host "loop: resuming the Reviewer's BLOCKED correction on the exact approved Changed Files scope."
+        Write-Host "Safety: unrelated dirty files would still block the Implementer turn."
     }
 
     # --- Budget info + single session confirmation ---
@@ -3980,7 +4060,8 @@ function Invoke-Loop {
             exit 1
         }
         $tree = Get-WorkingTreeState
-        if (-not $tree.Ok -or $tree.Files.Count -gt 0) {
+        $blockedResumePlan = Get-ReviewerBlockedResumePlan -Tree $tree -StateValue $script:State -WaitingForValue $script:WaitingFor -HandoffLines $script:Lines
+        if (-not $tree.Ok -or ($tree.Files.Count -gt 0 -and -not $blockedResumePlan.Allowed)) {
             Write-Host ""
             Write-Host "loop: blocked."
             Write-Host "Working tree is not clean (or git is unavailable)."
@@ -3991,6 +4072,13 @@ function Invoke-Loop {
             Write-Host ""
             exit 1
         }
+        if ($blockedResumePlan.Allowed) {
+            Write-Host "loop: continuing the Reviewer's BLOCKED correction on the exact approved Changed Files scope."
+            Write-Host "Safety: the pre-turn file fingerprint will be compared before any interrupted-turn recovery."
+        }
+        $preCorrectionFingerprint = if ($blockedResumePlan.Allowed) {
+            Get-FileSetFingerprint -Files $blockedResumePlan.ExpectedFiles
+        } else { "" }
 
         # Refresh NEXT_TURN.md for the automated turn
         try {
@@ -4023,18 +4111,66 @@ function Invoke-Loop {
         $authorized += $BudgetUsd
         $turnsRun    = $turnNo
 
+        $preImplementerState = $script:State
         $claudeExit = Invoke-ClaudeTurn
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
 
         if ($claudeExit -ne 0) {
+            $postLines = Get-Content -Path $HandoffFile
+            $postStatus = Read-HandoffState -Lines $postLines
+            $script:Lines = $postLines
+            $script:State = $postStatus.State
+            $script:WaitingFor = $postStatus.WaitingFor
+            $script:CurrentTask = $postStatus.CurrentTask
+            $interruptedReason = if ($claudeExit -eq 4) { "timeout" } else { "Claude Code exit $claudeExit" }
+            $recoveredToReview = $false
+
+            # If Claude completed a protocol-valid READY_FOR_REVIEW handoff before
+            # the process was interrupted, allow the independent Reviewer to decide.
+            # Exact Changed Files == git status is mandatory; extra helper files fail closed.
+            if ($script:State -eq "READY_FOR_REVIEW") {
+                $interruptedReviewPlan = Get-ReviewPlan -RequireCli:$false
+                if ($interruptedReviewPlan.Ok) {
+                    Write-Host "loop: Claude was interrupted after producing a valid exact-scope review handoff."
+                    Write-Host "Recovery: continuing to the independent Reviewer; this is not an implementation approval."
+                    Write-LoopLog "turn=$turnNo recovery=valid-review-handoff reason=$interruptedReason"
+                    $recoveredToReview = $true
+                }
+            }
+
+            # A Reviewer BLOCKED correction may update the exact approved files but
+            # stop at a budget/timeout before rewriting AI_HANDOFF.md. Prove both
+            # exact scope and an actual content change, then create a review-only
+            # recovery transition. The Reviewer still owns technical approval.
+            if (-not $recoveredToReview -and $blockedResumePlan.Allowed -and
+                ($script:State -eq "READY_FOR_IMPLEMENTATION")) {
+                $postTree = Get-WorkingTreeState
+                $postExpected = @(Get-ReleaseChangedFiles -FromLines $script:Lines)
+                $postExact = $postTree.Ok -and ($postExpected.Count -gt 0) -and
+                    (Test-SameFileSet -Expected $postExpected -Actual $postTree.Files)
+                $postFingerprint = if ($postExact) { Get-FileSetFingerprint -Files $postExpected } else { "" }
+                if ($postExact -and $postFingerprint -ne $preCorrectionFingerprint) {
+                    if (Invoke-InterruptedCorrectionRecovery -Reason $interruptedReason -ExitCode $claudeExit) {
+                        $script:Lines = Get-Content -Path $HandoffFile
+                        $freshRecoveryStatus = Read-HandoffState -Lines $script:Lines
+                        $script:State = $freshRecoveryStatus.State
+                        $script:WaitingFor = $freshRecoveryStatus.WaitingFor
+                        $script:CurrentTask = $freshRecoveryStatus.CurrentTask
+                        Write-LoopLog "turn=$turnNo recovery=interrupted-blocked-correction reason=$interruptedReason"
+                        $recoveredToReview = $true
+                    }
+                }
+            }
+
+            if ($recoveredToReview) { continue }
+
             if ($claudeExit -eq 3) {
                 Write-Host "Claude Code runner failed before the turn could start (exit 3)."
                 Write-LoopLog "turn=$turnNo stop reason=claude-runner-start-failed exit=3"
                 exit 3
             } elseif ($claudeExit -eq 4) {
                 Write-Host "Claude Code turn timed out (exit 4)."
-                $postStatus = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
-                $loopProgress = Get-TurnProgress -PreState $script:State -PostState $postStatus.State
+                $loopProgress = Get-TurnProgress -PreState $preImplementerState -PostState $postStatus.State
                 Write-PartialProgressRepairGuidance -CommandLabel "loop" -Progress $loopProgress -StateText "$($postStatus.State) / Waiting For: $($postStatus.WaitingFor)" -Reason "timeout"
                 Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
                 Write-LoopLog "turn=$turnNo stop reason=claude-timeout exit=4"

@@ -54,7 +54,9 @@ Use `work` whenever you do not know the next step.
 .\scripts\handoff.ps1 cycle -Yes -BudgetUsd 2 -TimeoutSeconds 240
 ```
 
-It still stops for Codex review and user commit approval.
+`cycle` still stops for Codex review and user commit approval. For one explicitly authorized
+session, `loop -IncludeMaster -IncludeReviewer` can run Master -> Claude Implementer -> Codex
+Reviewer and then stops at the user's commit approval.
 
 This project is designed for supervised human-in-the-loop use, not full unattended autonomy.
 
@@ -64,8 +66,10 @@ This project is designed for supervised human-in-the-loop use, not full unattend
 - No push/tag/release without explicit user authorization.
 - No deploy, database, secret, or production configuration changes without user approval.
 - No-op turns fail closed.
-- Timeouts fail closed.
-- Partial progress after timeout is reported as repair work, not success.
+- Timeouts and non-zero exits fail closed unless v3.1.5 proves an exact-scope Reviewer
+  correction changed content or already produced a valid review handoff.
+- Safe recovery routes only to the independent Reviewer; it is never implementation approval.
+- Any extra file, no-change turn, or malformed handoff remains blocked.
 
 ## Recommended Practice
 
@@ -75,4 +79,3 @@ This project is designed for supervised human-in-the-loop use, not full unattend
 - Use `work` before guessing.
 - Use `doctor` when something feels off.
 - Treat `AI_HANDOFF.md` as local coordination, not a file to commit.
-

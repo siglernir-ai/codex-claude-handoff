@@ -35,7 +35,7 @@ orchestrator exists.
 | Role | Default tool | Callable | Supported states | Invocation or manual instruction | Safety limits | Stop category when not callable | User authorization required |
 |---|---|---|---|---|---|---|---|
 | Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
-| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0) - an exit-0 turn that does not transition the handoff fails closed (exit 7 no-op, exit 6 incomplete); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
+| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
 ## Approved Commit Execution Adapter
@@ -553,3 +553,25 @@ partial-progress repair guidance:
   state.
 
 This preserves fail-closed behavior while making the next operator action obvious.
+
+## Exact-Scope Interrupted Correction Recovery (v3.1.5)
+
+v3.1.5 closes the recovery gaps found by the real v3.1.4 user-flow acceptance test.
+
+- A new `loop` or `cycle` may resume a Reviewer-`BLOCKED` correction only when the current
+  non-local Git status matches `AI_HANDOFF.md` `Changed Files` exactly. Any unrelated file
+  still blocks before Claude runs.
+- The Claude prompt forbids temporary helper/capture/runner/wrapper scripts, restricts edits
+  to task-required files, and requires unavailable verification to be recorded as not run.
+- The Windows runner invokes `npx.cmd` with a PowerShell argument array (`& ... @argList`)
+  inside the bounded runner process. This supersedes the v2.10.0 `Start-Process` command-line
+  quoting layer, preserves the real child exit code, and keeps timeout cleanup by terminating
+  the outer runner's complete descendant tree.
+- If Claude exits non-zero after already writing a protocol-valid `READY_FOR_REVIEW` handoff,
+  automation continues only when `Changed Files` still equals Git status exactly.
+- If an interrupted Reviewer correction changed the exact approved file set but did not update
+  the handoff, a before/after content fingerprint permits a local transition to
+  `READY_FOR_REVIEW`. The transition explicitly carries no verification attestation; Codex
+  remains the independent Reviewer and must run the checks.
+- No content change, a malformed handoff, or any extra file remains fail-closed. Recovery never
+  runs `git add`, commit, push, tag, deploy, database, or secret operations.
