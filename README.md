@@ -46,10 +46,11 @@ the exact next action.
 For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
 model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-v3.1.6 hardens independent review after strict human acceptance exposed a false
-approval: relevant safe local checks and preservation requirements are now explicit
-review gates. It also makes copyable Windows commands work under a Restricted
-PowerShell policy. v3.1.0 added one-command installation and beginner onboarding. v3.0.0 is the
+v3.1.7 closes the manual investigation gap found by human acceptance: read-only
+`NEEDS_INVESTIGATION` turns now run through the same bounded Claude adapter, enforce a
+post-turn no-source-edit boundary, and use Claude Code `--safe-mode` so unrelated user
+plugins and hooks cannot interfere. v3.1.6 hardened independent review and Windows
+commands. v3.1.0 added one-command installation and beginner onboarding. v3.0.0 is the
 productized supervised, human-in-the-loop workflow release. It makes
 the local workflow easier to trust and operate, but it is not unattended autonomy:
 user authorization is still required for commits, pushes, tags, releases, deploys,
@@ -103,7 +104,7 @@ authorization is required.
 
 Current local status:
 
-- Implementer bound to Claude Code is callable only for `READY_FOR_IMPLEMENTATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout.
+- Implementer bound to Claude Code is callable for `READY_FOR_IMPLEMENTATION` and read-only `NEEDS_INVESTIGATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout. Since v3.1.7, automated turns use Claude Code `--safe-mode`; investigation turns additionally fail closed if any non-handoff file changes.
 - Since v2.3.0, Claude Code Implementer turns write local continuity captures (CLAUDE_IMPLEMENTER_LAST.md and CLAUDE_IMPLEMENTER.jsonl) and follow CLAUDE_EXECUTION_POLICY.md for dynamic model-policy labels, model relevance reporting, subagent evidence, and CLI/window context reconstruction. These files are gitignored and clean-tree-exempt. Since v2.4.0, automated Claude Code Implementer turns also write sanitized command evidence to `CLAUDE_IMPLEMENTER_COMMAND.md` and `CLAUDE_IMPLEMENTER.jsonl.commands[]`, plus model evidence with source/confidence fields.
 - Master bound to Codex is callable for `NEEDS_ANALYSIS` through explicit
   `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. Since v2.1.0 the operator
@@ -124,9 +125,8 @@ Current local status:
   `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. See "Automated Reviewer
   Turn", "Automated Master Turn", "Opt-in Master Loop Integration", and "Opt-in Reviewer
   Loop Integration" in `ADAPTERS.md`.
-- Investigation, planning, and question turns remain manual because the current
-  automated Claude Code invocation cannot safely restrict edits to handoff-only
-  files in non-interactive mode.
+- Planning and question turns remain manual. Read-only investigation is automated and
+  protected by a clean-tree preflight plus a post-turn source-change boundary.
 - No adapter may commit, push, tag, deploy, alter databases, change secrets, or
   make product decisions without user authorization.
 - Since v0.19.1, the PowerShell release executor can perform the mechanical
@@ -612,14 +612,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cy
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
 compatibility).
 
-**Eligible state:** `cycle` asks the adapter registry whether the current role/tool/state is callable. Only `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` is callable, and only when the Implementer is bound to Claude Code. All other states are blocked with a message and exit code 1.
+**Eligible states:** `cycle` asks the adapter registry whether the current role/tool/state is callable. `State: READY_FOR_IMPLEMENTATION` and `State: NEEDS_INVESTIGATION`, both with `Waiting For: Implementer`, are callable when the Implementer is bound to Claude Code. Investigation is source-read-only and fails closed on any non-handoff change. All other states are blocked with a message and exit code 1.
 
 **Blocked states and manual workflow:**
 
 | State | Waiting For | What to do instead |
 |---|---|---|
 | READY_FOR_IMPLEMENTATION | Implementer (Claude Code) | Eligible - cycle proceeds |
-| NEEDS_INVESTIGATION | Implementer | Blocked - run `next` and paste manually |
+| NEEDS_INVESTIGATION | Implementer (Claude Code) | Eligible - cycle performs a guarded read-only investigation |
 | PLAN_REQUIRED | Implementer | Blocked - run `next` and paste manually |
 | Any | Master | Blocked - open the Master tool and paste the prompt |
 | Any | Implementer (not Claude Code) | Blocked - that tool has no local CLI; paste manually |
@@ -682,8 +682,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 lo
 ```
 
 **What it automates:** by default, only states the adapter registry marks `AutoLoopEligible` -
-that means `State: READY_FOR_IMPLEMENTATION` / `Waiting For: Implementer` where the
-Implementer is bound to Claude Code - the same callable turn as `cycle`, repeated up to
+`READY_FOR_IMPLEMENTATION` and read-only `NEEDS_INVESTIGATION`, both waiting for the
+Claude Code Implementer. These are the same callable turns as `cycle`, repeated up to
 `MaxTurns` times with one upfront confirmation for the whole session.
 
 **Opt-in Master turn (since v2.1.0):** with `-IncludeMaster`, the loop also auto-runs the

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.4
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.7
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -313,6 +313,7 @@ Write-Host "[3] Adapter decisions (adapters)"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
 Check "Implementer/Claude Code adapter is callable for READY_FOR_IMPLEMENTATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Tool:\s+Claude Code.*?Callable:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION")
+Check "Implementer/Claude Code adapter also auto-runs read-only NEEDS_INVESTIGATION" ($r.Out -match "(?s)Role:\s+Implementer.*?Auto-loop:\s+yes.*?States:\s+READY_FOR_IMPLEMENTATION, NEEDS_INVESTIGATION")
 # Since v2.0.1 Master/Codex is callable for NEEDS_ANALYSIS via master-run + master-apply,
 # but Auto-loop is no: loop only includes it with -IncludeMaster, and cycle never does.
 Check "Master/Codex adapter is callable for NEEDS_ANALYSIS but not auto-loop eligible" ($r.Out -match "(?s)Role:\s+Master.*?Tool:\s+Codex.*?Callable:\s+yes.*?Auto-loop:\s+no.*?States:\s+NEEDS_ANALYSIS")
@@ -1446,6 +1447,7 @@ echo arg3=%~3 >> "%FAKE_NPX_ARGV%"
 echo arg4=%~4 >> "%FAKE_NPX_ARGV%"
 echo arg5=%~5 >> "%FAKE_NPX_ARGV%"
 echo arg6=%~6 >> "%FAKE_NPX_ARGV%"
+echo arg7=%~7 >> "%FAKE_NPX_ARGV%"
 :after_arg_capture
 exit /b 0
 "@
@@ -1465,7 +1467,8 @@ try {
     Check "Claude prompt forbids helper scripts and invented verification" (($runnerSource -match "Do NOT create temporary helper, capture, runner, or wrapper scripts") -and ($runnerSource -match "never claim a command or test passed without observed output"))
     Check "Claude prompt enforces strict preservation beyond existing tests" (($runnerSource -match "every preservation or backward-compatibility clause in the task as strict") -and ($runnerSource -match "Existing tests are evidence, not an exhaustive specification") -and ($runnerSource -match "avoid broad transformations or coercion changes unless the task explicitly requires them"))
     $argvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
-    Check "bounded Claude runner preserves multi-word system and user prompts as single argv values (v2.10.0)" (($argvText -match "arg3=--append-system-prompt") -and ($argvText -match "arg4=You are a non-interactive, headless automation agent") -and ($argvText -match "arg5=-p") -and ($argvText -match "arg6=You are running as the Implementer"))
+    Check "bounded Claude runner enables safe mode before delivering prompts" (($argvText -match "arg3=--safe-mode") -and ($argvText -match "arg4=--append-system-prompt"))
+    Check "bounded Claude runner preserves multi-word system and user prompts as single argv values (v2.10.0)" (($argvText -match "arg5=You are a non-interactive, headless automation agent") -and ($argvText -match "arg6=-p") -and ($argvText -match "arg7=You are running as the Implementer"))
     $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
     $claudeCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
     $claudeJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"
@@ -1474,7 +1477,7 @@ try {
     [string[]]$jsonLines = if (Test-Path $claudeJsonl) { [regex]::Split((Get-Content -Raw -Path $claudeJsonl).Trim(), "`r?`n") | Where-Object { $_ -ne "" } } else { @() }
     $captureRecord = if ($jsonLines.Count -gt 0) { $jsonLines[$jsonLines.Count - 1] | ConvertFrom-Json } else { $null }
     Check "cycle writes Claude Implementer last capture" ((Test-Path $claudeLast) -and ($captureText -match "FAKE_CLAUDE_FAST_STDOUT") -and ($captureText -match "CLAUDE_EXECUTION_POLICY.md") -and ($captureText -match "Claude Execution Evidence") -and ($captureText -match "Command Transparency") -and ($captureText -match "Model Evidence"))
-    Check "cycle writes sanitized Claude command capture" ((Test-Path $claudeCommand) -and ($commandText -match "Claude Implementer Command Capture") -and ($commandText -match "<prompt:redacted>") -and ($commandText -match "--permission-mode acceptEdits") -and ($commandText -match "--disallowed-tools Bash") -and ($commandText -match "Sanitized: true"))
+    Check "cycle writes sanitized Claude command capture" ((Test-Path $claudeCommand) -and ($commandText -match "Claude Implementer Command Capture") -and ($commandText -match "<prompt:redacted>") -and ($commandText -match "--safe-mode") -and ($commandText -match "--permission-mode acceptEdits") -and ($commandText -match "--disallowed-tools Bash") -and ($commandText -match "Sanitized: true"))
     Check "cycle appends Claude Implementer JSONL capture" ((Test-Path $claudeJsonl) -and ($null -ne $captureRecord) -and ($captureRecord.exitCode -eq 0) -and ($captureRecord.timedOut -eq $false) -and ($captureRecord.stdout -match "FAKE_CLAUDE_FAST_STDOUT"))
     Check "JSONL capture includes command and model evidence" (($null -ne $captureRecord.commands) -and ($captureRecord.commands[0].sanitized -eq $true) -and ($captureRecord.commands[0].cmd -match "<prompt:redacted>") -and ($null -ne $captureRecord.modelEvidence) -and ($captureRecord.modelEvidence.actualModelObserved -eq "unknown/not exposed") -and ($captureRecord.modelEvidence.source -eq "not exposed") -and ($captureRecord.modelEvidence.confidence -eq "low"))
     $r2 = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
@@ -1491,6 +1494,7 @@ Set-Content -Path $hangCmd -Encoding ascii -Value @"
 @echo off
 if "%~1"=="--version" goto version
 if "%~2"=="--version" goto version
+if "%~3"=="--version" goto version
 goto run
 :version
 echo claude-code-test
@@ -1590,6 +1594,7 @@ if not "!ALL:--version=!"=="!ALL!" (
 )
 echo FAKE_CLAUDE_TRANSITION
 copy /Y "%FAKE_AFTER%" "%FAKE_HANDOFF%" >nul
+if not "%FAKE_SRC%"=="" echo forbidden-investigation-edit> "%FAKE_SRC%"
 exit /b 0
 "@
 
@@ -1613,6 +1618,49 @@ try {
     Check "loop does not re-run the same turn after a no-op" (($r.Out -match "turn 1 of 3") -and ($r.Out -notmatch "turn 2 of 3"))
 } finally {
     $env:Path = $prevPath
+}
+
+# 5. NEEDS_INVESTIGATION: loop invokes Claude automatically, permits a handoff-only
+# transition, and stops at the Reviewer without requiring a manual Claude window.
+$prevPath = $env:Path
+$prevAfter = $env:FAKE_AFTER
+$prevHandoff = $env:FAKE_HANDOFF
+$prevSrc = $env:FAKE_SRC
+$env:Path = $transitionBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $task = "v3.1.7 automated investigation test"
+    $fx = New-Fixture -Files @{
+        "AI_HANDOFF.md"   = (New-Handoff -State "NEEDS_INVESTIGATION" -WaitingFor "Implementer" -CurrentTask $task);
+        "HANDOFF_AFTER.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask $task);
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx
+    $env:FAKE_AFTER = Join-Path $fx "HANDOFF_AFTER.md"
+    $env:FAKE_HANDOFF = Join-Path $fx "AI_HANDOFF.md"
+    Remove-Item Env:\FAKE_SRC -ErrorAction SilentlyContinue
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "2", "-TimeoutSeconds", "5")
+    $after = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+    Check "loop auto-runs NEEDS_INVESTIGATION and reaches READY_FOR_REVIEW" (($r.Code -eq 0) -and ($r.Out -match "automated Claude Code Implementer turn") -and ($after -match "State:\s+READY_FOR_REVIEW"))
+    Check "automated investigation prompt explicitly forbids source edits" ((Get-Content -Raw -Path (Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md")) -match "READ-ONLY investigation turn")
+
+    # A handoff transition cannot hide a source edit: the post-turn boundary must
+    # still fail closed and identify the unexpected file.
+    $fx2 = New-Fixture -Files @{
+        "AI_HANDOFF.md"   = (New-Handoff -State "NEEDS_INVESTIGATION" -WaitingFor "Implementer" -CurrentTask $task);
+        "HANDOFF_AFTER.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask $task);
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $fx2
+    $env:FAKE_AFTER = Join-Path $fx2 "HANDOFF_AFTER.md"
+    $env:FAKE_HANDOFF = Join-Path $fx2 "AI_HANDOFF.md"
+    $env:FAKE_SRC = Join-Path $fx2 "FORBIDDEN_EDIT.txt"
+    $r2 = Invoke-Handoff -WorkDir $fx2 -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "investigation source edit fails closed even after a valid handoff transition" (($r2.Code -eq 6) -and ($r2.Out -match "read-only investigation modified source files") -and ($r2.Out -match "FORBIDDEN_EDIT.txt"))
+} finally {
+    $env:Path = $prevPath
+    if ($null -eq $prevAfter) { Remove-Item Env:\FAKE_AFTER -ErrorAction SilentlyContinue } else { $env:FAKE_AFTER = $prevAfter }
+    if ($null -eq $prevHandoff) { Remove-Item Env:\FAKE_HANDOFF -ErrorAction SilentlyContinue } else { $env:FAKE_HANDOFF = $prevHandoff }
+    if ($null -eq $prevSrc) { Remove-Item Env:\FAKE_SRC -ErrorAction SilentlyContinue } else { $env:FAKE_SRC = $prevSrc }
 }
 
 # 3. cycle: source changed but no transition => incomplete (exit 6), not success.
@@ -1665,6 +1713,7 @@ Check "Invoke-ClaudeTurn prompt still requires the Claude Execution Evidence blo
 Write-Host "[isolation] v2.8.0 --setting-sources project,local"
 Check "Invoke-ClaudeTurn passes the v2.8.0 isolation flag --setting-sources project,local" (($handoffSource -match "'--setting-sources'") -and ($handoffSource -match "'project,local'"))
 Check "Claude command transparency records the quoted setting-sources value (v2.8.0)" ($handoffSource -match 'setting-sources `"project,local`"')
+Check "Claude runner disables ambient plugins and hooks with --safe-mode" (($handoffSource -match "'--safe-mode'") -and ($handoffSource -match "customizations/plugins/hooks disabled"))
 
 # === v2.9.0 Claude Implementer system-prompt grounding ===
 Write-Host "[system-prompt] v2.9.0 --append-system-prompt"

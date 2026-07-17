@@ -48,7 +48,8 @@ Use `work` whenever you do not know the next step.
 
 ## Automation Boundary
 
-`cycle` can run one automated Claude Code Implementer turn:
+`cycle` can run one automated Claude Code Implementer turn for either implementation
+or read-only investigation:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cycle -Yes -BudgetUsd 2 -TimeoutSeconds 240
@@ -57,6 +58,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cy
 `cycle` still stops for Codex review and user commit approval. For one explicitly authorized
 session, `loop -IncludeMaster -IncludeReviewer` can run Master -> Claude Implementer -> Codex
 Reviewer and then stops at the user's commit approval.
+
+`NEEDS_INVESTIGATION` no longer requires opening Claude Code manually. The bounded runner
+uses Claude Code `--safe-mode` to disable ambient plugins and hooks, and it fails closed if
+an investigation changes any non-handoff file.
 
 On Windows, keep the full `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`
 prefix shown above. It works when the current execution policy is `Restricted` without

@@ -35,7 +35,7 @@ orchestrator exists.
 | Role | Default tool | Callable | Supported states | Invocation or manual instruction | Safety limits | Stop category when not callable | User authorization required |
 |---|---|---|---|---|---|---|---|
 | Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
-| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION` only | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
+| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; `NEEDS_INVESTIGATION` receives read-only prompts and a post-turn source-change boundary; Claude customizations/plugins/hooks disabled; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
 ## Approved Commit Execution Adapter
@@ -60,11 +60,11 @@ contract shape as role adapters.
 
 ## State-Specific Notes
 
-- `READY_FOR_IMPLEMENTATION` can be automated only when the Implementer is bound
-  to Claude Code and the local Claude Code CLI path is available.
-- `NEEDS_INVESTIGATION`, `PLAN_REQUIRED`, and `QUESTION_FOR_IMPLEMENTER` remain
-  manual. The current Claude Code CLI invocation cannot be safely
-  restricted to handoff-only edits in non-interactive mode.
+- `READY_FOR_IMPLEMENTATION` and source-read-only `NEEDS_INVESTIGATION` can be
+  automated only when the Implementer is bound to Claude Code and the local Claude
+  Code CLI path is available. Investigation begins from a clean non-local tree and
+  fails closed if any non-handoff file changes.
+- `PLAN_REQUIRED` and `QUESTION_FOR_IMPLEMENTER` remain manual.
 - Since v2.0.1 the Master/Codex `NEEDS_ANALYSIS` turn is callable end-to-end via the
   explicit `master-run` + `master-apply` commands - see "Automated Master Turn" below. Since
   v2.1.0, `loop -IncludeMaster` may opt that same guarded turn into one loop session; it is
@@ -75,8 +75,9 @@ contract shape as role adapters.
 - `callable` is not the same as `loop`/`cycle` eligible. The adapter model carries a
   separate `AutoLoopEligible` flag: `loop` and `cycle` gate on `AutoLoopEligible`, never on
   `callable`, so an explicit-command-only adapter (Reviewer/Codex) makes `loop` STOP rather
-  than auto-run a turn. Only `READY_FOR_IMPLEMENTATION` / Implementer / Claude Code is
-  `AutoLoopEligible`. Since v2.1.0 there is an explicit, operator-opted-in Master exception:
+  than auto-run a turn. `READY_FOR_IMPLEMENTATION` and source-read-only
+  `NEEDS_INVESTIGATION` / Implementer / Claude Code are `AutoLoopEligible`. Since v2.1.0
+  there is an explicit, operator-opted-in Master exception:
   `loop -IncludeMaster` may auto-run the Codex Master's `NEEDS_ANALYSIS` turn in-session (see
   "Opt-in Master Loop Integration" below). Since v1.4.0 there is also an explicit Reviewer
   exception:

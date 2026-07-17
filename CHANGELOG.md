@@ -3,6 +3,27 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.7 - Autonomous Investigation and Clean Claude Runtime
+
+- Added `NEEDS_INVESTIGATION` to the verified Claude Code Implementer adapter, so
+  `cycle`, `run-next`, and `loop` perform read-only repository investigation without
+  requiring the user to open a separate Claude window and paste `NEXT_TURN.md`.
+- Added a fail-closed post-turn boundary: an automated investigation may update local
+  handoff artifacts, but any application/source/test/config change stops with Protocol
+  Repair even if the handoff state advanced.
+- Added Claude Code `--safe-mode` to automated turns. OAuth, model selection, built-in
+  tools, and permissions remain available, while ambient plugins and hooks (including
+  unrelated Bun-dependent hooks) cannot pollute or break the handoff run.
+- Added regression coverage for automatic investigation routing, handoff-only success,
+  forbidden source-edit detection, safe-mode argv delivery, capture transparency, and
+  canonical/template parity.
+- Fixed the hanging-runner fixture to recognize the real third-position `--version`
+  probe, removing a cold-host timeout false negative without changing production timeout
+  behavior.
+- Added a Windows Job Object boundary around the bounded Claude runner, so timeout
+  termination kills the complete descendant tree even where WMI enumeration and
+  `taskkill /T` are unavailable; the existing cross-platform fallback remains.
+
 ## 3.1.6 - Strict Human Acceptance Review
 
 - Hardened the independent Reviewer against false approvals: it now verifies relevant

@@ -199,6 +199,67 @@ function Stop-ProcessTree {
     }
 }
 
+# Windows Job Objects provide a WMI-independent process-tree boundary. This is
+# important in restricted environments where Win32_Process enumeration and
+# taskkill /T can both be denied even for descendants of the current process.
+function New-HandoffProcessJob {
+    param([System.Diagnostics.Process]$Process)
+    if ($env:OS -ne "Windows_NT" -or $null -eq $Process) { return [IntPtr]::Zero }
+    try {
+        if (-not ("HandoffWindowsJob" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class HandoffWindowsJob {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+        }
+        $job = [HandoffWindowsJob]::CreateJobObject([IntPtr]::Zero, $null)
+        if ($job -eq [IntPtr]::Zero) { return [IntPtr]::Zero }
+        if (-not [HandoffWindowsJob]::AssignProcessToJobObject($job, $Process.Handle)) {
+            [HandoffWindowsJob]::CloseHandle($job) | Out-Null
+            return [IntPtr]::Zero
+        }
+        return $job
+    } catch {
+        return [IntPtr]::Zero
+    }
+}
+
+function Stop-HandoffProcessJob {
+    param([IntPtr]$Job)
+    if ($Job -eq [IntPtr]::Zero -or -not ("HandoffWindowsJob" -as [type])) { return $false }
+    try {
+        $terminated = [HandoffWindowsJob]::TerminateJobObject($Job, 4)
+        [HandoffWindowsJob]::CloseHandle($Job) | Out-Null
+        return [bool]$terminated
+    } catch {
+        try { [HandoffWindowsJob]::CloseHandle($Job) | Out-Null } catch { }
+        return $false
+    }
+}
+
+function Close-HandoffProcessJob {
+    param([IntPtr]$Job)
+    if ($Job -eq [IntPtr]::Zero -or -not ("HandoffWindowsJob" -as [type])) { return }
+    try { [HandoffWindowsJob]::CloseHandle($Job) | Out-Null } catch { }
+}
+
 function Remove-AnsiEscape {
     param([string]$Value)
     if ($null -eq $Value) { return "" }
@@ -219,7 +280,7 @@ function Get-ClaudeEvidenceField {
 function New-ClaudeCommandEvidence {
     param([int]$ExitCode)
     return @([ordered]@{
-        cmd = "npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
+        cmd = "npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
         exitCode = $ExitCode
         purpose = "run Claude Code Implementer turn through the bounded handoff adapter"
         sanitized = $true
@@ -248,7 +309,7 @@ function Write-ClaudeCommandCapture {
             "## Sanitized Invocation",
             "",
             '```text',
-            "npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            "npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             '```',
             "",
             "## Redaction Rules",
@@ -298,7 +359,7 @@ function Write-ClaudeImplementerCapture {
             "## Command Transparency",
             "",
             "- Command Evidence: $ClaudeImplementerCommandName",
-            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
             "",
             "## Model Evidence",
             "",
@@ -364,6 +425,10 @@ function Invoke-ClaudeTurn {
     $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
     $prompt += "`nBash is unavailable in this automated turn. Do NOT create temporary helper, capture, runner, or wrapper scripts to work around that restriction. Create or edit only files required by the approved task. If verification cannot run without Bash, record it as not run with the reason; never claim a command or test passed without observed output."
     $systemPrompt += " Bash is unavailable: never create helper, capture, runner, or wrapper scripts to simulate shell verification, and never claim unobserved verification. Edit only task-required files and the local handoff."
+    if ($State -eq "NEEDS_INVESTIGATION") {
+        $prompt += "`nThis is a READ-ONLY investigation turn. Do not create, edit, rename, or delete application/source/test/config files. You may update only AI_HANDOFF.md and local handoff evidence files. Record repository findings, then transition exactly as NEXT_TURN.md requires."
+        $systemPrompt += " This NEEDS_INVESTIGATION turn is read-only: do not modify application, source, test, or configuration files. Only local handoff coordination files may be updated."
+    }
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
@@ -385,6 +450,7 @@ $sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
 $argList = @(
     '--yes',
     '@anthropic-ai/claude-code',
+    '--safe-mode',
     '--append-system-prompt',
     $sysPrompt,
     '-p',
@@ -434,6 +500,7 @@ try {
         Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
         $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile)
         $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        $processJob = New-HandoffProcessJob -Process $proc
     } catch {
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: failed to start bounded Claude Code runner: $_"
@@ -447,6 +514,8 @@ try {
     $claudeExit = -1
     if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
         $claudeExit = $proc.ExitCode
+        Close-HandoffProcessJob -Job $processJob
+        $processJob = [IntPtr]::Zero
     } else {
         $timedOut = $true
         $childPid = $null
@@ -455,8 +524,12 @@ try {
             $childPidText = if ($null -eq $childPidRaw) { "" } else { $childPidRaw.Trim() }
             if ($childPidText -match '^\d+$') { $childPid = [int]$childPidText }
         }
-        if ($childPid) { Stop-ProcessTree -ProcessId $childPid }
-        Stop-ProcessTree -ProcessId $proc.Id
+        $jobStopped = Stop-HandoffProcessJob -Job $processJob
+        $processJob = [IntPtr]::Zero
+        if (-not $jobStopped) {
+            if ($childPid) { Stop-ProcessTree -ProcessId $childPid }
+            Stop-ProcessTree -ProcessId $proc.Id
+        }
         try { $proc.WaitForExit(5000) | Out-Null } catch { }
     }
 
@@ -508,12 +581,12 @@ function Get-AdapterProfile {
 
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
-            Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION");
-            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
-            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
+            Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION");
+            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
+            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; NEEDS_INVESTIGATION is source-read-only and checked after the turn; Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
-            Reason = "Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual.";
-            NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use next + paste for other Implementer states."
+            Reason = "READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated; planning and question turns remain manual.";
+            NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION or NEEDS_INVESTIGATION; use next + paste for other Implementer states."
         }
     }
 
@@ -3370,6 +3443,37 @@ function Get-TurnProgress {
     return @{ Kind = "noop"; SourceChanged = $false; TreeOk = $true }
 }
 
+# A NEEDS_INVESTIGATION Implementer turn may update only local handoff artifacts.
+# The preflight requires a clean non-local tree, so any post-turn source change was
+# created by the automated investigation and is a protocol violation even when the
+# handoff state advanced successfully.
+function Get-InvestigationSourceBoundary {
+    param([string]$PreState)
+    if ($PreState -ne "NEEDS_INVESTIGATION") {
+        return @{ Ok = $true; Applies = $false; TreeOk = $true; Files = @() }
+    }
+    $tree = Get-WorkingTreeState
+    if (-not $tree.Ok) {
+        return @{ Ok = $false; Applies = $true; TreeOk = $false; Files = @() }
+    }
+    return @{ Ok = ($tree.Files.Count -eq 0); Applies = $true; TreeOk = $true; Files = @($tree.Files) }
+}
+
+function Write-InvestigationSourceBoundaryFailure {
+    param([string]$CommandLabel, [hashtable]$Boundary)
+    Write-Host ""
+    Write-Host "${CommandLabel}: blocked - read-only investigation modified source files."
+    if ($Boundary.TreeOk) {
+        Write-Host "Changed files (local handoff artifacts excluded):"
+        foreach ($f in $Boundary.Files) { Write-Host "  $f" }
+    } else {
+        Write-Host "Could not determine the post-investigation Git working tree state."
+    }
+    Write-Host "Stop category: Protocol Repair - NEEDS_INVESTIGATION must remain source-read-only."
+    Write-Host "Next step: inspect and revert or review the unexpected source edits before continuing."
+    Write-Host "No commit, push, tag, deploy, database, or secret action was run."
+}
+
 function Write-PartialProgressRepairGuidance {
     param(
         [string]$CommandLabel,
@@ -3441,15 +3545,16 @@ function Invoke-Cycle {
     $implementerTool = $Binding.Implementer
     $turnAdapter = Resolve-TurnAdapter -ForState $State -Role "Implementer" -Tool $implementerTool
 
-    # Only READY_FOR_IMPLEMENTATION is eligible
-    if ($State -ne "READY_FOR_IMPLEMENTATION") {
+    # Only the verified Claude Implementer states are eligible.
+    $automatedImplementerStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION")
+    if ($automatedImplementerStates -notcontains $State) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "State:       $State"
         Write-Host "Waiting For: $WaitingFor"
         $entry = $ActionMap[$State]
         $role  = if ($entry) { $entry.Role } else { "" }
-        if ($State -eq "NEEDS_INVESTIGATION" -or $State -eq "PLAN_REQUIRED") {
+        if ($State -eq "PLAN_REQUIRED") {
             Write-Host "Reason:      $($turnAdapter.Reason)"
             Write-Host "Stop category: $($turnAdapter.StopCategory) (automation limitation) - not a user decision."
             Write-Host "Next step:   Run 'handoff.ps1 next' then paste the prompt into the Implementer."
@@ -3484,7 +3589,8 @@ function Invoke-Cycle {
     }
 
     # Gate on AutoLoopEligible, never on Callable: cycle automates only turns that are
-    # explicitly auto-run-eligible (Implementer/Claude Code at READY_FOR_IMPLEMENTATION).
+    # explicitly auto-run-eligible (Implementer/Claude Code at READY_FOR_IMPLEMENTATION
+    # or the source-read-only NEEDS_INVESTIGATION state).
     # An explicit-only callable adapter (e.g. Reviewer/Codex) must never be run by cycle.
     if (-not $turnAdapter.AutoLoopEligible) {
         Write-Host ""
@@ -3554,7 +3660,11 @@ function Invoke-Cycle {
     Write-Host "Budget limit: `$$BudgetUsd"
     Write-Host "Adapter:      callable via ADAPTERS.md contract"
     Write-Host ""
-    Write-Host "Note: Tests and lint cannot run during this turn (Bash is blocked). Run them manually after."
+    if ($State -eq "NEEDS_INVESTIGATION") {
+        Write-Host "Mode:         read-only investigation (source edits are prohibited and checked after the turn)"
+    } else {
+        Write-Host "Note: Tests and lint cannot run during this turn (Bash is blocked). Run them manually after."
+    }
     Write-Host ""
 
     # Refresh NEXT_TURN.md (silent - suppress manual paste/copy guidance)
@@ -3581,10 +3691,14 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
+    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
     Write-Host ""
     Write-Host "Timeout:     ${TimeoutSeconds}s (process tree is killed on timeout)"
-    Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
+    if ($State -eq "NEEDS_INVESTIGATION") {
+        Write-Host "WARNING: This is a read-only investigation. Source edits are forbidden and fail closed."
+    } else {
+        Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
+    }
     Write-Host "         This tool does not commit, push, or deploy automatically."
     Write-Host ""
     # Fail closed: only an explicit yes proceeds. -Yes is treated as explicit operator authorization for automation/tests.
@@ -3604,6 +3718,11 @@ function Invoke-Cycle {
 
     $preTurnState = $State
     $claudeExit = Invoke-ClaudeTurn
+    $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preTurnState
+    if (-not $investigationBoundary.Ok) {
+        Write-InvestigationSourceBoundaryFailure -CommandLabel $CommandLabel -Boundary $investigationBoundary
+        exit 6
+    }
 
     Write-Host ""
     if ($claudeExit -eq 0) {
@@ -3735,7 +3854,8 @@ function Invoke-Cycle {
 }
 
 # Bounded loop manager. Runs automated turns until a hard stop.
-# Default auto-loop turn: READY_FOR_IMPLEMENTATION / Implementer bound to Claude Code.
+# Default auto-loop turns: READY_FOR_IMPLEMENTATION and source-read-only
+# NEEDS_INVESTIGATION / Implementer bound to Claude Code.
 # Explicit per-session opt-ins may add Codex Master/Reviewer turns; User/release
 # actions are never automated.
 function Invoke-Loop {
@@ -3829,7 +3949,7 @@ function Invoke-Loop {
     Write-Host "Max turns:          $MaxTurns"
     Write-Host "Per-turn budget:    `$$BudgetUsd (passed to --max-budget-usd)"
     Write-Host "Session budget cap: `$$SessionBudgetUsd (worst-case authorized spend this session: `$$worstCase)"
-    Write-Host "Default turns:      Resolved through ADAPTERS.md; READY_FOR_IMPLEMENTATION only when Implementer is Claude Code."
+    Write-Host "Default turns:      Resolved through ADAPTERS.md; READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION when Implementer is Claude Code."
     if ($IncludeMaster) {
         Write-Host "Master mode:        -IncludeMaster ON - the Codex Master's NEEDS_ANALYSIS turn will be auto-run in-session (read-only master-run capture + master-apply). READY_FOR_IMPLEMENTATION continues to the Implementer; BLOCKED stops at User."
     } else {
@@ -3843,7 +3963,7 @@ function Invoke-Loop {
         Write-Host "Never automated:    User turns, push/tag/deploy/db/secrets. Commit requires explicit commit-approved authorization."
     }
     Write-Host ""
-    Write-Host "WARNING: Automated turns allow source file edits (Bash disallowed during turns)."
+    Write-Host "WARNING: Implementation turns allow approved source edits; NEEDS_INVESTIGATION remains source-read-only. Bash is disallowed during both."
     Write-Host ""
     if ($Yes) {
         Write-Host "Confirmation: -Yes supplied; starting the loop session without an interactive prompt."
@@ -4118,6 +4238,13 @@ function Invoke-Loop {
         $preImplementerState = $script:State
         $claudeExit = Invoke-ClaudeTurn
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
+
+        $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preImplementerState
+        if (-not $investigationBoundary.Ok) {
+            Write-InvestigationSourceBoundaryFailure -CommandLabel "loop" -Boundary $investigationBoundary
+            Write-LoopLog "turn=$turnNo stop reason=investigation-source-edit exit=6"
+            exit 6
+        }
 
         if ($claudeExit -ne 0) {
             $postLines = Get-Content -Path $HandoffFile
