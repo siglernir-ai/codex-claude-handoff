@@ -357,9 +357,15 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 | `sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask "<task>" [-SupersededVersions "vA.B.C"]` | Advance local `AI_SEQUENCE.md` (released task + checkpoint, bundled supersedes, next task active) and prepare `AI_HANDOFF.md` for the next task. Local coordination only; never runs git. |
 | `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn when the adapter registry marks the turn callable (currently READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
-| `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N]` | Run a bounded loop of automated turns resolved through `ADAPTERS.md` (currently the same callable Implementer turn as `cycle`, up to MaxTurns, session budget capped, one upfront confirmation). Stops and prepares `NEXT_TURN.md` whenever the next actor is non-callable or the User. Writes a local `HANDOFF_LOOP.log` (never committed). |
+| `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]` | Run a bounded session. By default it runs only auto-loop-eligible Implementer turns. `-IncludeMaster` and `-IncludeReviewer` opt the guarded Codex capture/apply paths into that invocation. Stops at the User or any non-enabled actor. Writes a local `HANDOFF_LOOP.log` (never committed). |
 
-`handoff.ps1` does not update `AI_HANDOFF.md` directly and never deploys. Its turn automation (`cycle` / `run-next` / `loop`) resolves callable/manual behavior through `.ai/skills/codex-claude-handoff/ADAPTERS.md`. In the default local registry it can trigger only approved Implementer turns in READY_FOR_IMPLEMENTATION with explicit user confirmation, then stops at the first non-callable actor; Master and Reviewer turns remain manual until a real local adapter exists. The Master remains the decision router.
+`handoff.ps1` never deploys. Its guarded `master-apply` and `review-apply` commands may
+update only local `AI_HANDOFF.md` after a verified read-only Codex capture; they run no
+git or release action. `cycle` and the default `loop` automate only approved Claude Code
+Implementer turns. For one explicitly authorized session, `loop -IncludeMaster` and
+`loop -IncludeReviewer` may also run the verified Codex Master and Reviewer
+capture/apply paths. Those flags do not change the default `AutoLoopEligible` values,
+and User turns are never automated. The Master remains the decision router.
 
 The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
 

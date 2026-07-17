@@ -62,11 +62,15 @@ The protocol is forward-compatible with additional tools (for example an indepen
 ## Automation Adapter Status
 
 Tool strengths here do not imply that a tool is callable by workflow automation.
-Since v0.19.0, callable/manual automation is resolved through `ADAPTERS.md`.
-In the default local registry, only the Implementer bound to Claude Code has a
-callable adapter, and only for `READY_FOR_IMPLEMENTATION`. Codex-bound Master and
-Reviewer turns are manual because no verified local Codex adapter exists in this
-repository.
+Callable and auto-loop status is resolved through `ADAPTERS.md`.
+
+In the default local registry, the Claude Code Implementer is callable for
+`READY_FOR_IMPLEMENTATION` and is the only role that is auto-loop eligible by default.
+The Codex Master and Reviewer also have verified, fail-closed command paths: each uses
+a read-only capture followed by a guarded local `AI_HANDOFF.md` apply. They remain
+`AutoLoopEligible: no`, so they run only through their explicit commands or when the
+operator opts them into one bounded session with `loop -IncludeMaster` and/or
+`loop -IncludeReviewer`. `cycle` never runs Master or Reviewer turns.
 
 ## How the Master Uses This Profile
 

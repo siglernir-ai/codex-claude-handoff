@@ -20,22 +20,22 @@ If you just downloaded this repo, install the protocol into the project you want
 Codex and Claude Code to share:
 
 ```powershell
-.\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT
 ```
 
 Then open that target project in Codex and Claude Code, and run:
 
 ```powershell
 cd C:\Users\Nir\projects\MY_PROJECT
-.\scripts\handoff.ps1 doctor
-.\scripts\handoff.ps1 work
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
 ```
 
 For supervised real use, start each session from your project root with:
 
 ```powershell
-.\scripts\handoff.ps1 doctor
-.\scripts\handoff.ps1 work
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
 ```
 
 `doctor` is a read-only health check for the local protocol install, role binding,
@@ -46,7 +46,10 @@ the exact next action.
 For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
 model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-v3.1.0 adds one-command installation and beginner onboarding. v3.0.0 is the
+v3.1.6 hardens independent review after strict human acceptance exposed a false
+approval: relevant safe local checks and preservation requirements are now explicit
+review gates. It also makes copyable Windows commands work under a Restricted
+PowerShell policy. v3.1.0 added one-command installation and beginner onboarding. v3.0.0 is the
 productized supervised, human-in-the-loop workflow release. It makes
 the local workflow easier to trust and operate, but it is not unattended autonomy:
 user authorization is still required for commits, pushes, tags, releases, deploys,
@@ -115,10 +118,9 @@ Current local status:
 - Since v1.3.0 the **Reviewer/Codex `READY_FOR_REVIEW` turn is callable end-to-end** via the
   explicit two-step `handoff.ps1 review-run` (read-only Codex capture) + `handoff.ps1
   review-apply` (apply the captured verdict's local `AI_HANDOFF.md` transition, fail-closed).
-  This is callable **only via those explicit commands** and is not auto-run by `loop`/`cycle`
-  by default (the adapter is `callable: yes` but `Auto-loop: no`). Since v1.4.0 the operator may
-  opt this exact turn into one loop session with `loop -IncludeReviewer` (per-session opt-in,
-  `cycle` never does, `Auto-loop` stays `no`). `review-run` runs no git and never transitions
+  Since v1.4.0, the operator may instead opt this exact turn into one loop session with
+  `loop -IncludeReviewer`; `cycle` never runs it, and `Auto-loop` remains `no` because every
+  loop session requires an explicit opt-in. `review-run` runs no git and never transitions
   `AI_HANDOFF.md`; `review-apply` edits only `AI_HANDOFF.md`. See "Automated Reviewer
   Turn", "Automated Master Turn", "Opt-in Master Loop Integration", and "Opt-in Reviewer
   Loop Integration" in `ADAPTERS.md`.
@@ -142,7 +144,7 @@ is ready to commit.
 Run:
 
 ```powershell
-.\scripts\handoff.ps1 adapters
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 adapters
 ```
 
 On macOS/Linux:
@@ -225,7 +227,7 @@ A helper script prints the current handoff state and a ready-to-paste prompt.
 Run from your project root:
 
 ```powershell
-.\scripts\next-step.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\next-step.ps1
 ```
 
 On macOS/Linux:
@@ -243,7 +245,7 @@ The script reads `AI_HANDOFF.md` and prints the current `State`, `Waiting For`, 
 Add `-PrepareFile` to write `NEXT_TURN.md` to the project root:
 
 ```powershell
-.\scripts\next-step.ps1 -PrepareFile
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\next-step.ps1 -PrepareFile
 ```
 
 `NEXT_TURN.md` is an entry brief derived from the current `AI_HANDOFF.md` state. It surfaces the actor, action, and `Next Recommended Step` so the target tool can orient before reading the full handoff file.
@@ -261,7 +263,7 @@ Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handof
 You can combine both flags:
 
 ```powershell
-.\scripts\next-step.ps1 -PrepareFile -CopyPrompt
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\next-step.ps1 -PrepareFile -CopyPrompt
 ```
 
 This writes `NEXT_TURN.md` and also copies the tool prompt to your clipboard. `-PrepareFile` prints the short paste to the terminal; `-CopyPrompt` preserves its existing behavior of copying the protocol prompt (`$PromptText`) to the clipboard.
@@ -273,7 +275,7 @@ A higher-level helper script with named commands for the daily workflow.
 Run from your project root:
 
 ```powershell
-.\scripts\handoff.ps1 <command>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 <command>
 ```
 
 On macOS/Linux:
@@ -287,7 +289,7 @@ bash scripts/handoff.sh <command>
 Print the current state, waiting party, task, and commit status in plain English.
 
 ```powershell
-.\scripts\handoff.ps1 status
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 status
 ```
 
 Example output:
@@ -306,7 +308,7 @@ Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status
 Run a read-only health check for the local protocol install.
 
 ```powershell
-.\scripts\handoff.ps1 doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
 ```
 
 It reports OK/WARN/INFO lines for the Git repo, `AI_HANDOFF.md` status, installed
@@ -321,13 +323,13 @@ Print the daily workflow view: state, waiting party, current task, and the exact
 next action.
 
 ```powershell
-.\scripts\handoff.ps1 work
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
 ```
 
 For tool turns, it points to the standard:
 
 ```powershell
-.\scripts\handoff.ps1 next -Clip
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 next -Clip
 ```
 
 For `REVIEW_DONE / Waiting For: User`, it prints the guarded
@@ -340,7 +342,7 @@ automatable states, manual/non-callable reason, safety limits, stop category, an
 next step for enabling more automation.
 
 ```powershell
-.\scripts\handoff.ps1 adapters
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 adapters
 ```
 
 On macOS/Linux:
@@ -354,8 +356,8 @@ bash scripts/handoff.sh adapters
 Generate or refresh `NEXT_TURN.md` and print exactly which tool to open and what to paste.
 
 ```powershell
-.\scripts\handoff.ps1 next
-.\scripts\handoff.ps1 next -Clip   # also copies the paste instruction to clipboard
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 next
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 next -Clip   # also copies the paste instruction to clipboard
 ```
 
 ### `start "<natural user request>"`
@@ -363,8 +365,8 @@ Generate or refresh `NEXT_TURN.md` and print exactly which tool to open and what
 Save your request to the local ignored file `USER_REQUEST.md` and print a ready-made Master entry prompt.
 
 ```powershell
-.\scripts\handoff.ps1 start "Add better error handling to the AI chat component"
-.\scripts\handoff.ps1 start "Add better error handling to the AI chat component" -Clip
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 start "Add better error handling to the AI chat component"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 start "Add better error handling to the AI chat component" -Clip
 ```
 
 The Master remains the decision router. The prompt tells the Master tool to read `USER_REQUEST.md`, `AI_HANDOFF.md`, and local protocol instructions before routing.
@@ -376,7 +378,7 @@ The Master remains the decision router. The prompt tells the Master tool to read
 Dry-run the guarded commit plan after Reviewer approval. Never mutates git.
 
 ```powershell
-.\scripts\handoff.ps1 commit-check -Message "Complete reviewed handoff task"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 commit-check -Message "Complete reviewed handoff task"
 ```
 
 When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the files from `AI_HANDOFF.md` `Changed Files`, compares them to `git status` after excluding local coordination files, and blocks if the two lists do not match. This is the commit-authorization step: the Reviewer has already attested technical readiness, so your part is approving the guarded commit - not re-doing the verification.
@@ -386,7 +388,7 @@ When `State: REVIEW_DONE` and `Waiting For: User`, the command lists the files f
 Create the reviewed local commit after explicit user authorization. This command runs only `git add -- <approved files>` and `git commit -m <message>`; it never pushes, tags, deploys, touches databases, or handles secrets.
 
 ```powershell
-.\scripts\handoff.ps1 commit-approved -Message "Complete reviewed handoff task" -Authorize "I_AUTHORIZE_COMMIT"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 commit-approved -Message "Complete reviewed handoff task" -Authorize "I_AUTHORIZE_COMMIT"
 ```
 
 `commit-approved` has the same gates as `commit-check`, then requires the exact token `I_AUTHORIZE_COMMIT`. It commits only the files listed under `Changed Files` and refuses if the actual task Reviewer and Implementer are missing, ambiguous, or the same tool.
@@ -396,8 +398,8 @@ Create the reviewed local commit after explicit user authorization. This command
 Dry-run or execute the guarded release path after Reviewer approval.
 
 ```powershell
-.\scripts\handoff.ps1 release-check -Version v0.19.1
-.\scripts\handoff.ps1 release -Version v0.19.1 -Message "feat: add authorized release executor" -Authorize "I_AUTHORIZE_RELEASE_v0.19.1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 release-check -Version v0.19.1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 release -Version v0.19.1 -Message "feat: add authorized release executor" -Authorize "I_AUTHORIZE_RELEASE_v0.19.1"
 ```
 
 `release-check` never mutates git. It prints the exact files and commands that
@@ -431,8 +433,8 @@ Advance local sequence coordination after a user-approved release, so the Master
 Sequence Owner does not hand-edit `AI_SEQUENCE.md` and `AI_HANDOFF.md`.
 
 ```powershell
-.\scripts\handoff.ps1 sequence-check -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1
-.\scripts\handoff.ps1 sequence-advance -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1 -NextTask "v0.19.2 - Sequence Advance Command"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 sequence-check -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 sequence-advance -ReleasedVersion v0.19.1.1 -Commit fc0ed49 -Tag v0.19.1.1 -NextTask "v0.19.2 - Sequence Advance Command"
 ```
 
 `sequence-check` never changes any file. It prints the exact local changes that
@@ -463,8 +465,8 @@ saves the review verdict to local artifacts. It never runs git and never changes
 `AI_HANDOFF.md`, so it does not make the Reviewer callable.
 
 ```powershell
-.\scripts\handoff.ps1 review-check
-.\scripts\handoff.ps1 review-run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 review-check
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 review-run
 ```
 
 `review-check` never invokes Codex. It prints the review plan and the exact read-only
@@ -522,8 +524,8 @@ turn **callable end-to-end** - but only via these explicit commands; the turn is
 auto-run by `loop`/`cycle`.
 
 ```powershell
-.\scripts\handoff.ps1 review-run     # capture a verdict (read-only Codex)
-.\scripts\handoff.ps1 review-apply   # apply the captured verdict to AI_HANDOFF.md
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 review-run     # capture a verdict (read-only Codex)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 review-apply   # apply the captured verdict to AI_HANDOFF.md
 ```
 
 `review-apply` re-runs every `review-run` protocol guard (state, bound/actual Reviewer is
@@ -555,9 +557,9 @@ recommendation to local artifacts, then applies that recommendation to local `AI
 with a separate fail-closed command. It never runs git.
 
 ```powershell
-.\scripts\handoff.ps1 master-check
-.\scripts\handoff.ps1 master-run
-.\scripts\handoff.ps1 master-apply
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 master-check
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 master-run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 master-apply
 ```
 
 `master-check` never invokes Codex. It prints the plan and the read-only invocation shape, then
@@ -602,9 +604,9 @@ next handoff (typically the Reviewer prompt) and stop. Requires `npx`; a network
 is needed only if the package is not cached.
 
 ```powershell
-.\scripts\handoff.ps1 cycle
-.\scripts\handoff.ps1 cycle -BudgetUsd 5   # raise the budget cap
-.\scripts\handoff.ps1 cycle -TimeoutSeconds 600 -Yes
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cycle
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cycle -BudgetUsd 5   # raise the budget cap
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cycle -TimeoutSeconds 600 -Yes
 ```
 
 `run-next` is a fully supported alias of `cycle` (same implementation, kept for backward
@@ -671,12 +673,12 @@ Run a bounded loop of automated handoff turns until a hard stop. It routes each 
 clear reason.
 
 ```powershell
-.\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
-.\scripts\handoff.ps1 loop -MaxTurns 2
-.\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
-.\scripts\handoff.ps1 loop -IncludeMaster                       # also auto-run the Codex Master turn (opt-in)
-.\scripts\handoff.ps1 loop -IncludeReviewer                     # also auto-run the Codex Reviewer turn (opt-in)
-.\scripts\handoff.ps1 loop -IncludeMaster -IncludeReviewer      # authorized Master -> Implementer -> Reviewer session
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop                                      # defaults: MaxTurns 3, BudgetUsd 2, SessionBudgetUsd 6
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -MaxTurns 2
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -MaxTurns 5 -BudgetUsd 3 -SessionBudgetUsd 10
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -IncludeMaster                       # also auto-run the Codex Master turn (opt-in)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -IncludeReviewer                     # also auto-run the Codex Reviewer turn (opt-in)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -IncludeMaster -IncludeReviewer      # authorized Master -> Implementer -> Reviewer session
 ```
 
 **What it automates:** by default, only states the adapter registry marks `AutoLoopEligible` -
@@ -750,7 +752,7 @@ Since v0.20.0, a repeatable protocol-level test harness verifies the handoff scr
 without touching your real coordination files.
 
 ```powershell
-.\scripts\protocol-tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol-tests.ps1
 ```
 
 On macOS/Linux:
@@ -859,7 +861,7 @@ The Master uses a six-path decision router for natural requests: advisory (answe
 Run this from the project root:
 
 ```powershell
-.\scripts\next-step.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\next-step.ps1
 ```
 
 On macOS/Linux:
@@ -1171,19 +1173,21 @@ Use them to install the handoff protocol files into another project without copy
 From this repository root:
 
 ```powershell
-.\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
 ```
 
 Example:
 
 ```powershell
-.\scripts\install.ps1 -TargetPath "C:\Users\user\Desktop\projects\my-project"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\Users\user\Desktop\projects\my-project"
 ```
 
-If PowerShell blocks script execution, run:
+These commands explicitly bypass the current process's script policy; they do not change
+the machine-wide PowerShell policy. This is required on systems where the policy is
+`Restricted`.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -TargetPath "C:\path\to\your-project"
 ```
 
 On macOS/Linux, use the Bash installer:
@@ -1346,8 +1350,8 @@ scripts/protocol-tests.sh
 Then verify the workflow scripts work:
 
 ```powershell
-.\scripts\handoff.ps1 status
-.\scripts\handoff.ps1 next
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 status
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 next
 ```
 
 On macOS/Linux (Bash):

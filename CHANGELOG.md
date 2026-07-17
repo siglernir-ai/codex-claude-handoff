@@ -3,6 +3,16 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.6 - Strict Human Acceptance Review
+
+- Hardened the independent Reviewer against false approvals: it now verifies relevant
+  safe local checks when prior evidence says they were not run, and blocks when adequate
+  verification cannot be completed safely.
+- Made preservation and backward-compatibility requirements explicit review criteria;
+  passing focused tests is evidence, not proof that untested input classes are unchanged.
+- Updated beginner-facing Windows install and daily-use commands to invoke PowerShell with
+  `-NoProfile -ExecutionPolicy Bypass -File`, so they work under a Restricted execution policy.
+
 ## 3.1.5 - Exact-Scope Autonomous Recovery
 
 - Fixed Windows Claude process execution to pass a real PowerShell argument array to

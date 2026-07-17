@@ -38,8 +38,8 @@ The Implementer never approves its own work.
 ## Daily Commands
 
 ```powershell
-.\scripts\handoff.ps1 doctor
-.\scripts\handoff.ps1 work
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
 ```
 
 Use `doctor` when setup feels wrong.
@@ -51,12 +51,16 @@ Use `work` whenever you do not know the next step.
 `cycle` can run one automated Claude Code Implementer turn:
 
 ```powershell
-.\scripts\handoff.ps1 cycle -Yes -BudgetUsd 2 -TimeoutSeconds 240
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 cycle -Yes -BudgetUsd 2 -TimeoutSeconds 240
 ```
 
 `cycle` still stops for Codex review and user commit approval. For one explicitly authorized
 session, `loop -IncludeMaster -IncludeReviewer` can run Master -> Claude Implementer -> Codex
 Reviewer and then stops at the user's commit approval.
+
+On Windows, keep the full `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`
+prefix shown above. It works when the current execution policy is `Restricted` without
+changing the machine-wide policy.
 
 This project is designed for supervised human-in-the-loop use, not full unattended autonomy.
 
@@ -66,8 +70,10 @@ This project is designed for supervised human-in-the-loop use, not full unattend
 - No push/tag/release without explicit user authorization.
 - No deploy, database, secret, or production configuration changes without user approval.
 - No-op turns fail closed.
-- Timeouts and non-zero exits fail closed unless v3.1.5 proves an exact-scope Reviewer
-  correction changed content or already produced a valid review handoff.
+- Timeouts and non-zero exits fail closed. The v3.1.5 exact-scope recovery exception only
+  routes proven correction work to independent review; it never converts a failed turn into
+  approval. In v3.1.6, that Reviewer also verifies relevant safe local checks and blocks when
+  preservation or backward-compatibility requirements are not adequately demonstrated.
 - Safe recovery routes only to the independent Reviewer; it is never implementation approval.
 - Any extra file, no-change turn, or malformed handoff remains blocked.
 
