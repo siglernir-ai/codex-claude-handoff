@@ -19,13 +19,11 @@ manually for normal handoff tasks after that.
 
 ## Windows: install the pinned release
 
-Set the project path, download the small bootstrap script, and run it:
+Open PowerShell in the project folder and paste this one command. The installer
+uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$project = "C:\Projects\MY_PROJECT"
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"
-Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -34,7 +32,6 @@ files and does not change normal Codex behavior.
 Commit the installed project-local skill files before starting real work:
 
 ```powershell
-Set-Location $project
 git add .agents .ai .claude scripts .gitignore
 git commit -m "Install codex-claude-handoff v3.1.8"
 ```
@@ -68,7 +65,7 @@ Only project owners who want every Codex/Claude session routed through the proto
 should install root instructions:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project $project -AlwaysOn
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AlwaysOn
 ```
 
 `-AlwaysOn` is not the default because it changes agent behavior for the entire

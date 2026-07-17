@@ -11,19 +11,16 @@ The goal is to avoid copy-pasting long context between tools.
 
 ## Quick Start / Daily Use
 
-On Windows, download the pinned bootstrap and install into one target project:
+On Windows, open PowerShell in the project folder and paste this one command. The
+installer uses the current folder automatically; there is no project path to edit:
 
 ```powershell
-$project = "C:\Projects\MY_PROJECT"
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"
-Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
-Then open only the target project in Codex Desktop and verify the local install:
+Then verify the local install from the same PowerShell window:
 
 ```powershell
-cd C:\Projects\MY_PROJECT
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
 ```
 
