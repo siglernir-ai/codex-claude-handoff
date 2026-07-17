@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.7
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.8
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -424,8 +424,8 @@ $afterCommits = (& git -C $fx rev-list --all --count 2>$null)
 Check "doctor prints Handoff Doctor, protocol version, role assignment, and AI_HANDOFF status" (($r.Code -eq 0) -and ($r.Out -match "Handoff Doctor") -and ($r.Out -match "Protocol version:\s+3\.0\.0") -and ($r.Out -match "Role assignment: Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -match "AI_HANDOFF.md status"))
 Check "doctor does not mutate AI_HANDOFF.md or create git commits" (($beforeHash -eq $afterHash) -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
 
-# === 4D. One-command installer ===
-Write-Host "[4D] One-command installer"
+# === 4D. Project-local opt-in installer ===
+Write-Host "[4D] Project-local opt-in installer"
 $installScript = Join-Path $RepoRoot "install.ps1"
 $installTarget = Join-Path $FixtureRoot "install-target"
 $installOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget 2>&1 | Out-String
@@ -433,11 +433,19 @@ $installCode = $LASTEXITCODE
 $installedHandoff = Join-Path $installTarget "AI_HANDOFF.md"
 $installedScript = Join-Path $installTarget "scripts/handoff.ps1"
 $installedVersion = Join-Path $installTarget ".ai/skills/codex-claude-handoff/VERSION"
+$installedSkill = Join-Path $installTarget ".agents/skills/codex-claude-handoff/SKILL.md"
+$installedAgents = Join-Path $installTarget "AGENTS.md"
+$installedClaude = Join-Path $installTarget "CLAUDE.md"
+$installedProtocolTests = Join-Path $installTarget "scripts/protocol-tests.ps1"
+$installedSnippet = Join-Path $installTarget "gitignore-snippet.txt"
 $installedGitignore = Join-Path $installTarget ".gitignore"
 $installedGitignoreText = if (Test-Path $installedGitignore) { Get-Content -Raw -Path $installedGitignore } else { "" }
 Check "install.ps1 installs protocol files into an empty target" (($installCode -eq 0) -and (Test-Path $installedHandoff) -and (Test-Path $installedScript) -and (Test-Path $installedVersion))
+Check "default install is opt-in and does not install root agent instructions" ((-not (Test-Path $installedAgents)) -and (-not (Test-Path $installedClaude)) -and ($installOut -match "Activation mode: opt-in"))
+Check "installed Codex skill metadata requires explicit activation" ((Get-Content -Raw -Path $installedSkill) -match "Use only when the user explicitly selects")
+Check "default install excludes package-only test and snippet files" ((-not (Test-Path $installedProtocolTests)) -and (-not (Test-Path $installedSnippet)))
 Check "install.ps1 adds local coordination files to .gitignore" (($installedGitignoreText -match "AI_HANDOFF\.md") -and ($installedGitignoreText -match "NEXT_TURN\.md"))
-Check "install.ps1 prints doctor/work/start next steps" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape(".\scripts\handoff.ps1 work")) -and ($installOut -match [regex]::Escape(".\scripts\handoff.ps1 start")))
+Check "install.ps1 prints doctor and explicit skill activation guidance" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape('$codex-claude-handoff')) -and ($installOut -match "normal Codex work"))
 
 $blockedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget 2>&1 | Out-String
 $blockedCode = $LASTEXITCODE
@@ -446,6 +454,71 @@ Check "install.ps1 blocks overwriting an existing install without -Force" (($blo
 $forcedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget -Force 2>&1 | Out-String
 $forcedCode = $LASTEXITCODE
 Check "install.ps1 refreshes an existing install with -Force" (($forcedCode -eq 0) -and ($forcedOut -match "codex-claude-handoff installed into"))
+
+$alwaysOnTarget = Join-Path $FixtureRoot "install-target-always-on"
+$alwaysOnOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $alwaysOnTarget -AlwaysOn 2>&1 | Out-String
+$alwaysOnCode = $LASTEXITCODE
+Check "-AlwaysOn explicitly installs root agent instructions" (($alwaysOnCode -eq 0) -and (Test-Path (Join-Path $alwaysOnTarget "AGENTS.md")) -and (Test-Path (Join-Path $alwaysOnTarget "CLAUDE.md")) -and ($alwaysOnOut -match "Activation mode: always-on"))
+
+$disableAlwaysOnOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $alwaysOnTarget -Force -DisableAlwaysOn 2>&1 | Out-String
+$disableAlwaysOnCode = $LASTEXITCODE
+Check "-DisableAlwaysOn safely migrates unmodified bundled root instructions to opt-in" (($disableAlwaysOnCode -eq 0) -and (-not (Test-Path (Join-Path $alwaysOnTarget "AGENTS.md"))) -and (-not (Test-Path (Join-Path $alwaysOnTarget "CLAUDE.md"))) -and ($disableAlwaysOnOut -match "Activation mode: opt-in"))
+
+$hostInstructionsTarget = Join-Path $FixtureRoot "install-target-host-instructions"
+New-Item -ItemType Directory -Path $hostInstructionsTarget -Force | Out-Null
+$hostAgents = Join-Path $hostInstructionsTarget "AGENTS.md"
+Set-Content -Path $hostAgents -Value "# Host project instructions" -Encoding utf8
+$hostAgentsBefore = (Get-FileHash -Algorithm SHA256 -Path $hostAgents).Hash
+$hostOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $hostInstructionsTarget 2>&1 | Out-String
+$hostCode = $LASTEXITCODE
+$hostAgentsAfter = (Get-FileHash -Algorithm SHA256 -Path $hostAgents).Hash
+Check "default opt-in install preserves an existing project AGENTS.md" (($hostCode -eq 0) -and ($hostAgentsBefore -eq $hostAgentsAfter) -and ($hostOut -match "Activation mode: opt-in"))
+
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$customRemovalOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $hostInstructionsTarget -Force -DisableAlwaysOn 2>&1 | Out-String
+$customRemovalCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+$hostAgentsAfterRemovalAttempt = (Get-FileHash -Algorithm SHA256 -Path $hostAgents).Hash
+Check "-DisableAlwaysOn refuses to remove customized project root instructions" (($customRemovalCode -ne 0) -and ($customRemovalOut -match "Refusing to remove customized") -and ($hostAgentsBefore -eq $hostAgentsAfterRemovalAttempt))
+
+$bootstrapScript = Join-Path $RepoRoot "bootstrap.ps1"
+$bootstrapTarget = Join-Path $FixtureRoot "bootstrap-target"
+$bootstrapOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript -Project $bootstrapTarget -PackageRoot $RepoRoot 2>&1 | Out-String
+$bootstrapCode = $LASTEXITCODE
+Check "bootstrap.ps1 delegates to the packaged opt-in installer" (($bootstrapCode -eq 0) -and (Test-Path (Join-Path $bootstrapTarget ".agents/skills/codex-claude-handoff/SKILL.md")) -and (-not (Test-Path (Join-Path $bootstrapTarget "AGENTS.md"))) -and ($bootstrapOut -match "Activation mode: opt-in"))
+
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$invalidBootstrapOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript -Project $bootstrapTarget -Version latest 2>&1 | Out-String
+$invalidBootstrapCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+Check "bootstrap.ps1 rejects an unpinned version before downloading" (($invalidBootstrapCode -ne 0) -and ($invalidBootstrapOut -match "Version must look like"))
+
+# === 4E. Release package builder ===
+Write-Host "[4E] Release package builder"
+$packageBuilder = Join-Path $RepoRoot "scripts/build-package.ps1"
+$packageOutput = Join-Path $FixtureRoot "package-output"
+$packageBuildOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $packageBuilder -OutputDirectory $packageOutput 2>&1 | Out-String
+$packageBuildCode = $LASTEXITCODE
+$currentPackageVersion = (Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/VERSION")).Trim()
+$releaseZip = Join-Path $packageOutput "codex-claude-handoff-v$currentPackageVersion.zip"
+$releaseChecksum = "$releaseZip.sha256"
+$checksumText = if (Test-Path $releaseChecksum) { Get-Content -Raw -Path $releaseChecksum } else { "" }
+$actualPackageHash = if (Test-Path $releaseZip) { (Get-FileHash -Algorithm SHA256 -Path $releaseZip).Hash.ToLowerInvariant() } else { "missing" }
+Check "build-package.ps1 creates the versioned ZIP and SHA-256 file" (($packageBuildCode -eq 0) -and (Test-Path $releaseZip) -and (Test-Path $releaseChecksum) -and ($checksumText -match [regex]::Escape($actualPackageHash)))
+
+$packageExtract = Join-Path $FixtureRoot "package-extract"
+Expand-Archive -LiteralPath $releaseZip -DestinationPath $packageExtract -Force
+$extractedPackage = Get-ChildItem -Path $packageExtract -Directory | Select-Object -First 1
+$extractedInstall = if ($extractedPackage) { Join-Path $extractedPackage.FullName "install.ps1" } else { "" }
+$extractedProtocolTests = if ($extractedPackage) { Join-Path $extractedPackage.FullName "templates/scripts/protocol-tests.ps1" } else { "" }
+Check "release ZIP contains an installer and excludes package-development tests" ((Test-Path $extractedInstall) -and (-not (Test-Path $extractedProtocolTests)))
+
+$packagedInstallTarget = Join-Path $FixtureRoot "packaged-install-target"
+$packagedInstallOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $extractedInstall -Project $packagedInstallTarget 2>&1 | Out-String
+$packagedInstallCode = $LASTEXITCODE
+Check "installer extracted from the release ZIP produces an opt-in project install" (($packagedInstallCode -eq 0) -and (Test-Path (Join-Path $packagedInstallTarget ".agents/skills/codex-claude-handoff/SKILL.md")) -and (-not (Test-Path (Join-Path $packagedInstallTarget "AGENTS.md"))) -and ($packagedInstallOut -match "Activation mode: opt-in"))
 # === 5. Release executor guards (fail closed) ===
 Write-Host "[5] Release executor guards (release-check)"
 # Missing -Version: must block, no git mutation.

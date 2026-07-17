@@ -1,6 +1,6 @@
 ---
 name: codex-claude-handoff
-description: Use this skill when working in a project that coordinates Codex and Claude Code through AGENTS.md, CLAUDE.md, and AI_HANDOFF.md.
+description: Run the project-local Codex to Claude Code to Codex handoff protocol. Use only when the user explicitly selects $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full Codex-Claude handoff protocol; do not trigger for ordinary project tasks.
 ---
 
 # Codex-Claude Handoff Skill

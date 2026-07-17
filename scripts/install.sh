@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
-# install.sh - Codex-Claude Handoff installer (Bash version, v0.15.0)
-# Installs the handoff protocol into a target project.
-# Usage: bash install.sh <target-project-path>
+# Project-local installer. Default activation is opt-in; pass --always-on explicitly
+# to install root AGENTS.md and CLAUDE.md instructions.
 
 set -euo pipefail
 
 TARGET_PATH="${1:-}"
 if [ -z "$TARGET_PATH" ]; then
-    echo "Usage: bash install.sh <target-project-path>"
-    echo "Example: bash install.sh ~/projects/my-project"
+    echo "Usage: bash scripts/install.sh <target-project-path> [--force] [--always-on|--disable-always-on]"
+    exit 1
+fi
+shift
+
+FORCE=false
+ALWAYS_ON=false
+DISABLE_ALWAYS_ON=false
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=true ;;
+        --always-on) ALWAYS_ON=true ;;
+        --disable-always-on) DISABLE_ALWAYS_ON=true ;;
+        *) echo "Unknown option: $arg"; exit 1 ;;
+    esac
+done
+
+if $ALWAYS_ON && $DISABLE_ALWAYS_ON; then
+    echo "Choose either --always-on or --disable-always-on, not both."
     exit 1
 fi
 
@@ -16,109 +32,122 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATES_DIR="$REPO_ROOT/templates"
 
-echo "Codex-Claude Handoff Installer"
-echo "Target project: $TARGET_PATH"
-echo ""
-
-if [ ! -d "$TARGET_PATH" ]; then
-    echo "Error: Target path does not exist: $TARGET_PATH"
-    exit 1
-fi
-
 if [ ! -d "$TEMPLATES_DIR" ]; then
     echo "Error: Templates folder not found: $TEMPLATES_DIR"
     exit 1
 fi
 
-# Copy a file without overwriting an existing one.
-copy_if_absent() {
-    local src="$1" dst="$2" label="$3"
-    local dst_dir; dst_dir="$(dirname "$dst")"
-    if [ ! -f "$src" ]; then
-        echo "Warning: Missing template file: $label"
-        return
-    fi
-    if [ -f "$dst" ]; then
-        echo "Skipped existing file: $label"
-    else
-        mkdir -p "$dst_dir"
-        cp "$src" "$dst"
-        echo "Copied: $label"
-    fi
+mkdir -p "$TARGET_PATH"
+TARGET_PATH="$(cd "$TARGET_PATH" && pwd)"
+
+if [ ! -d "$TARGET_PATH/.git" ]; then
+    echo "WARNING: target is not a Git repository yet: $TARGET_PATH"
+    echo "Run 'git init' and create a baseline commit before using review/commit guards."
+fi
+
+if $DISABLE_ALWAYS_ON; then
+    REMOVAL_CANDIDATES=()
+    for rel in AGENTS.md CLAUDE.md; do
+        target_file="$TARGET_PATH/$rel"
+        template_file="$TEMPLATES_DIR/$rel"
+        if [ ! -f "$target_file" ]; then
+            continue
+        fi
+        if ! cmp -s "$target_file" "$template_file"; then
+            echo "Refusing to remove customized root instructions: $target_file"
+            exit 1
+        fi
+        REMOVAL_CANDIDATES+=("$target_file")
+    done
+
+    for target_file in "${REMOVAL_CANDIDATES[@]}"; do
+        rm -f -- "$target_file"
+        echo "Removed unmodified bundled root instruction: $target_file"
+    done
+fi
+
+should_install() {
+    local rel="$1"
+    case "$rel" in
+        gitignore-snippet.txt|scripts/protocol-tests.ps1|scripts/protocol-tests.sh)
+            return 1
+            ;;
+        AGENTS.md|CLAUDE.md)
+            $ALWAYS_ON
+            return
+            ;;
+        *)
+            return 0
+            ;;
+    esac
 }
 
-# Root protocol files
-for f in AGENTS.md CLAUDE.md AI_HANDOFF.md AI_SEQUENCE.md; do
-    copy_if_absent "$TEMPLATES_DIR/$f" "$TARGET_PATH/$f" "$f"
-done
+EXISTING=()
+while IFS= read -r -d '' src; do
+    rel="${src#"$TEMPLATES_DIR"/}"
+    if should_install "$rel" && [ -e "$TARGET_PATH/$rel" ] && ! $FORCE; then
+        EXISTING+=("$rel")
+    fi
+done < <(find "$TEMPLATES_DIR" -type f -print0)
 
-# Shared canonical skill files
-SKILL_FILES=(
-    ".ai/roles/ROLE_ASSIGNMENT.md"
-    ".ai/skills/codex-claude-handoff/VERSION"
-    ".ai/skills/codex-claude-handoff/README.md"
-    ".ai/skills/codex-claude-handoff/SKILL.md"
-    ".ai/skills/codex-claude-handoff/MASTER.md"
-    ".ai/skills/codex-claude-handoff/IMPLEMENTER.md"
-    ".ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md"
-    ".ai/skills/codex-claude-handoff/ADAPTERS.md"
-    ".ai/skills/codex-claude-handoff/CODEX.md"
-    ".ai/skills/codex-claude-handoff/CLAUDE.md"
-    ".ai/skills/codex-claude-handoff/CAPABILITIES.md"
-    ".ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md"
-    ".agents/skills/codex-claude-handoff/SKILL.md"
-    ".claude/skills/codex-claude-handoff/SKILL.md"
-)
+if [ ${#EXISTING[@]} -gt 0 ]; then
+    echo "install.sh: blocked to avoid overwriting existing files."
+    echo "Existing target files:"
+    printf '  %s\n' "${EXISTING[@]}"
+    echo ""
+    echo "Re-run with --force only when you intentionally want to refresh installed protocol files."
+    exit 1
+fi
 
-for rel in "${SKILL_FILES[@]}"; do
-    copy_if_absent "$TEMPLATES_DIR/$rel" "$TARGET_PATH/$rel" "$rel"
-done
+while IFS= read -r -d '' src; do
+    rel="${src#"$TEMPLATES_DIR"/}"
+    if ! should_install "$rel"; then
+        continue
+    fi
+    mkdir -p "$(dirname "$TARGET_PATH/$rel")"
+    cp -f "$src" "$TARGET_PATH/$rel"
+done < <(find "$TEMPLATES_DIR" -type f -print0)
 
-# Workflow scripts
-WORKFLOW_SCRIPTS=(
-    "scripts/handoff.ps1"
-    "scripts/next-step.ps1"
-    "scripts/handoff.sh"
-    "scripts/next-step.sh"
-    "scripts/protocol-tests.ps1"
-    "scripts/protocol-tests.sh"
-)
-
-for rel in "${WORKFLOW_SCRIPTS[@]}"; do
-    copy_if_absent "$TEMPLATES_DIR/$rel" "$TARGET_PATH/$rel" "$rel"
-done
-
-# .gitignore: create or update
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"
-RULES=("AI_HANDOFF.md" "NEXT_TURN.md" "USER_REQUEST.md" "HANDOFF_LOOP.log" "AI_SEQUENCE.md" "CODEX_REVIEW.jsonl" "CODEX_REVIEW_LAST.md" "CODEX_MASTER.jsonl" "CODEX_MASTER_LAST.md" "CLAUDE_IMPLEMENTER.jsonl" "CLAUDE_IMPLEMENTER_LAST.md" "CLAUDE_IMPLEMENTER_COMMAND.md" "IMPLEMENTER_CLI_BRIEF.md")
+if ! grep -qFx "AI_HANDOFF.md" "$GITIGNORE_PATH" 2>/dev/null; then
+    printf '\n%s\n' "$(cat "$TEMPLATES_DIR/gitignore-snippet.txt")" >> "$GITIGNORE_PATH"
+fi
 
-if [ ! -f "$GITIGNORE_PATH" ]; then
-    printf '# Local AI handoff context\nAI_HANDOFF.md\nNEXT_TURN.md\nUSER_REQUEST.md\nHANDOFF_LOOP.log\nAI_SEQUENCE.md\nCODEX_REVIEW.jsonl\nCODEX_REVIEW_LAST.md\nCODEX_MASTER.jsonl\nCODEX_MASTER_LAST.md\nCLAUDE_IMPLEMENTER.jsonl\nCLAUDE_IMPLEMENTER_LAST.md\nCLAUDE_IMPLEMENTER_COMMAND.md\nIMPLEMENTER_CLI_BRIEF.md\n' > "$GITIGNORE_PATH"
-    echo "Created .gitignore with AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md rules"
+if $ALWAYS_ON; then
+    MODE="always-on"
 else
-    ADDED=()
-    for rule in "${RULES[@]}"; do
-        if ! grep -qxF "$rule" "$GITIGNORE_PATH" 2>/dev/null; then
-            printf '\n# Local AI handoff context\n%s\n' "$rule" >> "$GITIGNORE_PATH"
-            ADDED+=("$rule")
+    MODE="opt-in"
+fi
+
+if ! $ALWAYS_ON && ! $DISABLE_ALWAYS_ON; then
+    LEGACY_BUNDLED=()
+    for rel in AGENTS.md CLAUDE.md; do
+        if [ -f "$TARGET_PATH/$rel" ] && cmp -s "$TARGET_PATH/$rel" "$TEMPLATES_DIR/$rel"; then
+            LEGACY_BUNDLED+=("$rel")
         fi
     done
-    if [ ${#ADDED[@]} -gt 0 ]; then
-        echo "Added to .gitignore: ${ADDED[*]}"
-    else
-        echo ".gitignore already contains AI_HANDOFF.md, NEXT_TURN.md, USER_REQUEST.md, HANDOFF_LOOP.log, and AI_SEQUENCE.md"
+    if [ ${#LEGACY_BUNDLED[@]} -gt 0 ]; then
+        echo "WARNING: bundled always-on root instructions are still present: ${LEGACY_BUNDLED[*]}"
+        echo "To migrate an unmodified older install to opt-in mode, re-run with --force --disable-always-on."
     fi
 fi
 
 echo ""
-echo "Install complete."
-echo "Next steps:"
-echo "1. Open AGENTS.md and customize the project context."
-echo "2. Review CLAUDE.md."
-echo "3. Use AI_HANDOFF.md to start the first task."
-echo "4. Run workflow commands from the target project root:"
-echo "   PowerShell (Windows / pwsh):  .\\scripts\\handoff.ps1 status"
-echo "   Bash (macOS / Linux):         bash scripts/handoff.sh status"
+echo "codex-claude-handoff installed into:"
+echo "  $TARGET_PATH"
+echo "Activation mode: $MODE"
 echo ""
-echo "On macOS/Linux, mark scripts executable after install:"
-echo "   chmod +x scripts/handoff.sh scripts/next-step.sh scripts/protocol-tests.sh"
+echo "Check the installation:"
+echo "  cd \"$TARGET_PATH\""
+echo "  bash scripts/handoff.sh doctor"
+echo ""
+
+if $ALWAYS_ON; then
+    echo "Always-on mode is enabled. Root agent instructions were installed."
+else
+    echo "Use it for one task in Codex:"
+    echo '  $codex-claude-handoff'
+    echo "  Describe the task you want completed through the full protocol."
+    echo ""
+    echo "For normal Codex work, do not select or mention the skill."
+fi

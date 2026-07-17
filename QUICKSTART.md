@@ -1,73 +1,100 @@
 # Quick Start
 
-Use this when you just downloaded `codex-claude-handoff` and want to install it into a real project.
+Install `codex-claude-handoff` into one project and activate it only for the tasks
+that should use the Codex -> Claude Code -> Codex review workflow.
 
-## 1. Install into your project
+## Before you start
 
-Run this from the `codex-claude-handoff` repo:
+Install Git, Node.js, Codex Desktop, and use a Claude account that can run Claude
+Code. Your target project should be a Git repository with a clean baseline commit.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT
-```
-
-If the protocol is already installed and you intentionally want to refresh it:
+Claude Code requires a one-time sign-in on a new computer:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT -Force
+npx.cmd --yes @anthropic-ai/claude-code
 ```
 
-## 2. Open the target project
+Complete the browser sign-in, then close Claude Code. You do not need to open it
+manually for normal handoff tasks after that.
+
+## Windows: install the pinned release
+
+Set the project path, download the small bootstrap script, and run it:
 
 ```powershell
-cd C:\Users\Nir\projects\MY_PROJECT
+$project = "C:\Projects\MY_PROJECT"
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8
 ```
 
-Open Codex and Claude Code on this same folder.
+The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
+files and does not change normal Codex behavior.
 
-## 3. Check the install
+Commit the installed project-local skill files before starting real work:
+
+```powershell
+Set-Location $project
+git add .agents .ai .claude scripts .gitignore
+git commit -m "Install codex-claude-handoff v3.1.8"
+```
+
+Check the installation:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
 ```
 
-## 4. See what to do next
+## Use it for one task
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
+Open the target project in Codex Desktop. Type `$`, select
+`codex-claude-handoff`, and describe the task:
+
+```text
+$codex-claude-handoff
+Fix the login form validation and run the full protocol. Stop before commit.
 ```
 
-## 5. Start a task
+That explicit skill selection is the activation boundary. If you do not select or
+mention the skill, Codex works normally in the project.
+
+The workflow may analyze, call Claude Code as Implementer, review with Codex, and run
+safe local tests. It stops before commit, push, tag, release, deploy, database work,
+or secret changes until the user explicitly authorizes the relevant action.
+
+## Optional always-on mode
+
+Only project owners who want every Codex/Claude session routed through the protocol
+should install root instructions:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 start "Describe the change you want"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project $project -AlwaysOn
 ```
 
-For the manual path, paste the printed Master prompt into Codex.
+`-AlwaysOn` is not the default because it changes agent behavior for the entire
+project.
 
-## 6. Optional: run one bounded autonomous session
+## Updating an installed copy
 
-To opt the Codex Master, Claude Code Implementer, and Codex Reviewer into one
-explicitly authorized session:
+Download the newer pinned bootstrap script and run it with `-Force`. In opt-in mode,
+this refreshes only managed protocol files and leaves project root instructions alone.
+
+Projects upgraded from v3.1.7 or older may still contain the bundled always-on
+`AGENTS.md` and `CLAUDE.md`. Migrate them only when those files were not customized:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 loop -IncludeMaster -IncludeReviewer -MaxTurns 3 -BudgetUsd 2 -SessionBudgetUsd 6 -TimeoutSeconds 600
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8 -Force -DisableAlwaysOn
 ```
 
-Confirm once when prompted. Add `-Yes` only when you intentionally want to skip that
-single prompt. The loop stops at the User before commit. It never automates push, tag,
-release, deploy, database, or secret actions.
+The migration compares both root files to the bundled templates before removal. It
+fails safely instead of deleting customized project instructions.
 
-## Daily Rule
+## Local clone alternative
 
-When unsure, run:
+Users who prefer to inspect the package before running it can clone the tag and run
+the local installer:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
+git clone --branch v3.1.8 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
-
-Commit only through the guarded command printed after review:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 commit-approved -Message "..." -Authorize "I_AUTHORIZE_COMMIT"
-```
-

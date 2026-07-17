@@ -4,49 +4,56 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 
 The goal is to avoid copy-pasting long context between tools.
 
-> **Stable (v1.0.0).** The role model, states, gates, adapter contract, workflow
-> scripts, and safety boundaries are frozen with a commitment to backward compatibility.
-> 1.0.0 is a packaging release with no breaking changes from the 0.x line and no
-> migration steps. The automation it stabilizes is intentionally bounded: the
-> Claude Code Implementer turn is the default auto-loop turn, Codex Master/Reviewer turns are
-> callable only through guarded commands or per-session loop opt-ins, and release execution
-> and sequence advance remain guarded and user-authorized. Full autonomous Codex <-> Claude
-> dialogue is still being built in narrow, reviewed slices. See [CHANGELOG.md](CHANGELOG.md)
-> and [ROADMAP.md](ROADMAP.md).
+> **Current release: v3.1.8.** The project-local skill is opt-in by default. Selecting
+> `$codex-claude-handoff` for a task activates the bounded Codex -> Claude Code -> Codex
+> review workflow. Ordinary Codex requests remain ordinary unless the project owner
+> explicitly installs the optional always-on root instructions.
 
 ## Quick Start / Daily Use
 
-If you just downloaded this repo, install the protocol into the project you want
-Codex and Claude Code to share:
+On Windows, download the pinned bootstrap and install into one target project:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\Users\Nir\projects\MY_PROJECT
+$project = "C:\Projects\MY_PROJECT"
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8
 ```
 
-Then open that target project in Codex and Claude Code, and run:
+Then open only the target project in Codex Desktop and verify the local install:
 
 ```powershell
-cd C:\Users\Nir\projects\MY_PROJECT
+cd C:\Projects\MY_PROJECT
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
 ```
 
-For supervised real use, start each session from your project root with:
+Activate the workflow for one task by typing `$`, selecting
+`codex-claude-handoff`, and entering the request:
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 work
+```text
+$codex-claude-handoff
+Describe the task. Run the full protocol and stop before commit.
 ```
+
+If the skill is not selected or mentioned, Codex works normally. The default install
+does not add root `AGENTS.md` or `CLAUDE.md`. Project owners can request the old
+project-wide behavior explicitly with `install.ps1 -AlwaysOn`.
+
+For an unmodified v3.1.7-or-older always-on install, use
+`install.ps1 -Force -DisableAlwaysOn` to remove only root instructions that still
+match the bundled templates. Customized root instructions are never deleted.
 
 `doctor` is a read-only health check for the local protocol install, role binding,
-working tree, and CLI prerequisites. `work` is the daily workflow view: it prints
-the current handoff state, who the protocol is waiting for, the current task, and
-the exact next action.
+working tree, and CLI prerequisites. Claude Code requires a one-time account sign-in
+on each computer; after that, the protocol invokes it automatically.
 
 For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
 model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-v3.1.7 closes the manual investigation gap found by human acceptance: read-only
+v3.1.8 makes activation and packaging safe for ordinary projects: installation is
+project-local and opt-in, existing root agent instructions are preserved, package-only
+test files are not copied into target repositories, and a pinned bootstrap supports a
+clean first-time install. v3.1.7 closed the manual investigation gap found by human acceptance: read-only
 `NEEDS_INVESTIGATION` turns now run through the same bounded Claude adapter, enforce a
 post-turn no-source-edit boundary, and use Claude Code `--safe-mode` so unrelated user
 plugins and hooks cannot interfere. v3.1.6 hardened independent review and Windows

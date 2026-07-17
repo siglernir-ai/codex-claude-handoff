@@ -3,6 +3,29 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.8 - Explicit Activation and Installable Packaging
+
+- Changed the default project installation from always-on root instructions to an
+  explicit, task-scoped skill activation. Users select `$codex-claude-handoff` only
+  for work that should run through the full protocol; ordinary Codex tasks remain
+  ordinary.
+- Narrowed all Codex, canonical, and Claude skill descriptions so they trigger only
+  when the user explicitly selects or names the skill, or requests the full handoff
+  protocol.
+- Added `install.ps1 -AlwaysOn` for project owners who intentionally want root
+  `AGENTS.md` and `CLAUDE.md` integration. It is no longer the default.
+- Added `-DisableAlwaysOn` as a fail-closed migration for older installs. It removes
+  only bundled root instructions whose hashes still match the package and refuses to
+  delete customized project files.
+- Stopped copying package-only protocol test harnesses and installer snippets into
+  target projects.
+- Added a pinned `bootstrap.ps1` downloader for first-time Windows installation and
+  rewrote the Quick Start around the actual stranger journey: one-time Claude login,
+  project install, baseline commit, doctor, explicit activation, and normal opt-out.
+- Added regression coverage for opt-in installation, always-on installation, host
+  `AGENTS.md` preservation, package-only exclusions, bootstrap delegation, and pinned
+  version validation.
+
 ## 3.1.7 - Autonomous Investigation and Clean Claude Runtime
 
 - Added `NEEDS_INVESTIGATION` to the verified Claude Code Implementer adapter, so
