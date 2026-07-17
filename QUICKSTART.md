@@ -44,11 +44,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 do
 
 ## Use it for one task
 
-Open the target project in Codex Desktop. Type `$`, select
-`codex-claude-handoff`, and describe the task:
+Open the target project in Codex Desktop. Enter `/skills`, select
+`codex-claude-handoff`, and then describe the task:
 
 ```text
-$codex-claude-handoff
 Fix the login form validation and run the full protocol. Stop before commit.
 ```
 

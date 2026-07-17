@@ -5,7 +5,7 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 The goal is to avoid copy-pasting long context between tools.
 
 > **Current release: v3.1.8.** The project-local skill is opt-in by default. Selecting
-> `$codex-claude-handoff` for a task activates the bounded Codex -> Claude Code -> Codex
+> `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
 
@@ -24,11 +24,10 @@ Then verify the local install from the same PowerShell window:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
 ```
 
-Activate the workflow for one task by typing `$`, selecting
-`codex-claude-handoff`, and entering the request:
+Activate the workflow for one task by entering `/skills`, selecting
+`codex-claude-handoff`, and then entering the request:
 
 ```text
-$codex-claude-handoff
 Describe the task. Run the full protocol and stop before commit.
 ```
 
