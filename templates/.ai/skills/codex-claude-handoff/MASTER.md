@@ -21,10 +21,11 @@ At the beginning of a Master session:
 
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm you hold the Master (and Reviewer) role.
 2. Read AI_HANDOFF.md first.
-3. Check State.
-4. Check Waiting For.
-5. Read AGENTS.md only as needed.
-6. Do not inspect unrelated files unless the handoff state requires it.
+3. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer, stop before role-dependent work and report the required repair.
+4. Check State.
+5. Check Waiting For.
+6. Read AGENTS.md only as needed.
+7. Do not inspect unrelated files unless the handoff state requires it.
 
 ## Model and Effort Guidance
 

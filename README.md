@@ -4,7 +4,7 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 
 The goal is to avoid copy-pasting long context between tools.
 
-> **Current release: v3.1.9.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.1.10.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -15,7 +15,7 @@ On Windows, open PowerShell in the project folder and paste this one command. Th
 installer uses the current folder automatically; there is no project path to edit:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.9/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.10/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -46,7 +46,9 @@ on each computer; after that, the protocol invokes it automatically.
 For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
 model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
-v3.1.9 aligns the packaged beginner journey with Codex Desktop: the Windows quick
+v3.1.10 adds a runtime role-synchronization checkpoint: every turn rereads the
+authoritative role binding and stops if the handoff contains stale actors. v3.1.9
+aligned the packaged beginner journey with Codex Desktop: the Windows quick
 start installs into the current PowerShell folder without a path variable, and both
 the installer and documentation direct users to `/skills`. v3.1.8 made activation
 and packaging safe for ordinary projects: installation is
@@ -72,6 +74,18 @@ The protocol is organized around three roles, bound to concrete tools in `.ai/ro
 - The user remains the approval point.
 
 Default binding: Master = Codex, Reviewer = Codex, Implementer = Claude Code. Roles can be reassigned with user approval without rewriting the protocol. All roles coordinate through a shared file: `AI_HANDOFF.md`.
+
+### Switching roles
+
+Tell the current Master explicitly which binding you approve, for example:
+
+```text
+I approve this role swap: Master and Reviewer = Claude Code; Implementer = Codex.
+Update .ai/roles/ROLE_ASSIGNMENT.md and synchronize AI_HANDOFF.md in the same turn.
+```
+
+The Reviewer must remain different from the Implementer. Each later turn rereads
+the role table; stale Task Actors fail closed instead of silently using the old roles.
 
 ## Protocol Method
 

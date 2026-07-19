@@ -108,6 +108,38 @@ function Resolve-Actor {
     return $Role
 }
 
+function Test-RoleCheckpoint {
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if ($Binding.Reviewer -eq $Binding.Implementer) {
+        $errors.Add("Invalid role binding: Reviewer and Implementer are both '$($Binding.Reviewer)'.")
+    }
+
+    $actors = @{ Implementer = ""; Reviewer = "" }
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Task Actors")) {
+        if ($line.Trim() -match '^[-*]\s*Implementer:\s*(.+)$') { $actors.Implementer = $Matches[1].Trim() }
+        if ($line.Trim() -match '^[-*]\s*Reviewer:\s*(.+)$') { $actors.Reviewer = $Matches[1].Trim() }
+    }
+    foreach ($role in @('Implementer', 'Reviewer')) {
+        $actual = $actors[$role]
+        if ([string]::IsNullOrWhiteSpace($actual) -or $actual -in @('TBD', '(unknown)')) { continue }
+        $expected = $Binding[$role]
+        if ($actual -ne $expected) {
+            $errors.Add("Role drift: AI_HANDOFF.md Task Actors $role='$actual' but ROLE_ASSIGNMENT.md binds $role='$expected'.")
+        }
+    }
+
+    return @{ Ok = ($errors.Count -eq 0); Errors = $errors }
+}
+
+function Write-RoleCheckpointFailure {
+    param([hashtable]$Checkpoint)
+    Write-Host ""
+    Write-Host "Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync."
+    foreach ($error in $Checkpoint.Errors) { Write-Host "Reason: $error" }
+    Write-Host "Repair: read .ai/roles/ROLE_ASSIGNMENT.md, synchronize the derived Task Actors fields in AI_HANDOFF.md, then run the command again."
+    Write-Host "No role-dependent action was performed."
+}
+
 # Local Codex Reviewer POC artifacts (v1.2.0). Local, gitignored, never committed.
 $ReviewJsonlName = "CODEX_REVIEW.jsonl"
 $ReviewLastName  = "CODEX_REVIEW_LAST.md"
@@ -741,6 +773,12 @@ $HandoffStatus = Read-HandoffState -Lines $Lines
 $State         = $HandoffStatus.State
 $WaitingFor    = $HandoffStatus.WaitingFor
 $CurrentTask   = $HandoffStatus.CurrentTask
+$RoleCheckpoint = Test-RoleCheckpoint
+
+if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status')) {
+    Write-RoleCheckpointFailure -Checkpoint $RoleCheckpoint
+    exit 12
+}
 
 $CommitStatus = switch ($State) {
     "REVIEW_DONE" { "ALLOWED - the Reviewer attested technical readiness; the remaining step is your commit authorization. Commit only the files listed under Changed Files." }
@@ -979,6 +1017,12 @@ function Invoke-Doctor {
         Write-DoctorLine "OK" "Role assignment: Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
     } else {
         Write-DoctorLine "WARN" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
+    }
+    if ($RoleCheckpoint.Ok) {
+        Write-DoctorLine "OK" "Role checkpoint: binding and derived Task Actors are synchronized."
+    } else {
+        Write-DoctorLine "WARN" "Role checkpoint: drift or invalid Reviewer/Implementer binding detected."
+        foreach ($error in $RoleCheckpoint.Errors) { Write-Host "      $error" }
     }
 
     $tree = Get-WorkingTreeState

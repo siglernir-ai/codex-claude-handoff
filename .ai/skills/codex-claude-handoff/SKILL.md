@@ -45,6 +45,9 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `VERSION` | Installed protocol version |
 
 The role-to-tool binding lives one level up, in `.ai/roles/ROLE_ASSIGNMENT.md`.
+It is the single source of truth for role binding. `AI_HANDOFF.md` Task Actors are
+derived display data only. Every turn begins by rereading the binding and checking
+for drift or Reviewer==Implementer; failures stop the protocol closed.
 
 ## How to Resolve Your Behavior
 

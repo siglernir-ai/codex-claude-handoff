@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.9
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.10
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -302,6 +302,21 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" 
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
 Check "REVIEW_DONE routes to User, no tool handoff" (($r.Out -match "Next actor: User") -and ($r.Out -match "No tool handoff needed"))
 
+# A role swap without updating derived Task Actors must fail closed before routing.
+$swappedRoles = @"
+# Role Assignment
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+"@
+$staleHandoff = New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $staleHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $swappedRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "stale Task Actors after role swap fail closed" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($r.Out -match "synchronize"))
+
 # === 2. Turn-ownership mismatch routing ===
 Write-Host "[2] Mismatch routing"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
@@ -537,7 +552,7 @@ $badHandoff = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
 $badHandoff = $badHandoff -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v0.20.0")
-Check "release-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "Reviewer must not equal actual Implementer"))
+Check "release-check blocks stale actors at the role checkpoint" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($r.Out -match "Role drift"))
 
 # === 5B. Approved commit executor guards (commit-check / commit-approved) ===
 Write-Host "[5B] Approved commit executor guards (commit-check / commit-approved)"
@@ -570,7 +585,7 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badCommitHandoff; ".ai/roles/ROLE
 Initialize-FixtureGitBaseline -Dir $fx
 Set-Content -Path (Join-Path $fx "COMMIT_TARGET.md") -Value "# approved commit fixture" -Encoding utf8
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "Bad actor fixture")
-Check "commit-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "Reviewer must not equal actual Implementer"))
+Check "commit-check blocks stale actors at the role checkpoint" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($r.Out -match "Role drift"))
 
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $commitHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 Initialize-FixtureGitBaseline -Dir $fx
@@ -671,7 +686,8 @@ $nonCodexRoles = @"
 | Reviewer | Gemini |
 | Implementer | Claude Code |
 "@
-$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexRoles } -InitGit
+$nonCodexHandoff = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Reviewer: Codex", "- Reviewer: Gemini"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $nonCodexHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
 Check "review-check blocks when the bound Reviewer is not Codex" (($r.Code -eq 1) -and ($r.Out -match "bound Reviewer tool must be Codex"))
 
@@ -680,7 +696,7 @@ $badHandoff = New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
 $badHandoff = $badHandoff -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $badHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
-Check "review-check blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($r.Out -match "actual task Reviewer must be Codex|must not equal the actual Implementer"))
+Check "review-check blocks stale actors at the role checkpoint" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED"))
 
 # Changed Files must match git status (here: empty / no reviewable files).
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
@@ -935,7 +951,7 @@ $handoffPath = Join-Path $fx "AI_HANDOFF.md"
 $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
-Check "review-apply blocks when actual Reviewer == actual Implementer" (($r.Code -eq 1) -and ($before -eq $after))
+Check "review-apply blocks stale actors at the role checkpoint" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($before -eq $after))
 
 # loop must STOP at a READY_FOR_REVIEW Reviewer turn, never auto-run it (callable but not loop-eligible).
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
@@ -1159,6 +1175,8 @@ $rolesSwap = @"
 "@
 $fx = New-MasterApplyFixture -Capture $masterCaptureReady -Roles $rolesSwap
 $handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$syncedSwapHandoff = (Get-Content -Raw -Path $handoffPath) -replace "- Implementer: Claude Code", "- Implementer: Gemini"
+Set-Content -Path $handoffPath -Value $syncedSwapHandoff -Encoding utf8
 $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash

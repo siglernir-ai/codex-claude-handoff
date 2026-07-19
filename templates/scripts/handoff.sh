@@ -512,6 +512,32 @@ cmd_release_blocked() {
     exit 1
 }
 
+_role_checkpoint() {
+    local implementer="" reviewer="" line
+    while IFS= read -r line; do
+        case "$line" in
+            "- Implementer: "*) implementer="${line#- Implementer: }" ;;
+            "- Reviewer: "*) reviewer="${line#- Reviewer: }" ;;
+        esac
+    done < <(_section_content "Task Actors")
+    local errors=""
+    [ "$REVIEWER_TOOL" = "$IMPLEMENTER_TOOL" ] && errors="Invalid role binding: Reviewer and Implementer are both '$REVIEWER_TOOL'."
+    if [ -n "$implementer" ] && [ "$implementer" != "TBD" ] && [ "$implementer" != "$IMPLEMENTER_TOOL" ]; then
+        errors="${errors}${errors:+$'\n'}Role drift: AI_HANDOFF.md Task Actors Implementer='$implementer' but ROLE_ASSIGNMENT.md binds Implementer='$IMPLEMENTER_TOOL'."
+    fi
+    if [ -n "$reviewer" ] && [ "$reviewer" != "TBD" ] && [ "$reviewer" != "$REVIEWER_TOOL" ]; then
+        errors="${errors}${errors:+$'\n'}Role drift: AI_HANDOFF.md Task Actors Reviewer='$reviewer' but ROLE_ASSIGNMENT.md binds Reviewer='$REVIEWER_TOOL'."
+    fi
+    if [ -n "$errors" ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "adapters" ]; then
+        echo ""
+        echo "Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync."
+        printf 'Reason: %s\n' "$errors"
+        echo "Repair: synchronize derived Task Actors in AI_HANDOFF.md with .ai/roles/ROLE_ASSIGNMENT.md, then run the command again."
+        echo "No role-dependent action was performed."
+        exit 12
+    fi
+}
+
 cmd_commit_approved_blocked() {
     echo ""
     echo "commit-approved is not available in handoff.sh."
@@ -578,6 +604,7 @@ cmd_master_blocked() {
 
 _parse_status
 _get_role_binding
+_role_checkpoint
 
 case "$COMMAND" in
     status)       cmd_status ;;

@@ -3,6 +3,12 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.10 - Runtime Role Synchronization Checkpoint
+
+- Made `ROLE_ASSIGNMENT.md` the authoritative role-binding source.
+- Added a mandatory turn-start checkpoint that fails closed on stale Task Actors
+  or a Reviewer/Implementer invariant violation.
+
 ## 3.1.9 - Current-Folder Installation and Slash Activation
 
 - Simplified the public Windows installation journey to one pasted PowerShell command

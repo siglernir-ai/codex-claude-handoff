@@ -36,7 +36,9 @@ One task at a time flows through the role cycle:
 User -> Master -> Implementer -> Reviewer -> User
 ```
 
-- `AI_HANDOFF.md` is the source of truth for the current task.
+- `AI_HANDOFF.md` is the source of truth for current task state. For role/tool binding,
+  `.ai/roles/ROLE_ASSIGNMENT.md` is authoritative; Task Actors in the handoff are
+  derived display data only.
 - The allowed states and their owners are defined in `MASTER.md` ("Allowed States")
   and resolved by the workflow scripts via the role binding.
 - Gates: Investigation Gate, Planning Gate, Verification Gate (`MASTER.md`).

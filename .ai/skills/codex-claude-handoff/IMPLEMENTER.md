@@ -31,9 +31,10 @@ Before significant work:
 
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm you hold the Implementer role.
 2. Read `AI_HANDOFF.md` if it exists.
-3. If present, read `CLAUDE_IMPLEMENTER_LAST.md`, `CODEX_MASTER_LAST.md`, `CODEX_REVIEW_LAST.md`, and recent `HANDOFF_LOOP.log` to reconstruct recent CLI/window context.
-4. Read `.ai/skills/codex-claude-handoff/CAPABILITIES.md` and `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` if present.
-5. Check:
+3. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer, fail closed before inspecting or modifying source and report the required repair.
+4. If present, read `CLAUDE_IMPLEMENTER_LAST.md`, `CODEX_MASTER_LAST.md`, `CODEX_REVIEW_LAST.md`, and recent `HANDOFF_LOOP.log` to reconstruct recent CLI/window context.
+5. Read `.ai/skills/codex-claude-handoff/CAPABILITIES.md` and `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` if present.
+6. Check:
    - `State`
    - `Waiting For`
    - `Current Task`

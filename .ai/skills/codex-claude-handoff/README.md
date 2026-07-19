@@ -24,6 +24,10 @@ The role-to-tool binding lives one level up:
 |---|---|
 | `.ai/roles/ROLE_ASSIGNMENT.md` | Binds Master / Implementer / Reviewer to concrete tools |
 
+This table is authoritative for role binding. `AI_HANDOFF.md` only displays derived
+Task Actors. Each protocol turn checks both files and fails closed on drift or an
+invalid Reviewer/Implementer pairing.
+
 ## Discovery
 
 Both Codex and Claude Code discover this shared folder via lightweight adapter stubs:

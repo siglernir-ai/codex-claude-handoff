@@ -45,7 +45,9 @@ The User is always the approval point and is never one of these roles.
   explicit user approval. Neither Codex nor Claude Code may switch roles on its own.
 - To switch: with user approval, edit the Current Binding table above and keep the
   invariant satisfied. The protocol docs and scripts resolve behavior from this
-  table, so no other file needs to change for a swap.
+  table. The swap is atomic: in the same turn, synchronize the derived Task Actors
+  fields in `AI_HANDOFF.md`, and record what changed, when, and that the user approved
+  it. Later turns reread this table and fail closed if the derived actors disagree.
 
 ## Tooling Note
 
