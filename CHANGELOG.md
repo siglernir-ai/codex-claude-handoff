@@ -3,6 +3,20 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.9 - Current-Folder Installation and Slash Activation
+
+- Simplified the public Windows installation journey to one pasted PowerShell command
+  that installs into the current project folder without asking the user to edit or
+  repeat a project path.
+- Changed the PowerShell and Bash installer completion guidance to open `/skills` and
+  select `codex-claude-handoff`, matching the visible Codex skill-selection workflow.
+- Clarified skill metadata so `/skills` selection, `$codex-claude-handoff` mentions,
+  explicit naming, and full-protocol requests remain valid activation boundaries.
+- Added regression coverage requiring `/skills` guidance and rejecting the obsolete
+  `$codex-claude-handoff`-only installer message.
+- Rebuilt the release package so its README, quick start, installer output, versioned
+  bootstrap, ZIP, and checksum all contain the corrected beginner journey.
+
 ## 3.1.8 - Explicit Activation and Installable Packaging
 
 - Changed the default project installation from always-on root instructions to an

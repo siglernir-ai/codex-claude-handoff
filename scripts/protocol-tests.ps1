@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.8
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.9
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -442,10 +442,10 @@ $installedGitignore = Join-Path $installTarget ".gitignore"
 $installedGitignoreText = if (Test-Path $installedGitignore) { Get-Content -Raw -Path $installedGitignore } else { "" }
 Check "install.ps1 installs protocol files into an empty target" (($installCode -eq 0) -and (Test-Path $installedHandoff) -and (Test-Path $installedScript) -and (Test-Path $installedVersion))
 Check "default install is opt-in and does not install root agent instructions" ((-not (Test-Path $installedAgents)) -and (-not (Test-Path $installedClaude)) -and ($installOut -match "Activation mode: opt-in"))
-Check "installed Codex skill metadata requires explicit activation" ((Get-Content -Raw -Path $installedSkill) -match "Use only when the user explicitly selects")
+Check "installed Codex skill metadata requires explicit activation" ((Get-Content -Raw -Path $installedSkill) -match [regex]::Escape("through /skills"))
 Check "default install excludes package-only test and snippet files" ((-not (Test-Path $installedProtocolTests)) -and (-not (Test-Path $installedSnippet)))
 Check "install.ps1 adds local coordination files to .gitignore" (($installedGitignoreText -match "AI_HANDOFF\.md") -and ($installedGitignoreText -match "NEXT_TURN\.md"))
-Check "install.ps1 prints doctor and explicit skill activation guidance" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape('$codex-claude-handoff')) -and ($installOut -match "normal Codex work"))
+Check "install.ps1 prints doctor and slash-command skill activation guidance" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape('/skills')) -and ($installOut -match "Select codex-claude-handoff") -and ($installOut -notmatch [regex]::Escape('$codex-claude-handoff')) -and ($installOut -match "normal Codex work"))
 
 $blockedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget 2>&1 | Out-String
 $blockedCode = $LASTEXITCODE

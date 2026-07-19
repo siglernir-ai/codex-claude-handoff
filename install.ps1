@@ -155,8 +155,9 @@ if ($AlwaysOn) {
 }
 else {
     Write-Host "Use it for one task in Codex Desktop:"
-    Write-Host '  $codex-claude-handoff'
-    Write-Host "  Describe the task you want completed through the full protocol."
+    Write-Host "  1. Enter /skills in the Codex composer."
+    Write-Host "  2. Select codex-claude-handoff."
+    Write-Host "  3. Describe the task you want completed through the full protocol."
     Write-Host ""
     Write-Host "For normal Codex work, do not select or mention the skill."
 }

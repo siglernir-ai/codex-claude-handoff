@@ -23,7 +23,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.8/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.1.9/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -33,7 +33,7 @@ Commit the installed project-local skill files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.1.8"
+git commit -m "Install codex-claude-handoff v3.1.9"
 ```
 
 Check the installation:
@@ -79,7 +79,7 @@ Projects upgraded from v3.1.7 or older may still contain the bundled always-on
 `AGENTS.md` and `CLAUDE.md`. Migrate them only when those files were not customized:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Project $project -Version v3.1.8 -Force -DisableAlwaysOn
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Force -DisableAlwaysOn
 ```
 
 The migration compares both root files to the bundled templates before removal. It
@@ -91,6 +91,6 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.1.8 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.1.9 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```

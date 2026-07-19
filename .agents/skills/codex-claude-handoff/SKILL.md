@@ -1,6 +1,6 @@
 ---
 name: codex-claude-handoff
-description: Run the project-local Codex to Claude Code to Codex handoff protocol. Use only when the user explicitly selects $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full Codex-Claude handoff protocol; do not trigger for ordinary project tasks.
+description: Run the project-local Codex to Claude Code to Codex handoff protocol. Use only when the user selects codex-claude-handoff through /skills, mentions $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full Codex-Claude handoff protocol; do not trigger for ordinary project tasks.
 ---
 
 # Codex-Claude Handoff Skill - Codex Adapter

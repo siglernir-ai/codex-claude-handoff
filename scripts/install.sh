@@ -146,8 +146,9 @@ if $ALWAYS_ON; then
     echo "Always-on mode is enabled. Root agent instructions were installed."
 else
     echo "Use it for one task in Codex:"
-    echo '  $codex-claude-handoff'
-    echo "  Describe the task you want completed through the full protocol."
+    echo "  1. Enter /skills in the Codex composer."
+    echo "  2. Select codex-claude-handoff."
+    echo "  3. Describe the task you want completed through the full protocol."
     echo ""
     echo "For normal Codex work, do not select or mention the skill."
 fi
