@@ -45,6 +45,39 @@ if [ ! -d "$TARGET_PATH/.git" ]; then
     echo "Run 'git init' and create a baseline commit before using review/commit guards."
 fi
 
+# Validate and preserve the live role binding before any target mutation.
+PRESERVE_ROLE_BINDING=false
+PRESERVED_MASTER=""
+PRESERVED_REVIEWER=""
+PRESERVED_IMPLEMENTER=""
+ROLE_FILE="$TARGET_PATH/.ai/roles/ROLE_ASSIGNMENT.md"
+if $FORCE && [ -f "$ROLE_FILE" ]; then
+    master_count=0 reviewer_count=0 implementer_count=0
+    while IFS='=' read -r role tool; do
+        case "$role" in
+            Master) master_count=$((master_count + 1)); PRESERVED_MASTER="$tool" ;;
+            Reviewer) reviewer_count=$((reviewer_count + 1)); PRESERVED_REVIEWER="$tool" ;;
+            Implementer) implementer_count=$((implementer_count + 1)); PRESERVED_IMPLEMENTER="$tool" ;;
+        esac
+    done < <(awk -F'|' '
+        /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/ {
+            role=$2; tool=$3
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", role)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", tool)
+            if (role != "" && tool != "") print role "=" tool
+        }
+    ' "$ROLE_FILE")
+    if [ "$master_count" -ne 1 ] || [ "$reviewer_count" -ne 1 ] || [ "$implementer_count" -ne 1 ]; then
+        echo "Refusing --force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $ROLE_FILE"
+        exit 1
+    fi
+    if [ "$PRESERVED_REVIEWER" = "$PRESERVED_IMPLEMENTER" ]; then
+        echo "Refusing --force update: existing role binding violates Reviewer != Implementer. Repair it before updating: $ROLE_FILE"
+        exit 1
+    fi
+    PRESERVE_ROLE_BINDING=true
+fi
+
 if $DISABLE_ALWAYS_ON; then
     REMOVAL_CANDIDATES=()
     for rel in AGENTS.md CLAUDE.md; do
@@ -104,8 +137,28 @@ while IFS= read -r -d '' src; do
     if ! should_install "$rel"; then
         continue
     fi
+    if $FORCE && { [ "$rel" = "AI_HANDOFF.md" ] || [ "$rel" = "AI_SEQUENCE.md" ]; } && [ -f "$TARGET_PATH/$rel" ]; then
+        echo "Preserved local coordination state: $rel"
+        continue
+    fi
     mkdir -p "$(dirname "$TARGET_PATH/$rel")"
-    cp -f "$src" "$TARGET_PATH/$rel"
+    if [ "$rel" = ".ai/roles/ROLE_ASSIGNMENT.md" ] && $PRESERVE_ROLE_BINDING; then
+        role_tmp="$TARGET_PATH/$rel.update.$$"
+        awk -F'|' -v master="$PRESERVED_MASTER" -v reviewer="$PRESERVED_REVIEWER" -v implementer="$PRESERVED_IMPLEMENTER" '
+            /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/ {
+                role=$2
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", role)
+                if (role == "Master") { print "| Master | " master " |"; next }
+                if (role == "Reviewer") { print "| Reviewer | " reviewer " |"; next }
+                if (role == "Implementer") { print "| Implementer | " implementer " |"; next }
+            }
+            { print }
+        ' "$src" > "$role_tmp"
+        mv -f -- "$role_tmp" "$TARGET_PATH/$rel"
+        echo "Preserved current role binding while refreshing role instructions."
+    else
+        cp -f "$src" "$TARGET_PATH/$rel"
+    fi
 done < <(find "$TEMPLATES_DIR" -type f -print0)
 
 GITIGNORE_PATH="$TARGET_PATH/.gitignore"

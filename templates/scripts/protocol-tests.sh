@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Protocol Test Harness (Bash companion) - codex-claude-handoff v2.1.0
+# Protocol Test Harness (Bash companion) - codex-claude-handoff v3.1.11
 #
 # The protocol test harness is PowerShell-first: scripts/protocol-tests.ps1 holds the
 # full fixture-driven suite (state routing, adapter decisions, stop categories, release
@@ -39,6 +39,19 @@ check() {
         FAILURES="$FAILURES\n  - $name"
         if [ -n "$detail" ]; then echo "  FAIL  $name - $detail"; else echo "  FAIL  $name"; fi
     fi
+}
+
+role_tool() {
+    # role_tool <role-file> <role> -> prints the single matching tool
+    local file="$1" role_wanted="$2"
+    awk -F'|' -v wanted="$role_wanted" '
+        /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/ {
+            role=$2; tool=$3
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", role)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", tool)
+            if (role == wanted) print tool
+        }
+    ' "$file"
 }
 
 # Portable file hash. Prefers sha256sum, then shasum -a 256, then md5sum, then BSD md5
@@ -160,6 +173,109 @@ else
     after="$(hash_file "$fx/AI_HANDOFF.md")"
     if [ -n "$before" ] && [ "$before" = "$after" ]; then unmodified=0; else unmodified=1; fi
     check "Bash refusal does not modify AI_HANDOFF.md" $unmodified
+fi
+
+# === Safe in-place update ===
+echo "[bash] --force preserves live state and refreshes managed files"
+install_target="$FIXTURE_ROOT/bash-install-target"
+mkdir -p "$install_target"
+git -C "$install_target" init -q
+install_out="$(bash "$SCRIPT_DIR/install.sh" "$install_target" 2>&1)"
+install_code=$?
+check "fresh Bash install succeeds" $install_code "$install_out"
+
+cat > "$install_target/AI_HANDOFF.md" <<'EOF'
+# AI Handoff
+
+## Status
+- State: READY_FOR_IMPLEMENTATION
+- Waiting For: Implementer
+- Last Updated By: Claude Code
+- Last Updated At: 2026-07-19
+- Current Task: Verify safe in-place update
+
+## Task Actors
+- Implementer: Codex
+- Reviewer: Claude Code
+
+## Changed Files
+- None yet
+
+## Next Recommended Step
+- Codex: report the current Implementer turn without changing source files.
+EOF
+printf '%s\n' 'SEQUENCE-SENTINEL-MUST-SURVIVE' > "$install_target/AI_SEQUENCE.md"
+cat > "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" <<'EOF'
+# STALE ROLE DOCUMENT TO BE REFRESHED
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+EOF
+printf '%s\n' 'STALE MANAGED SCRIPT' > "$install_target/scripts/handoff.ps1"
+
+if [ -z "$HASH_TOOL" ]; then
+    check "--force state preservation can be verified" 1 "no portable hash tool found"
+else
+    handoff_before="$(hash_file "$install_target/AI_HANDOFF.md")"
+    sequence_before="$(hash_file "$install_target/AI_SEQUENCE.md")"
+    update_out="$(bash "$SCRIPT_DIR/install.sh" "$install_target" --force 2>&1)"
+    update_code=$?
+    check "Bash --force update succeeds" $update_code "$update_out"
+
+    handoff_after="$(hash_file "$install_target/AI_HANDOFF.md")"
+    sequence_after="$(hash_file "$install_target/AI_SEQUENCE.md")"
+    [ -n "$handoff_before" ] && [ "$handoff_before" = "$handoff_after" ]
+    check "--force preserves AI_HANDOFF.md byte-for-byte" $?
+    [ -n "$sequence_before" ] && [ "$sequence_before" = "$sequence_after" ]
+    check "--force preserves AI_SEQUENCE.md byte-for-byte" $?
+
+    [ "$(role_tool "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" Master)" = "Claude Code" ] && \
+        [ "$(role_tool "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" Reviewer)" = "Claude Code" ] && \
+        [ "$(role_tool "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" Implementer)" = "Codex" ]
+    check "--force preserves the active swapped role binding" $?
+
+    ! grep -q "STALE ROLE DOCUMENT" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" && \
+        grep -q "The swap is atomic" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md"
+    check "--force refreshes role instructions around the preserved binding" $?
+
+    cmp -s "$install_target/scripts/handoff.ps1" "$REPO_ROOT/templates/scripts/handoff.ps1"
+    check "--force refreshes stale managed scripts" $?
+
+    next_out="$(cd "$install_target" && bash scripts/handoff.sh next 2>&1)"
+    next_code=$?
+    [ "$next_code" -eq 0 ] && echo "$next_out" | grep -qE "Open:[[:space:]]+Codex[[:space:]]+\(role: Implementer\)"
+    check "updated install routes the live turn to Codex Implementer" $? "$next_out"
+fi
+
+# A malformed live binding must fail before any managed target file changes.
+malformed_target="$FIXTURE_ROOT/bash-malformed-update-target"
+mkdir -p "$malformed_target"
+git -C "$malformed_target" init -q
+bash "$SCRIPT_DIR/install.sh" "$malformed_target" >/dev/null 2>&1
+cat > "$malformed_target/.ai/roles/ROLE_ASSIGNMENT.md" <<'EOF'
+# Malformed role assignment: Reviewer row is missing
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Implementer | Codex |
+EOF
+if [ -z "$HASH_TOOL" ]; then
+    check "malformed update preflight can be verified" 1 "no portable hash tool found"
+else
+    malformed_handoff_before="$(hash_file "$malformed_target/AI_HANDOFF.md")"
+    malformed_script_before="$(hash_file "$malformed_target/scripts/handoff.ps1")"
+    malformed_out="$(bash "$SCRIPT_DIR/install.sh" "$malformed_target" --force 2>&1)"
+    malformed_code=$?
+    [ "$malformed_code" -ne 0 ] && echo "$malformed_out" | grep -q "cannot be parsed exactly"
+    check "malformed role binding blocks --force" $? "$malformed_out"
+    [ "$malformed_handoff_before" = "$(hash_file "$malformed_target/AI_HANDOFF.md")" ] && \
+        [ "$malformed_script_before" = "$(hash_file "$malformed_target/scripts/handoff.ps1")" ]
+    check "blocked malformed update changes no coordination or managed files" $?
 fi
 
 # === Mirror parity ===

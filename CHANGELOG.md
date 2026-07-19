@@ -3,6 +3,15 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.1.11 - Safe In-Place Updates
+
+- Changed `install.ps1 -Force` and `scripts/install.sh --force` to preserve existing
+  `AI_HANDOFF.md` and `AI_SEQUENCE.md` instead of resetting live coordination state.
+- Preserved the current role binding across updates while still refreshing the
+  managed instructions in `ROLE_ASSIGNMENT.md`.
+- Added installer regression coverage for handoff, sequence, role-binding, and
+  managed-file refresh behavior.
+
 ## 3.1.10 - Runtime Role Synchronization Checkpoint
 
 - Made `ROLE_ASSIGNMENT.md` the authoritative role-binding source.

@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.10
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.11
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -466,9 +466,76 @@ $blockedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript
 $blockedCode = $LASTEXITCODE
 Check "install.ps1 blocks overwriting an existing install without -Force" (($blockedCode -eq 1) -and ($blockedOut -match "blocked to avoid overwriting"))
 
+$installedSequence = Join-Path $installTarget "AI_SEQUENCE.md"
+$installedRoles = Join-Path $installTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+Set-Content -Path $installedHandoff -Value @"
+# AI Handoff
+
+## Status
+- State: READY_FOR_IMPLEMENTATION
+- Waiting For: Implementer
+- Current Task: Preserve active update state
+
+## Task Actors
+- Implementer: Codex
+- Reviewer: Claude Code
+
+## Changed Files
+- None yet
+
+## Next Recommended Step
+- Implementer: report the current role.
+"@ -Encoding utf8
+Set-Content -Path $installedSequence -Value "# active sequence sentinel" -Encoding utf8
+Set-Content -Path $installedRoles -Value @"
+# Old role instructions that must be refreshed
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+"@ -Encoding utf8
+Set-Content -Path $installedScript -Value "# stale managed script" -Encoding utf8
+$handoffBeforeForce = (Get-FileHash -Algorithm SHA256 -Path $installedHandoff).Hash
+$sequenceBeforeForce = (Get-FileHash -Algorithm SHA256 -Path $installedSequence).Hash
+
 $forcedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $installTarget -Force 2>&1 | Out-String
 $forcedCode = $LASTEXITCODE
 Check "install.ps1 refreshes an existing install with -Force" (($forcedCode -eq 0) -and ($forcedOut -match "codex-claude-handoff installed into"))
+$handoffAfterForce = (Get-FileHash -Algorithm SHA256 -Path $installedHandoff).Hash
+$sequenceAfterForce = (Get-FileHash -Algorithm SHA256 -Path $installedSequence).Hash
+$rolesAfterForce = Get-Content -Raw -Path $installedRoles
+$managedScriptRefreshed = (Get-FileHash -Algorithm SHA256 -Path $installedScript).Hash -eq (Get-FileHash -Algorithm SHA256 -Path (Join-Path $RepoRoot "templates/scripts/handoff.ps1")).Hash
+$normalizedRolesAfter = $rolesAfterForce -replace '(?m)^\|\s*(Master|Reviewer|Implementer)\s*\|\s*.+?\s*\|\s*$', '| $1 | <tool> |'
+$templateRoleText = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md")
+$normalizedRoleTemplate = $templateRoleText -replace '(?m)^\|\s*(Master|Reviewer|Implementer)\s*\|\s*.+?\s*\|\s*$', '| $1 | <tool> |'
+Push-Location $installTarget
+try {
+    $installedNextOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installedScript next 2>&1 | Out-String
+    $installedNextCode = $LASTEXITCODE
+}
+finally { Pop-Location }
+Check "-Force preserves active AI_HANDOFF.md and AI_SEQUENCE.md" (($handoffBeforeForce -eq $handoffAfterForce) -and ($sequenceBeforeForce -eq $sequenceAfterForce) -and ($forcedOut -match "Preserved local coordination state"))
+Check "-Force preserves current role binding while refreshing all role instructions" (($rolesAfterForce -match '\| Master \| Claude Code \|') -and ($rolesAfterForce -match '\| Reviewer \| Claude Code \|') -and ($rolesAfterForce -match '\| Implementer \| Codex \|') -and ($normalizedRolesAfter -eq $normalizedRoleTemplate) -and ($rolesAfterForce -notmatch "Old role instructions") -and ($managedScriptRefreshed))
+Check "updated install keeps the active task synchronized and routes to the preserved Implementer" (($installedNextCode -eq 0) -and ($installedNextOut -match "Open:\s+Codex\s+\(role: Implementer\)"))
+
+$malformedTarget = Join-Path $FixtureRoot "install-target-malformed-role"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $malformedTarget 2>&1 | Out-String
+$malformedHandoff = Join-Path $malformedTarget "AI_HANDOFF.md"
+$malformedScript = Join-Path $malformedTarget "scripts/handoff.ps1"
+$malformedRoles = Join-Path $malformedTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+Set-Content -Path $malformedRoles -Value "| Master | Codex |`n| Implementer | Claude Code |" -Encoding utf8
+$malformedHandoffBefore = (Get-FileHash -Algorithm SHA256 -Path $malformedHandoff).Hash
+$malformedScriptBefore = (Get-FileHash -Algorithm SHA256 -Path $malformedScript).Hash
+$previousMalformedEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$malformedOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $malformedTarget -Force 2>&1 | Out-String
+$malformedCode = $LASTEXITCODE
+$ErrorActionPreference = $previousMalformedEap
+Check "-Force fails closed before copying when existing role binding is malformed" (($malformedCode -ne 0) -and ($malformedOut -match "cannot be parsed exactly") -and ($malformedHandoffBefore -eq (Get-FileHash -Algorithm SHA256 -Path $malformedHandoff).Hash) -and ($malformedScriptBefore -eq (Get-FileHash -Algorithm SHA256 -Path $malformedScript).Hash))
 
 $alwaysOnTarget = Join-Path $FixtureRoot "install-target-always-on"
 $alwaysOnOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installScript -Project $alwaysOnTarget -AlwaysOn 2>&1 | Out-String

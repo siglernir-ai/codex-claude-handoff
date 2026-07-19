@@ -11,6 +11,35 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $templateRoot = Join-Path $repoRoot "templates"
 $targetRoot = [System.IO.Path]::GetFullPath($Project)
 
+function Get-InstalledRoleBinding {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $binding = @{}
+    $counts = @{ Master = 0; Reviewer = 0; Implementer = 0 }
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
+            $counts[$Matches[1]]++
+            $binding[$Matches[1]] = $Matches[2].Trim()
+        }
+    }
+    if ($binding.Count -ne 3) { return $null }
+    foreach ($role in @('Master', 'Reviewer', 'Implementer')) {
+        if ($counts[$role] -ne 1 -or [string]::IsNullOrWhiteSpace($binding[$role])) { return $null }
+    }
+    return $binding
+}
+
+function Get-MergedRoleAssignmentContent {
+    param([string]$TemplatePath, [hashtable]$Binding)
+    $content = Get-Content -Raw -LiteralPath $TemplatePath
+    foreach ($role in @('Master', 'Reviewer', 'Implementer')) {
+        $pattern = '(?m)^\|\s*' + [regex]::Escape($role) + '\s*\|\s*.+?\s*\|\s*$'
+        $replacement = "| $role | $($Binding[$role]) |"
+        $content = [regex]::Replace($content, $pattern, $replacement)
+    }
+    return $content
+}
+
 if (-not (Test-Path -LiteralPath $templateRoot)) {
     throw "templates folder not found next to install.ps1: $templateRoot"
 }
@@ -33,6 +62,22 @@ if (-not (Test-Path -LiteralPath $gitDir)) {
 # intentionally excluded from the default installation. Opt in with -AlwaysOn only when
 # the project owner explicitly wants that behavior.
 $alwaysOnFiles = @("AGENTS.md", "CLAUDE.md")
+
+# Run update validation before any operation that can mutate the target. An invalid
+# existing role file must fail closed without removing or copying anything.
+$preserveOnForceFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md")
+$roleAssignmentRelative = ".ai\roles\ROLE_ASSIGNMENT.md"
+$installedRolePath = Join-Path $targetRoot $roleAssignmentRelative
+$preservedRoleBinding = $null
+if ($Force -and (Test-Path -LiteralPath $installedRolePath)) {
+    $preservedRoleBinding = Get-InstalledRoleBinding -Path $installedRolePath
+    if (-not $preservedRoleBinding) {
+        throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $installedRolePath"
+    }
+    if ($preservedRoleBinding.Reviewer -eq $preservedRoleBinding.Implementer) {
+        throw "Refusing -Force update: existing role binding violates Reviewer != Implementer. Repair it before updating: $installedRolePath"
+    }
+}
 
 if ($DisableAlwaysOn) {
     $removalCandidates = @()
@@ -96,11 +141,31 @@ if ($wouldOverwrite.Count -gt 0) {
 
 foreach ($file in $installFiles) {
     $dest = Join-Path $targetRoot $file.Relative
+    if ($Force -and ($preserveOnForceFiles -contains $file.Relative) -and (Test-Path -LiteralPath $dest)) {
+        Write-Host "Preserved local coordination state: $($file.Relative)"
+        continue
+    }
     $parent = Split-Path -Parent $dest
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    Copy-Item -LiteralPath $file.Source -Destination $dest -Force
+    if ($file.Relative -eq $roleAssignmentRelative -and $preservedRoleBinding) {
+        $mergedRoleContent = Get-MergedRoleAssignmentContent -TemplatePath $file.Source -Binding $preservedRoleBinding
+        $tempRolePath = "$dest.update-$([guid]::NewGuid().ToString('N'))"
+        $backupRolePath = "$dest.backup-$([guid]::NewGuid().ToString('N'))"
+        try {
+            [System.IO.File]::WriteAllText($tempRolePath, $mergedRoleContent, [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::Replace($tempRolePath, $dest, $backupRolePath)
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempRolePath) { Remove-Item -LiteralPath $tempRolePath -Force }
+            if (Test-Path -LiteralPath $backupRolePath) { Remove-Item -LiteralPath $backupRolePath -Force }
+        }
+        Write-Host "Preserved current role binding while refreshing role instructions."
+    }
+    else {
+        Copy-Item -LiteralPath $file.Source -Destination $dest -Force
+    }
 }
 
 $snippetPath = Join-Path $templateRoot "gitignore-snippet.txt"
