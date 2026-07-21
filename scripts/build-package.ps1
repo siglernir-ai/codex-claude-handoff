@@ -28,6 +28,9 @@ $rootFiles = @(
     "README.md",
     "QUICKSTART.md",
     "HOW_IT_WORKS.md",
+    "PUBLISHING.md",
+    "SECURITY.md",
+    "MODEL_GUIDANCE.md",
     "CHANGELOG.md",
     "ROADMAP.md"
 )

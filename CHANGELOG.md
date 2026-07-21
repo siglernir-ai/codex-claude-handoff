@@ -3,6 +3,18 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.2.0 - Internal Publication Readiness
+
+- Added an internal publishing guide for colleagues, including positioning,
+  onboarding steps, support boundaries, and a go/no-go checklist.
+- Added security and trust guidance that explains local coordination files, approval
+  boundaries, secrets, and what users should review before running the workflow.
+- Added model-selection guidance so operators can use economical models for routine
+  work and reserve stronger models for final publication, security, and release
+  reviews.
+- Included the publication documents in the release package and added package
+  coverage for them.
+
 ## 3.1.11 - Safe In-Place Updates
 
 - Changed `install.ps1 -Force` and `scripts/install.sh --force` to preserve existing

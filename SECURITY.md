@@ -1,0 +1,78 @@
+# Security and Trust Model
+
+`codex-claude-handoff` is designed for supervised local development workflows.
+It coordinates Codex and Claude Code through files in the user's project folder.
+
+## Local Files
+
+The workflow uses local coordination files such as:
+
+- `AI_HANDOFF.md`
+- `AI_SEQUENCE.md`
+- `USER_REQUEST.md`
+- `NEXT_TURN.md`
+- `CODEX_REVIEW_LAST.md`
+- `CLAUDE_IMPLEMENTER_LAST.md`
+- `CLAUDE_IMPLEMENTER_COMMAND.md`
+
+These files can contain task context, file names, command summaries, review notes,
+and model evidence. They are added to `.gitignore` by the installer and should not
+be committed.
+
+## Approval Boundaries
+
+The workflow is intentionally fail-closed around sensitive actions.
+
+It must not perform these actions without explicit user authorization:
+
+- Git commit.
+- Git push.
+- Git tag or release.
+- Deployment.
+- Database changes or migrations.
+- Secret or token changes.
+- Production configuration changes.
+- Role swaps.
+
+The `commit-approved` and release commands require exact authorization strings.
+This is intentional. The user remains the approval point.
+
+## Secrets
+
+Do not paste secrets into `AI_HANDOFF.md`, `USER_REQUEST.md`, `NEXT_TURN.md`, or
+agent chat windows unless your organization has explicitly approved that handling.
+
+The workflow does not require `ANTHROPIC_API_KEY` for the default OAuth-based
+Claude Code path. Avoid adding API keys only to make automation more convenient
+unless you have reviewed your organization's secret-management policy.
+
+## Command Transparency
+
+Automated Claude Code turns capture sanitized command evidence. Prompt content and
+system prompt content are redacted in command captures, while the shape of the
+command remains visible for review.
+
+The workflow may also capture model and subagent evidence when the tool exposes it.
+This evidence is best-effort transparency, not a security boundary.
+
+## Fresh Install Review
+
+Before running this in a new project:
+
+1. Inspect `QUICKSTART.md`.
+2. Inspect `HOW_IT_WORKS.md`.
+3. Run `scripts/handoff.ps1 doctor`.
+4. Confirm `.gitignore` excludes the local coordination files.
+5. Start with a small non-production task.
+
+## Reporting Issues
+
+For an internal pilot, report issues with:
+
+- The command that was run.
+- The handoff state from `scripts/handoff.ps1 work`.
+- `git status --short --branch`.
+- Any non-secret error output.
+
+Do not include credentials, proprietary customer data, private keys, access tokens,
+or production secrets in issue reports.

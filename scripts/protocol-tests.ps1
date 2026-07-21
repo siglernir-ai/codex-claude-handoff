@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.1.11
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.2.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -595,7 +595,11 @@ Expand-Archive -LiteralPath $releaseZip -DestinationPath $packageExtract -Force
 $extractedPackage = Get-ChildItem -Path $packageExtract -Directory | Select-Object -First 1
 $extractedInstall = if ($extractedPackage) { Join-Path $extractedPackage.FullName "install.ps1" } else { "" }
 $extractedProtocolTests = if ($extractedPackage) { Join-Path $extractedPackage.FullName "templates/scripts/protocol-tests.ps1" } else { "" }
+$extractedPublishing = if ($extractedPackage) { Join-Path $extractedPackage.FullName "PUBLISHING.md" } else { "" }
+$extractedSecurity = if ($extractedPackage) { Join-Path $extractedPackage.FullName "SECURITY.md" } else { "" }
+$extractedModelGuidance = if ($extractedPackage) { Join-Path $extractedPackage.FullName "MODEL_GUIDANCE.md" } else { "" }
 Check "release ZIP contains an installer and excludes package-development tests" ((Test-Path $extractedInstall) -and (-not (Test-Path $extractedProtocolTests)))
+Check "release ZIP contains internal publication guidance" ((Test-Path $extractedPublishing) -and (Test-Path $extractedSecurity) -and (Test-Path $extractedModelGuidance))
 
 $packagedInstallTarget = Join-Path $FixtureRoot "packaged-install-target"
 $packagedInstallOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $extractedInstall -Project $packagedInstallTarget 2>&1 | Out-String
