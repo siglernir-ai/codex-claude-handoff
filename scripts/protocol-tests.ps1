@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.2.0
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.2.1
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -394,7 +394,17 @@ Check "start does not reset AI_HANDOFF.md when non-local changes exist" (($r.Cod
 $doctorFiles = @{
     "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "v3.0.0 productization");
     ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles;
-    ".ai/skills/codex-claude-handoff/VERSION" = "3.0.0"
+    ".ai/skills/codex-claude-handoff/VERSION" = "3.0.0";
+    "scripts/handoff.ps1" = "fixture";
+    "scripts/handoff.sh" = "fixture";
+    "scripts/next-step.ps1" = "fixture";
+    "scripts/next-step.sh" = "fixture";
+    ".agents/skills/codex-claude-handoff/SKILL.md" = "fixture";
+    ".claude/skills/codex-claude-handoff/SKILL.md" = "fixture";
+    ".ai/skills/codex-claude-handoff/SKILL.md" = "fixture";
+    ".ai/skills/codex-claude-handoff/ADAPTERS.md" = "fixture";
+    ".ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md" = "fixture";
+    ".ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md" = "fixture"
 }
 
 function New-BlockedCorrectionHandoff {
@@ -436,8 +446,23 @@ $beforeCommits = (& git -C $fx rev-list --all --count 2>$null)
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("doctor")
 $afterHash = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $afterCommits = (& git -C $fx rev-list --all --count 2>$null)
-Check "doctor prints Handoff Doctor, protocol version, role assignment, and AI_HANDOFF status" (($r.Code -eq 0) -and ($r.Out -match "Handoff Doctor") -and ($r.Out -match "Protocol version:\s+3\.0\.0") -and ($r.Out -match "Role assignment: Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -match "AI_HANDOFF.md status"))
+Check "doctor prints Handoff Doctor, protocol version, role assignment, and AI_HANDOFF status" (($r.Code -eq 0) -and ($r.Out -match "Handoff Doctor") -and ($r.Out -match "Protocol version:\s+3\.0\.0") -and ($r.Out -match "Role assignment: Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -match "AI_HANDOFF.md status") -and ($r.Out -match "Installed protocol components are present") -and ($r.Out -match "Version update check skipped"))
 Check "doctor does not mutate AI_HANDOFF.md or create git commits" (($beforeHash -eq $afterHash) -and ("$beforeCommits".Trim() -eq "$afterCommits".Trim()))
+
+$missingDoctorFiles = @{}
+foreach ($key in $doctorFiles.Keys) { $missingDoctorFiles[$key] = $doctorFiles[$key] }
+$missingDoctorFx = New-Fixture -Files $missingDoctorFiles -InitGit
+Initialize-FixtureGitBaseline -Dir $missingDoctorFx
+Remove-Item -LiteralPath (Join-Path $missingDoctorFx ".ai/skills/codex-claude-handoff/ADAPTERS.md") -Force
+$r = Invoke-Handoff -WorkDir $missingDoctorFx -Arguments @("doctor")
+Check "doctor fails with exit 10 when an installed protocol component is missing" (($r.Code -eq 10) -and ($r.Out -match "Installed protocol is incomplete") -and ($r.Out -match "ADAPTERS\.md"))
+
+$invalidVersionFiles = @{}
+foreach ($key in $doctorFiles.Keys) { $invalidVersionFiles[$key] = $doctorFiles[$key] }
+$invalidVersionFiles[".ai/skills/codex-claude-handoff/VERSION"] = "not-a-version"
+$invalidVersionFx = New-Fixture -Files $invalidVersionFiles -InitGit
+$r = Invoke-Handoff -WorkDir $invalidVersionFx -Arguments @("doctor")
+Check "doctor fails with exit 10 when VERSION metadata is malformed" (($r.Code -eq 10) -and ($r.Out -match "Protocol VERSION is invalid") -and ($r.Out -match "Doctor result: FAIL"))
 
 # === 4D. Project-local opt-in installer ===
 Write-Host "[4D] Project-local opt-in installer"

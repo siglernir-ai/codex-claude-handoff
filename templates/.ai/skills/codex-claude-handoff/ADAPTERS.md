@@ -117,8 +117,11 @@ Since v3.0.0, the PowerShell helper also exposes two user-facing read-only local
 commands for supervised daily operation:
 
 - `handoff.ps1 doctor` checks the local protocol install and environment health
-  with OK/WARN/INFO output. It never mutates files, runs AI tools, commits, pushes,
-  tags, deploys, touches databases, or changes secrets.
+  with OK/WARN/INFO output. It validates required protocol files and version metadata.
+  Add `-CheckUpdates` to compare the installed version with stable GitHub release tags.
+  Exit code 10 means the local install is invalid, 11 means an update is available,
+  and 12 means the remote version check was unavailable. It never mutates files, runs
+  AI tools, commits, pushes, tags, deploys, touches databases, or changes secrets.
 - `handoff.ps1 work` prints the daily workflow view: State, Waiting For, Current
   Task, and the exact next action. For tool turns it points to
   `.\scripts\handoff.ps1 next -Clip`; for `REVIEW_DONE / Waiting For: User` it

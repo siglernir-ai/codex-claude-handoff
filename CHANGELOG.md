@@ -3,6 +3,14 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.2.1 - Doctor Version Hardening
+
+- Hardened `handoff.ps1 doctor` to validate required installed protocol components
+  and reject missing or malformed local version metadata.
+- Added opt-in `doctor -CheckUpdates` comparison against stable GitHub release tags.
+- Added explicit doctor result codes for invalid local installs, available updates,
+  and unavailable remote checks while keeping the check read-only.
+
 ## 3.2.0 - Internal Publication Readiness
 
 - Added an internal publishing guide for colleagues, including positioning,

@@ -17,6 +17,7 @@ param(
     [switch]$IncludeReviewer,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
+    [switch]$CheckUpdates,
     [decimal]$BudgetUsd = 2,
     [int]$MaxTurns = 3,
     [decimal]$SessionBudgetUsd = 6
@@ -974,13 +975,68 @@ function Invoke-Work {
 
 function Write-DoctorLine {
     param([string]$Level, [string]$Message)
+    if ($Level -eq "FAIL") { $script:DoctorHasFailures = $true }
+    if ($Level -eq "WARN") { $script:DoctorHasWarnings = $true }
     Write-Host "$Level  $Message"
+}
+
+function Invoke-DoctorRemoteVersionCheck {
+    param([string]$InstalledVersion)
+
+    if (-not $CheckUpdates) {
+        Write-DoctorLine "INFO" "Version update check skipped; rerun with -CheckUpdates to compare against GitHub."
+        return
+    }
+
+    $remoteUri = "https://github.com/siglernir-ai/codex-claude-handoff.git"
+    $remoteLines = @()
+    try {
+        $remoteLines = @(& git ls-remote --tags --refs $remoteUri "refs/tags/v*" 2>$null)
+    } catch { }
+    if ($LASTEXITCODE -ne 0 -or $remoteLines.Count -eq 0) {
+        $script:DoctorRemoteCheckUnavailable = $true
+        Write-DoctorLine "WARN" "Could not check the latest release from GitHub. Local checks still completed."
+        return
+    }
+
+    $remoteVersions = @(
+        foreach ($line in $remoteLines) {
+            if ($line -match "\srefs/tags/v(\d+\.\d+\.\d+)$") {
+                try { [version]$Matches[1] } catch { }
+            }
+        }
+    )
+    if ($remoteVersions.Count -eq 0) {
+        $script:DoctorRemoteCheckUnavailable = $true
+        Write-DoctorLine "WARN" "GitHub returned no stable vX.Y.Z release tags to compare."
+        return
+    }
+
+    $latest = $remoteVersions | Sort-Object | Select-Object -Last 1
+    $installed = $null
+    try { $installed = [version]$InstalledVersion } catch { }
+    if ($null -eq $installed) { return }
+
+    if ($installed -lt $latest) {
+        $script:DoctorUpdateAvailable = $true
+        Write-DoctorLine "WARN" "Update available: installed $InstalledVersion; latest stable release is $latest."
+        Write-Host "      Use the pinned bootstrap command from QUICKSTART.md to update safely."
+    } elseif ($installed -eq $latest) {
+        Write-DoctorLine "OK" "Version check: installed $InstalledVersion is the latest stable release."
+    } else {
+        Write-DoctorLine "INFO" "Version check: installed $InstalledVersion is newer than the latest public release $latest."
+    }
 }
 
 function Invoke-Doctor {
     Write-Host ""
     Write-Host "Handoff Doctor"
     Write-Host ""
+
+    $script:DoctorHasFailures = $false
+    $script:DoctorHasWarnings = $false
+    $script:DoctorUpdateAvailable = $false
+    $script:DoctorRemoteCheckUnavailable = $false
 
     $gitOk = $false
     try {
@@ -990,7 +1046,7 @@ function Invoke-Doctor {
     if ($gitOk) {
         Write-DoctorLine "OK" "Git repo detected."
     } else {
-        Write-DoctorLine "WARN" "Git repo not detected from this directory."
+        Write-DoctorLine "FAIL" "Git repo not detected from this directory."
     }
 
     if (Test-Path $HandoffFile) {
@@ -1001,27 +1057,53 @@ function Invoke-Doctor {
             Write-DoctorLine "WARN" "AI_HANDOFF.md exists, but its Status section could not be fully read."
         }
     } else {
-        Write-DoctorLine "WARN" "AI_HANDOFF.md is missing."
+        Write-DoctorLine "FAIL" "AI_HANDOFF.md is missing. Run the installer from the project root."
     }
 
     $versionPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/VERSION"
+    $protocolVersion = $null
     if (Test-Path $versionPath) {
         $protocolVersion = (Get-Content -Raw -Path $versionPath).Trim()
-        Write-DoctorLine "OK" "Protocol version: $protocolVersion"
+        if ($protocolVersion -match '^\d+\.\d+\.\d+$') {
+            Write-DoctorLine "OK" "Protocol version: $protocolVersion"
+        } else {
+            Write-DoctorLine "FAIL" "Protocol VERSION is invalid: '$protocolVersion' (expected X.Y.Z)."
+        }
     } else {
-        Write-DoctorLine "WARN" "Protocol VERSION file missing: .ai/skills/codex-claude-handoff/VERSION"
+        Write-DoctorLine "FAIL" "Protocol VERSION file missing: .ai/skills/codex-claude-handoff/VERSION"
+    }
+
+    $requiredProtocolFiles = @(
+        "scripts\handoff.ps1",
+        "scripts\handoff.sh",
+        "scripts\next-step.ps1",
+        "scripts\next-step.sh",
+        ".agents\skills\codex-claude-handoff\SKILL.md",
+        ".claude\skills\codex-claude-handoff\SKILL.md",
+        ".ai\skills\codex-claude-handoff\SKILL.md",
+        ".ai\skills\codex-claude-handoff\ADAPTERS.md",
+        ".ai\skills\codex-claude-handoff\PROTOCOL_METHOD.md",
+        ".ai\skills\codex-claude-handoff\CLAUDE_EXECUTION_POLICY.md",
+        ".ai\roles\ROLE_ASSIGNMENT.md"
+    )
+    $missingProtocolFiles = @($requiredProtocolFiles | Where-Object { -not (Test-Path (Join-Path (Get-Location) $_)) })
+    if ($missingProtocolFiles.Count -eq 0) {
+        Write-DoctorLine "OK" "Installed protocol components are present ($($requiredProtocolFiles.Count) required files)."
+    } else {
+        Write-DoctorLine "FAIL" "Installed protocol is incomplete; missing required files:"
+        foreach ($missing in $missingProtocolFiles) { Write-Host "      $missing" }
     }
 
     $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
     if (Test-Path $rolesPath) {
         Write-DoctorLine "OK" "Role assignment: Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
     } else {
-        Write-DoctorLine "WARN" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
+        Write-DoctorLine "FAIL" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
     }
     if ($RoleCheckpoint.Ok) {
         Write-DoctorLine "OK" "Role checkpoint: binding and derived Task Actors are synchronized."
     } else {
-        Write-DoctorLine "WARN" "Role checkpoint: drift or invalid Reviewer/Implementer binding detected."
+        Write-DoctorLine "FAIL" "Role checkpoint: drift or invalid Reviewer/Implementer binding detected."
         foreach ($error in $RoleCheckpoint.Errors) { Write-Host "      $error" }
     }
 
@@ -1060,9 +1142,27 @@ function Invoke-Doctor {
         Write-DoctorLine "INFO" "Codex CLI helper is not present in this script; skipping Codex CLI availability."
     }
 
+    if ($protocolVersion -and ($protocolVersion -match '^\d+\.\d+\.\d+$')) {
+        Invoke-DoctorRemoteVersionCheck -InstalledVersion $protocolVersion
+    }
+
     Write-Host ""
+    if ($script:DoctorHasFailures) {
+        Write-Host "Doctor result: FAIL (local installation is incomplete or invalid)."
+        $doctorExitCode = 10
+    } elseif ($script:DoctorUpdateAvailable) {
+        Write-Host "Doctor result: UPDATE AVAILABLE (local installation is usable but not current)."
+        $doctorExitCode = 11
+    } elseif ($script:DoctorRemoteCheckUnavailable) {
+        Write-Host "Doctor result: LOCAL CHECKS PASSED; REMOTE VERSION CHECK UNAVAILABLE."
+        $doctorExitCode = 12
+    } else {
+        Write-Host "Doctor result: PASS."
+        $doctorExitCode = 0
+    }
     Write-Host "Read-only check complete. No files, AI tools, git commits, pushes, tags, deploys, databases, or secrets were changed."
     Write-Host ""
+    exit $doctorExitCode
 }
 function Invoke-Status {
     Write-Host ""
@@ -4423,7 +4523,7 @@ switch ($Command) {
             Write-Host ""
             Write-Host "Commands:"
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
-            Write-Host "  doctor                    Run a read-only local protocol health check."
+    Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."

@@ -4,7 +4,7 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 
 The goal is to avoid copy-pasting long context between tools.
 
-> **Current release: v3.2.0.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.2.1.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -15,7 +15,7 @@ On Windows, open PowerShell in the project folder and paste this one command. Th
 installer uses the current folder automatically; there is no project path to edit:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -48,7 +48,7 @@ model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md). For internal
 rollout guidance, see [PUBLISHING.md](PUBLISHING.md), [SECURITY.md](SECURITY.md),
 and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md).
 
-v3.2.0 is the internal publication readiness release: it adds colleague onboarding,
+v3.2.1 is the internal publication readiness release: it adds colleague onboarding,
 trust and safety notes, model-selection guidance, and package coverage for those
 publication docs. v3.1.11 makes PowerShell `-Force` and Bash `--force` updates safe for active projects:
 live handoff and sequence state are preserved, and customized current role bindings
@@ -342,7 +342,10 @@ It reports OK/WARN/INFO lines for the Git repo, `AI_HANDOFF.md` status, installe
 protocol version, role assignment, working tree after local coordination
 exclusions, `npx`, and Codex CLI availability when the helper can check it. It
 does not mutate files, run AI tools, commit, push, tag, deploy, touch databases, or
-change secrets.
+change secrets. Add `-CheckUpdates` to compare the installed stable version with
+the public GitHub release tags. Exit code `10` means the local installation is
+incomplete or invalid, `11` means an update is available, and `12` means the
+remote version check could not complete.
 
 ### `work`
 
