@@ -80,7 +80,8 @@ and review the Skill source before use.
 
 ## Reporting Issues
 
-For an internal pilot, report issues with:
+For the public beta, use the [GitHub bug-report form](https://github.com/siglernir-ai/codex-claude-handoff/issues/new?template=bug_report.yml)
+for non-sensitive problems and include:
 
 - The command that was run.
 - The handoff state from `scripts/handoff.ps1 work`.
@@ -89,3 +90,8 @@ For an internal pilot, report issues with:
 
 Do not include credentials, proprietary customer data, private keys, access tokens,
 or production secrets in issue reports.
+
+Do not open a public issue for a suspected vulnerability or accidental secret
+exposure. Use [GitHub Private Vulnerability Reporting](https://github.com/siglernir-ai/codex-claude-handoff/security/advisories/new)
+instead. If that path is unavailable, contact the repository owner privately before
+disclosing technical details.

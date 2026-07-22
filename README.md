@@ -58,7 +58,9 @@ on each computer; after that, the protocol invokes it automatically.
 For the shortest beginner path, see [QUICKSTART.md](QUICKSTART.md). For the mental
 model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md). For internal
 rollout guidance, see [PUBLISHING.md](PUBLISHING.md), [SECURITY.md](SECURITY.md),
-and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md).
+and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md). Publication assets and the reproducible
+five-minute demo are maintained in [launch/](launch/README.md). Bug reports and
+pull requests should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 v3.3.0 is the skills.sh public beta packaging release. It makes the discovered Skill
 self-contained, bundles an offline project installer, publishes Apache-2.0 licensing,

@@ -110,6 +110,10 @@ Suggested 30-day beta threshold:
 - No unresolved critical security or data-loss issue.
 - Maintenance mode instead of indefinite development if there is no demonstrated use.
 
+The public launch copy, demo script, FAQ, visual source, and go/no-go checklist are
+maintained in [`launch/`](launch/README.md). Keep launch claims aligned with the
+current acceptance evidence and known limitations.
+
 ## Go / No-Go
 
 Go for internal pilot when:

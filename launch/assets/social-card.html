@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex-Claude Handoff v3.3.0</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 1200px; height: 630px; margin: 0; overflow: hidden; }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #151515;
+      background: #f7f8f5;
+      letter-spacing: 0;
+    }
+    .frame {
+      position: relative;
+      width: 1200px;
+      height: 630px;
+      padding: 54px 62px 48px;
+      border-top: 12px solid #151515;
+    }
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 42px;
+    }
+    .eyebrow {
+      font-size: 20px;
+      font-weight: 700;
+      color: #333333;
+    }
+    .release {
+      padding: 8px 13px;
+      border: 2px solid #151515;
+      border-radius: 4px;
+      background: #ffd84d;
+      font-size: 17px;
+      font-weight: 800;
+    }
+    h1 {
+      width: 870px;
+      margin: 29px 0 10px;
+      font-size: 63px;
+      line-height: 1.02;
+      font-weight: 800;
+    }
+    .subtitle {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.35;
+      color: #414141;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 52px 1fr 52px 1fr 52px 1fr;
+      align-items: center;
+      margin-top: 42px;
+    }
+    .step {
+      height: 142px;
+      padding: 20px 18px;
+      border: 2px solid #151515;
+      border-radius: 6px;
+      background: #ffffff;
+      box-shadow: 6px 6px 0 #151515;
+    }
+    .step.codex { border-top: 12px solid #2f6fed; }
+    .step.claude { border-top: 12px solid #ef6a4c; }
+    .step.user { border-top: 12px solid #24a37d; }
+    .name {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .action {
+      display: block;
+      font-size: 19px;
+      line-height: 1.25;
+      color: #4a4a4a;
+    }
+    .arrow {
+      text-align: center;
+      font-size: 34px;
+      font-weight: 800;
+      color: #151515;
+    }
+    .footer {
+      position: absolute;
+      left: 62px;
+      right: 62px;
+      bottom: 35px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .proof { color: #333333; }
+    .url { color: #2f6fed; }
+    .marker {
+      position: absolute;
+      right: 0;
+      top: 126px;
+      width: 18px;
+      height: 118px;
+      background: #ef6a4c;
+    }
+  </style>
+</head>
+<body>
+  <main class="frame">
+    <div class="marker"></div>
+    <div class="brand-row">
+      <div class="eyebrow">OPEN-SOURCE AGENT SKILL</div>
+      <div class="release">v3.3.0 PUBLIC BETA</div>
+    </div>
+    <h1>Codex-Claude Handoff</h1>
+    <p class="subtitle">A supervised workflow for two coding agents in one project.</p>
+    <section class="flow" aria-label="Workflow">
+      <div class="step codex"><span class="name">Codex</span><span class="action">Routes and scopes</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="step claude"><span class="name">Claude Code</span><span class="action">Investigates or implements</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="step codex"><span class="name">Codex</span><span class="action">Reviews independently</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="step user"><span class="name">You</span><span class="action">Approve sensitive actions</span></div>
+    </section>
+    <footer class="footer">
+      <span class="proof">216 checks passed &middot; Apache-2.0 &middot; Human in the loop</span>
+      <span class="url">github.com/siglernir-ai/codex-claude-handoff</span>
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a reproducible setup, routing, automation, or safety failure
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. Do not include secrets, private source code, customer data, tokens, or credentials. Use the repository security-reporting path for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: Installed version
+      description: Read `.ai/skills/codex-claude-handoff/VERSION` in the affected project.
+      placeholder: 3.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Installation method
+      options:
+        - skills CLI
+        - pinned bootstrap.ps1
+        - cloned release and install.ps1
+        - manual or other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, shell, Codex surface, Claude Code version, and VS Code version when relevant.
+      placeholder: Windows 11, Windows PowerShell 5.1, Codex Desktop, Claude Code ...
+    validations:
+      required: true
+  - type: input
+    id: handoff_state
+    attributes:
+      label: Handoff state
+      description: Paste only the State, Waiting For, and Current Task values from `handoff.ps1 work`.
+      placeholder: READY_FOR_IMPLEMENTATION / Waiting For Implementer
+    validations:
+      required: true
+  - type: dropdown
+    id: clean_tree
+    attributes:
+      label: Was the Git working tree clean before the failing task?
+      options:
+        - "Yes"
+        - "No"
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe sequence that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized output
+      description: Include exit codes and relevant non-secret output. Redact local identity and private paths when unnecessary.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor result
+      description: Paste the sanitized summary from `handoff.ps1 doctor`.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed secrets, credentials, proprietary source code, and customer data.
+          required: true
+        - label: This is not a private vulnerability report.
+          required: true
