@@ -3,6 +3,14 @@
 Install `codex-claude-handoff` into one project and activate it only for the tasks
 that should use the Codex -> Claude Code -> Codex review workflow.
 
+## Recommended Workspace: VS Code
+
+Open the same project folder in VS Code and use Codex and Claude Code from that shared
+workspace. The protocol coordinates the tools through local files such as
+`AI_HANDOFF.md` and `NEXT_TURN.md`; it is not a native VS Code extension or a hidden
+background chat bridge. The integrated terminal is useful for the bounded helper
+commands, while window turns can follow the prompt copied from `NEXT_TURN.md`.
+
 ## Before you start
 
 Install Git, Node.js, Codex Desktop, and use a Claude account that can run Claude
@@ -23,7 +31,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -33,7 +41,7 @@ Commit the installed project-local skill files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.2.1"
+git commit -m "Install codex-claude-handoff v3.2.2"
 ```
 
 Check the installation:
@@ -105,7 +113,7 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.2.1 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.2.2 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 

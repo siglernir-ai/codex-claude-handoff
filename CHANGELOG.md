@@ -3,6 +3,15 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.2.2 - VS Code Shared Workspace Guidance
+
+- Documented VS Code as the recommended workspace for using Codex and Claude Code on
+  the same project folder.
+- Clarified that the protocol coordinates through local handoff files and is not a
+  native VS Code extension or unrestricted background chat bridge.
+- Mirrored the guidance in the skill, quick start, operating model, adapter registry,
+  and internal publishing documentation.
+
 ## 3.2.1 - Doctor Version Hardening
 
 - Hardened `handoff.ps1 doctor` to validate required installed protocol components

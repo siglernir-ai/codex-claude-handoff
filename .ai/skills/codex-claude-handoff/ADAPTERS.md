@@ -113,6 +113,18 @@ The `adapters` command in `scripts/handoff.ps1` and `scripts/handoff.sh` prints
 the current resolved role registry plus the approved commit and release executor
 capabilities for the local project.
 
+## User Window Workflow (VS Code)
+
+The recommended manual workspace is VS Code with the same project folder open for
+Codex and Claude Code. This is a shared file workspace, not a native VS Code extension
+or a hidden chat bridge: `AI_HANDOFF.md` is the state source of truth and `NEXT_TURN.md`
+is the short prompt for the next window. The user may paste that prompt into the named
+tool when the adapter reports an Operator Manual Action.
+
+VS Code is not a callable adapter by itself. Bounded CLI automation remains limited to
+the roles and states listed in the registry, and the user remains the approval point for
+commit, push, tag, release, deploy, database, secret, and product actions.
+
 Since v3.0.0, the PowerShell helper also exposes two user-facing read-only local
 commands for supervised daily operation:
 

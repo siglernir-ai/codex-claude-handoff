@@ -20,6 +20,7 @@ decisions until a human explicitly authorizes the relevant step.
 Good first users:
 
 - Already use Codex Desktop and Claude Code.
+- Prefer working in VS Code with both tools pointed at the same project folder.
 - Work in Git repositories with clean commits.
 - Are comfortable approving local commits after review.
 - Want a repeatable way to split task routing, implementation, and review.
@@ -48,8 +49,12 @@ Before sharing with colleagues:
 
 ```text
 I am piloting codex-claude-handoff, a supervised workflow for coordinating Codex
-and Claude Code in the same repo. It uses local handoff files so Codex can route,
+and Claude Code in the same repo. The recommended workspace is VS Code with both
+tools pointed at the same project folder. It uses local handoff files so Codex can route,
 Claude can implement, Codex can review, and the user approves commits/releases.
+
+This is not a native VS Code extension or unrestricted background automation; it is a
+project-local protocol with bounded automation and explicit human checkpoints.
 
 It is opt-in by default: select the codex-claude-handoff skill only for tasks that
 should use the full workflow. Normal Codex tasks remain normal.

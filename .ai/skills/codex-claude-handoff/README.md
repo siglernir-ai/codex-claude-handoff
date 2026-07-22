@@ -62,6 +62,10 @@ Root `CLAUDE.md` remains the Claude Code operational entry file. It is separate 
 
 Since v2.5.0, `handoff.ps1 user-next` shows the single next user action for the current state, including the guarded commit command when review is done.
 
+The recommended workspace is VS Code with Codex and Claude Code pointed at the same
+project folder. The protocol coordinates through local handoff files; it is not a native
+VS Code extension or an unrestricted background chat bridge.
+
 ## Version
 
 See `VERSION` for the installed protocol version.

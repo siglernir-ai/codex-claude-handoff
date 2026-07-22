@@ -9,6 +9,16 @@ description: Run the project-local Codex to Claude Code to Codex handoff protoco
 
 Use this skill to coordinate AI tools in the same software project using a shared handoff file (`AI_HANDOFF.md`) as the execution state.
 
+## Recommended Workspace
+
+The recommended user-facing workspace is VS Code with the same project folder open for
+Codex and Claude Code. The tools coordinate through the project's local handoff files,
+not through a hidden chat bridge. VS Code is a convenient shared workspace; this protocol
+does not install a VS Code extension or provide unrestricted background automation.
+When a window turn is manual, `NEXT_TURN.md` contains the short prompt for the next tool.
+Bounded CLI automation is available only for the states and adapters documented in
+`ADAPTERS.md`, and sensitive actions still require the user.
+
 ## Role Model
 
 The protocol is organized around three roles, plus the User. Roles are bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`, so they can be reassigned (with user approval) without rewriting the protocol.

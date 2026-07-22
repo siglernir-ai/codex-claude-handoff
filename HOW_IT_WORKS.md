@@ -8,6 +8,12 @@ It is not magic background autonomy. The tools coordinate through local files in
 
 Codex and Claude Code must both be opened on the same project directory.
 
+For the clearest user workflow, open that project folder in VS Code and keep the Codex
+and Claude Code windows or extensions pointed at the same folder. The protocol does not
+provide a native VS Code extension or hidden chat bridge; the shared context is the local
+handoff files below. The VS Code integrated terminal is also the recommended place for
+the bounded helper commands.
+
 The important files are:
 
 - `AI_HANDOFF.md` - the source of truth for the current task, state, next actor, changed files, verification, and review result.

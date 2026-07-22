@@ -4,7 +4,7 @@ A simple collaboration protocol for using **Codex** and **Claude Code** together
 
 The goal is to avoid copy-pasting long context between tools.
 
-> **Current release: v3.2.1.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.2.2.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -15,7 +15,7 @@ On Windows, open PowerShell in the project folder and paste this one command. Th
 installer uses the current folder automatically; there is no project path to edit:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -48,7 +48,9 @@ model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md). For internal
 rollout guidance, see [PUBLISHING.md](PUBLISHING.md), [SECURITY.md](SECURITY.md),
 and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md).
 
-v3.2.1 is the internal publication readiness release: it adds colleague onboarding,
+v3.2.2 is the internal publication and workspace guidance release: it explains the
+recommended VS Code shared-window workflow without claiming a native VS Code extension.
+v3.2.1 added colleague onboarding,
 trust and safety notes, model-selection guidance, and package coverage for those
 publication docs. v3.1.11 makes PowerShell `-Force` and Bash `--force` updates safe for active projects:
 live handoff and sequence state are preserved, and customized current role bindings
@@ -70,6 +72,18 @@ productized supervised, human-in-the-loop workflow release. It makes
 the local workflow easier to trust and operate, but it is not unattended autonomy:
 user authorization is still required for commits, pushes, tags, releases, deploys,
 database work, secrets, role swaps, and product decisions.
+
+## Recommended VS Code Workflow
+
+Open the same project folder in VS Code and use Codex and Claude Code from that shared
+workspace, whether through their windows, extensions, or the integrated terminal. The
+handoff protocol keeps continuity in project-local files such as `AI_HANDOFF.md` and
+`NEXT_TURN.md`, so both tools can resume from the same state.
+
+This is a workspace recommendation, not a claim that the skill is a native VS Code
+extension. The protocol does not create a hidden chat bridge or unrestricted background
+automation. Window turns may still require pasting the prompt from `NEXT_TURN.md`, while
+the bounded CLI adapters can automate only the states listed in `ADAPTERS.md`.
 
 ## Concept
 
