@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.2.2
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.3.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -482,7 +482,7 @@ $installedGitignore = Join-Path $installTarget ".gitignore"
 $installedGitignoreText = if (Test-Path $installedGitignore) { Get-Content -Raw -Path $installedGitignore } else { "" }
 Check "install.ps1 installs protocol files into an empty target" (($installCode -eq 0) -and (Test-Path $installedHandoff) -and (Test-Path $installedScript) -and (Test-Path $installedVersion))
 Check "default install is opt-in and does not install root agent instructions" ((-not (Test-Path $installedAgents)) -and (-not (Test-Path $installedClaude)) -and ($installOut -match "Activation mode: opt-in"))
-Check "installed Codex skill metadata requires explicit activation" ((Get-Content -Raw -Path $installedSkill) -match [regex]::Escape("through /skills"))
+Check "installed Codex skill metadata requires explicit activation" ((Get-Content -Raw -Path $installedSkill) -match [regex]::Escape("explicit user activation"))
 Check "default install excludes package-only test and snippet files" ((-not (Test-Path $installedProtocolTests)) -and (-not (Test-Path $installedSnippet)))
 Check "install.ps1 adds local coordination files to .gitignore" (($installedGitignoreText -match "AI_HANDOFF\.md") -and ($installedGitignoreText -match "NEXT_TURN\.md"))
 Check "install.ps1 prints doctor and slash-command skill activation guidance" (($installOut -match [regex]::Escape(".\scripts\handoff.ps1 doctor")) -and ($installOut -match [regex]::Escape('/skills')) -and ($installOut -match "Select codex-claude-handoff") -and ($installOut -notmatch [regex]::Escape('$codex-claude-handoff')) -and ($installOut -match "normal Codex work"))
@@ -623,13 +623,74 @@ $extractedProtocolTests = if ($extractedPackage) { Join-Path $extractedPackage.F
 $extractedPublishing = if ($extractedPackage) { Join-Path $extractedPackage.FullName "PUBLISHING.md" } else { "" }
 $extractedSecurity = if ($extractedPackage) { Join-Path $extractedPackage.FullName "SECURITY.md" } else { "" }
 $extractedModelGuidance = if ($extractedPackage) { Join-Path $extractedPackage.FullName "MODEL_GUIDANCE.md" } else { "" }
+$extractedLicense = if ($extractedPackage) { Join-Path $extractedPackage.FullName "LICENSE" } else { "" }
 Check "release ZIP contains an installer and excludes package-development tests" ((Test-Path $extractedInstall) -and (-not (Test-Path $extractedProtocolTests)))
-Check "release ZIP contains internal publication guidance" ((Test-Path $extractedPublishing) -and (Test-Path $extractedSecurity) -and (Test-Path $extractedModelGuidance))
+Check "release ZIP contains publication guidance and license" ((Test-Path $extractedPublishing) -and (Test-Path $extractedSecurity) -and (Test-Path $extractedModelGuidance) -and (Test-Path $extractedLicense))
 
 $packagedInstallTarget = Join-Path $FixtureRoot "packaged-install-target"
 $packagedInstallOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $extractedInstall -Project $packagedInstallTarget 2>&1 | Out-String
 $packagedInstallCode = $LASTEXITCODE
 Check "installer extracted from the release ZIP produces an opt-in project install" (($packagedInstallCode -eq 0) -and (Test-Path (Join-Path $packagedInstallTarget ".agents/skills/codex-claude-handoff/SKILL.md")) -and (-not (Test-Path (Join-Path $packagedInstallTarget "AGENTS.md"))) -and ($packagedInstallOut -match "Activation mode: opt-in"))
+
+# === 4F. Standalone skills.sh package ===
+Write-Host "[4F] Standalone skills.sh package"
+$codexSkillRoot = Join-Path $RepoRoot ".agents/skills/codex-claude-handoff"
+$claudeSkillRoot = Join-Path $RepoRoot ".claude/skills/codex-claude-handoff"
+$skillSetup = Join-Path $codexSkillRoot "scripts/setup.ps1"
+$skillSetupSh = Join-Path $codexSkillRoot "scripts/setup.sh"
+$skillPackageInstall = Join-Path $codexSkillRoot "assets/package/install.ps1"
+$skillPackageInstallSh = Join-Path $codexSkillRoot "assets/package/scripts/install.sh"
+$skillText = Get-Content -Raw -Path (Join-Path $codexSkillRoot "SKILL.md")
+$skillSetupText = Get-Content -Raw -Path $skillSetup
+$skillSetupShText = Get-Content -Raw -Path $skillSetupSh
+
+Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.3\.0"'))
+Check "public Skill requires explicit setup approval and forbids implicit invocation" (($skillText -match "explicit user approval") -and ((Get-Content -Raw -Path (Join-Path $codexSkillRoot "agents/openai.yaml")) -match "allow_implicit_invocation:\s*false"))
+Check "standalone Skill bundles local PowerShell and Bash installers" ((Test-Path $skillSetup) -and (Test-Path $skillSetupSh) -and (Test-Path $skillPackageInstall) -and (Test-Path $skillPackageInstallSh))
+Check "standalone Skill bundles the initial handoff template" (Test-Path (Join-Path $codexSkillRoot "assets/package/templates/AI_HANDOFF.md"))
+Check "standalone setup scripts contain no network downloader" (($skillSetupText -notmatch "Invoke-WebRequest|Start-BitsTransfer|https?://") -and ($skillSetupShText -notmatch "curl|wget|https?://"))
+Check "bundled PowerShell installer matches the canonical installer" (((Get-FileHash -Algorithm SHA256 -Path $skillPackageInstall).Hash) -eq ((Get-FileHash -Algorithm SHA256 -Path (Join-Path $RepoRoot "install.ps1")).Hash))
+Check "bundled Bash installer matches the canonical installer" (((Get-FileHash -Algorithm SHA256 -Path $skillPackageInstallSh).Hash) -eq ((Get-FileHash -Algorithm SHA256 -Path (Join-Path $RepoRoot "scripts/install.sh")).Hash))
+
+$codexSkillFiles = @(Get-ChildItem -LiteralPath $codexSkillRoot -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($codexSkillRoot.Length).TrimStart('\', '/') -replace '\\', '/' } | Sort-Object)
+$claudeSkillFiles = @(Get-ChildItem -LiteralPath $claudeSkillRoot -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($claudeSkillRoot.Length).TrimStart('\', '/') -replace '\\', '/' } | Sort-Object)
+$skillMirrorsMatch = (($codexSkillFiles -join "`n") -eq ($claudeSkillFiles -join "`n"))
+if ($skillMirrorsMatch) {
+    foreach ($relative in $codexSkillFiles) {
+        $codexFile = Join-Path $codexSkillRoot ($relative -replace '/', '\')
+        $claudeFile = Join-Path $claudeSkillRoot ($relative -replace '/', '\')
+        if (((Get-FileHash -Algorithm SHA256 -Path $codexFile).Hash) -ne ((Get-FileHash -Algorithm SHA256 -Path $claudeFile).Hash)) {
+            $skillMirrorsMatch = $false
+            break
+        }
+    }
+}
+Check "Codex and Claude standalone Skill payloads are byte-identical" $skillMirrorsMatch
+
+$standaloneTarget = Join-Path $FixtureRoot "standalone-skill-target"
+New-Item -ItemType Directory -Path $standaloneTarget -Force | Out-Null
+& git -C $standaloneTarget init 2>&1 | Out-Null
+$fixtureSkill = Join-Path $standaloneTarget ".agents/skills/codex-claude-handoff"
+New-Item -ItemType Directory -Path (Split-Path -Parent $fixtureSkill) -Force | Out-Null
+Copy-Item -LiteralPath $codexSkillRoot -Destination $fixtureSkill -Recurse -Force
+$fixtureSetup = Join-Path $fixtureSkill "scripts/setup.ps1"
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$standaloneSetupOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $fixtureSetup -Project $standaloneTarget 2>&1 | Out-String
+$standaloneSetupCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+Check "bundled Skill setup installs the complete protocol and doctor passes" (($standaloneSetupCode -eq 0) -and ($standaloneSetupOut -match "Doctor result: PASS") -and (Test-Path (Join-Path $standaloneTarget ".ai/skills/codex-claude-handoff/SKILL.md")) -and (Test-Path (Join-Path $standaloneTarget "scripts/handoff.ps1")))
+$createdBranchRefs = @(Get-ChildItem -LiteralPath (Join-Path $standaloneTarget ".git/refs/heads") -Recurse -File -ErrorAction SilentlyContinue)
+Check "bundled Skill setup remains opt-in and runs no git commit" ((-not (Test-Path (Join-Path $standaloneTarget "AGENTS.md"))) -and (-not (Test-Path (Join-Path $standaloneTarget "CLAUDE.md"))) -and ($createdBranchRefs.Count -eq 0) -and ($standaloneSetupOut -match "usual stable install commit"))
+
+$nonGitTarget = Join-Path $FixtureRoot "standalone-skill-non-git"
+New-Item -ItemType Directory -Path $nonGitTarget -Force | Out-Null
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$nonGitSetupOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $skillSetup -Project $nonGitTarget 2>&1 | Out-String
+$nonGitSetupCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorActionPreference
+Check "bundled Skill setup fails closed outside a Git repository" (($nonGitSetupCode -eq 2) -and ($nonGitSetupOut -match "requires a Git repository") -and (-not (Test-Path (Join-Path $nonGitTarget ".ai"))))
 # === 5. Release executor guards (fail closed) ===
 Write-Host "[5] Release executor guards (release-check)"
 # Missing -Version: must block, no git mutation.

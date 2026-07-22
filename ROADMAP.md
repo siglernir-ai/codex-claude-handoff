@@ -29,6 +29,23 @@ secrets, and product decisions.
 
 ## Proposed Milestones
 
+### v3.3.0 - skills.sh Public Beta Packaging
+
+**Goal:** Make the public Skill installable and testable by external users without
+requiring a separate bootstrap download.
+
+**Includes:**
+- Self-contained Skill folders for Codex and Claude Code.
+- Bundled offline setup payload and explicit first-use approval.
+- Apache-2.0 licensing and public-beta security guidance.
+- Clean skills CLI installation and doctor validation.
+- A 30-day evidence threshold before investing in plugin packaging.
+
+**Does not include:**
+- Full unattended autonomy.
+- Automatic commit, push, tag, release, deploy, database, or secret actions.
+- A Claude Code or Codex marketplace plugin wrapper.
+
 ### v0.14.0 - Roadmap and Release Discipline
 
 **Goal:** Make the roadmap and release process explicit and repeatable before further

@@ -1,6 +1,6 @@
 param(
     [string]$Project = (Get-Location).Path,
-    [string]$Version = "v3.2.2",
+    [string]$Version = "v3.3.0",
     [switch]$Force,
     [switch]$AlwaysOn,
     [switch]$DisableAlwaysOn,
@@ -35,7 +35,7 @@ if ($PackageRoot) {
 }
 
 if ($Version -notmatch '^v\d+\.\d+\.\d+$') {
-    throw "Version must look like v3.2.2. Received: $Version"
+    throw "Version must look like v3.3.0. Received: $Version"
 }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-claude-handoff-" + [guid]::NewGuid().ToString("N"))

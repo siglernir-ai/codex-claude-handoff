@@ -3,6 +3,20 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.3.0 - skills.sh Public Beta Packaging
+
+- Replaced the discovery-only adapters with portable, explicitly activated Skill
+  entry points that can install or run the project-local protocol.
+- Bundled an offline installer and project templates inside both Codex and Claude
+  Code Skill locations so `npx skills add` produces a self-contained package.
+- Added first-use setup scripts for PowerShell and Bash. Setup requires a Git
+  repository, requests user approval through the Skill workflow, runs `doctor`, and
+  performs no Git or production action.
+- Added OpenAI Skill interface metadata with implicit invocation disabled.
+- Licensed the project under Apache-2.0 and included the license in release packages.
+- Added packaging, mirror, no-network, clean-install, and skills CLI acceptance
+  coverage for the public beta.
+
 ## 3.2.2 - VS Code Shared Workspace Guidance
 
 - Documented VS Code as the recommended workspace for using Codex and Claude Code on

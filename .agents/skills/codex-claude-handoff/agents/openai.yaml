@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex-Claude Handoff"
+  short_description: "Supervised Codex and Claude Code workflow"
+  default_prompt: "Use $codex-claude-handoff to run this task through Codex routing, Claude Code implementation, Codex review, and user approval."
+policy:
+  allow_implicit_invocation: false

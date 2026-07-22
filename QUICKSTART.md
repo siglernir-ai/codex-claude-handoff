@@ -25,23 +25,44 @@ npx.cmd --yes @anthropic-ai/claude-code
 Complete the browser sign-in, then close Claude Code. You do not need to open it
 manually for normal handoff tasks after that.
 
-## Windows: install the pinned release
+## Install the public beta Skill
+
+From the Git project where you want to use the workflow, run:
+
+```powershell
+npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --agent codex claude-code --copy
+```
+
+Then open Codex in that project, enter `/skills`, select `codex-claude-handoff`,
+and ask it to set up the handoff protocol. The Skill requests approval before it
+copies the bundled project files. Its setup does not download or execute additional
+remote code.
+
+After setup, review and commit the installed project-local files. Include
+`skills-lock.json` when the `skills` CLI created it:
+
+```powershell
+git add .agents .ai .claude scripts .gitignore skills-lock.json
+git commit -m "Install codex-claude-handoff v3.3.0"
+```
+
+## Windows alternative: install the pinned release
 
 Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
 files and does not change normal Codex behavior.
 
-Commit the installed project-local skill files before starting real work:
+Commit the installed project-local files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.2.2"
+git commit -m "Install codex-claude-handoff v3.3.0"
 ```
 
 Check the installation:
@@ -113,13 +134,26 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.2.2 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.3.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-The `skills` CLI can discover the repository skill, but the full handoff workflow
-needs project-local scripts and protocol files. Use the pinned bootstrap command
-above for a complete install. Treat `skills add` as discovery/adapter installation
-unless your project has also run the bootstrap installer.
+v3.3.0 packages a self-contained public beta Skill. From a clean Git project, run:
+
+```powershell
+npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy
+```
+
+Then open Codex, select `codex-claude-handoff` through `/skills`, and ask it to set
+up the project. The Skill explains the local changes and requests approval before
+running its bundled offline installer. It downloads no additional code and runs no
+Git commit, push, tag, release, deploy, database, or secret action.
+
+After setup, review and commit the stable installed files, run `doctor`, and start
+with a small non-production task. The pinned bootstrap command remains the direct
+installation alternative.
+
+The skills CLI creates `skills-lock.json`; include it in the reviewed installation
+commit together with `.agents`, `.ai`, `.claude`, `scripts`, and `.gitignore`.

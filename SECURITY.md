@@ -65,6 +65,19 @@ Before running this in a new project:
 4. Confirm `.gitignore` excludes the local coordination files.
 5. Start with a small non-production task.
 
+## skills.sh Public Beta Package
+
+The v3.3.0 Skill package is self-contained. Its first-use setup runs a bundled local
+installer and does not download or execute additional remote code. Setup requires an
+existing Git repository and explicit user approval. It installs in opt-in mode, runs
+`doctor`, and does not commit, push, tag, release, deploy, change databases, or change
+secrets.
+
+The same complete Skill payload is present in the Codex and Claude Code discovery
+locations so either source selected by a compatible skills client has the installer
+and templates it references. Users should pin a release tag for audited deployments
+and review the Skill source before use.
+
 ## Reporting Issues
 
 For an internal pilot, report issues with:

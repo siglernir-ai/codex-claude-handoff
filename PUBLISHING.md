@@ -38,12 +38,13 @@ Before sharing with colleagues:
 
 1. Push the latest release commit and tag to the shared Git remote.
 2. Run `scripts/protocol-tests.ps1` and keep the output summary.
-3. Build the release package with `scripts/build-package.ps1`.
-4. Test installation in a fresh throwaway Git repository.
-5. Run `scripts/handoff.ps1 doctor` in the installed project.
-6. Complete one small file-creation pilot.
-7. Complete one existing-file edit pilot.
-8. Share `QUICKSTART.md`, `HOW_IT_WORKS.md`, `SECURITY.md`, and this file.
+3. Refresh the standalone Skill payload with `scripts/build-skill-package.ps1`.
+4. Build the release package with `scripts/build-package.ps1`.
+5. Test both bootstrap and skills CLI installation in fresh throwaway Git repositories.
+6. Run `scripts/handoff.ps1 doctor` in each installed project.
+7. Complete one small file-creation pilot.
+8. Complete one existing-file edit pilot.
+9. Share `QUICKSTART.md`, `HOW_IT_WORKS.md`, `SECURITY.md`, and this file.
 
 ## Suggested Colleague Message
 
@@ -81,22 +82,33 @@ files unless your organization has already approved that support path.
 
 ## skills.sh Readiness
 
-The repository includes skill metadata in common discovery locations. The
-`skills` CLI can discover the skill, but it installs the discovery adapter, not the
-complete project-local protocol tree. The official full installation path remains
-the pinned bootstrap command in `QUICKSTART.md`.
+v3.3.0 includes a self-contained public beta Skill in both common agent discovery
+locations. The Skill bundles the installer and protocol templates it needs, so
+`skills add` no longer produces an adapter with missing project-local references.
 
 Recommended checks:
 
 ```powershell
-npx skills add siglernir-ai/codex-claude-handoff --list
-npx skills add siglernir-ai/codex-claude-handoff --copy
+npx skills add siglernir-ai/codex-claude-handoff --list --full-depth
+npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy
 ```
 
-Treat skills.sh as discovery and activation help, not as the complete installer,
-unless a future packaging pass proves a full-protocol `skills add` installation.
-Before broad public listing, add and verify an adapter fallback that tells users to
-run the bootstrap installer when `.ai/skills/codex-claude-handoff/` is missing.
+There is no separate package upload in this workflow. Publish the repository and
+release tag, then install the Skill from the public GitHub source with the `skills`
+CLI. skills.sh uses anonymous CLI install telemetry for discovery and ranking, so a
+new Skill may take time to appear in search and begins with no meaningful ranking.
+
+Before public listing, perform the install in a fresh Git repository, invoke the
+bundled setup, run `doctor`, confirm no network download occurred during setup, and
+complete a small supervised workflow. Describe the release as a public beta rather
+than full unattended autonomy.
+
+Suggested 30-day beta threshold:
+
+- Five external installs.
+- Two users completing a full supervised workflow.
+- No unresolved critical security or data-loss issue.
+- Maintenance mode instead of indefinite development if there is no demonstrated use.
 
 ## Go / No-Go
 

@@ -2,20 +2,32 @@
 
 A simple collaboration protocol for using **Codex** and **Claude Code** together in the same software project.
 
+[![skills.sh](https://skills.sh/b/siglernir-ai/codex-claude-handoff)](https://skills.sh/siglernir-ai/codex-claude-handoff)
+
 The goal is to avoid copy-pasting long context between tools.
 
-> **Current release: v3.2.2.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.3.0 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
 
 ## Quick Start / Daily Use
 
-On Windows, open PowerShell in the project folder and paste this one command. The
-installer uses the current folder automatically; there is no project path to edit:
+Install the public beta Skill into a Git project for both Codex and Claude Code:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.2.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --agent codex claude-code --copy
+```
+
+Open Codex in that project, enter `/skills`, select `codex-claude-handoff`, and ask
+it to set up the handoff protocol. The Skill explains the local files it will copy
+and asks for approval before running its bundled offline setup.
+
+As a direct Windows alternative, open PowerShell in the project folder and run the
+pinned bootstrap command below. It uses the current folder automatically:
+
+```powershell
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -48,7 +60,10 @@ model behind the workflow, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md). For internal
 rollout guidance, see [PUBLISHING.md](PUBLISHING.md), [SECURITY.md](SECURITY.md),
 and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md).
 
-v3.2.2 is the internal publication and workspace guidance release: it explains the
+v3.3.0 is the skills.sh public beta packaging release. It makes the discovered Skill
+self-contained, bundles an offline project installer, publishes Apache-2.0 licensing,
+and keeps first-use setup behind explicit approval. v3.2.2 was the internal publication
+and workspace guidance release: it explains the
 recommended VS Code shared-window workflow without claiming a native VS Code extension.
 v3.2.1 added colleague onboarding,
 trust and safety notes, model-selection guidance, and package coverage for those
@@ -1118,7 +1133,9 @@ Verified behavior:
 
 ## Shared Skill Architecture
 
-The protocol ships with a shared canonical skill folder that both Codex and Claude Code can discover via lightweight adapter stubs.
+The protocol ships with a shared canonical protocol folder plus portable Skill entry
+points for Codex and Claude Code. In the source repository, both Skill folders also
+carry the self-contained public-beta setup payload used by compatible skills clients.
 
 ### Layout
 
@@ -1135,11 +1152,13 @@ The protocol ships with a shared canonical skill folder that both Codex and Clau
   CAPABILITIES.md  agent capability profile (tool strengths + default role binding)
   VERSION          installed protocol version
 
-.agents/skills/codex-claude-handoff/SKILL.md   <- Codex discovery adapter
-.claude/skills/codex-claude-handoff/SKILL.md   <- Claude Code discovery adapter
+.agents/skills/codex-claude-handoff/          <- Codex Skill + bundled setup payload
+.claude/skills/codex-claude-handoff/          <- Claude Skill + identical setup payload
 ```
 
-The adapter files are small stubs. All protocol content lives in `.ai/skills/codex-claude-handoff/`.
+After project setup, the runtime protocol content lives in
+`.ai/skills/codex-claude-handoff/`. The bundled Skill payload exists to create that
+project-local installation without fetching additional code.
 
 ### File Roles
 
@@ -1152,8 +1171,8 @@ The adapter files are small stubs. All protocol content lives in `.ai/skills/cod
 | `.ai/skills/codex-claude-handoff/ADAPTERS.md` | Adapter registry and automation capability contract |
 | `.ai/skills/codex-claude-handoff/CODEX.md` | Codex entry pointer - resolves Codex's role |
 | `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role |
-| `.agents/skills/codex-claude-handoff/SKILL.md` | Codex-facing discovery adapter - points to `.ai/` |
-| `.claude/skills/codex-claude-handoff/SKILL.md` | Claude Code-facing discovery adapter - points to `.ai/` |
+| `.agents/skills/codex-claude-handoff/` | Codex-facing portable Skill and offline setup payload |
+| `.claude/skills/codex-claude-handoff/` | Claude-facing byte-identical Skill and offline setup payload |
 | Root `CLAUDE.md` | Claude Code **operational entry** file (customized per project) - separate from the skill folder |
 | `AI_HANDOFF.md` | Execution state - dynamic, local, not committed |
 
@@ -1161,14 +1180,19 @@ Root `CLAUDE.md` remains the Claude Code operational behavior file. It is not re
 
 ### Install
 
-The installer copies the canonical shared folder and both adapter stubs into target projects. Existing files are never overwritten.
+The direct installer copies the canonical shared folder and both portable entry
+points into target projects. A skills CLI installation first copies the standalone
+Skill payload; after explicit approval, its local setup installs the same canonical
+project files. Existing files are not refreshed without an explicit force/update path.
 
 ### Skill Location Distinction
 
 Codex and Claude Code discover the protocol through different channels:
 
-- **Codex** reads `.agents/skills/codex-claude-handoff/SKILL.md` (its skill-discovery location), which points to the canonical `.ai/skills/codex-claude-handoff/` folder.
-- **Claude Code** is driven by `CLAUDE.md` and the current `AI_HANDOFF.md`. Its own skill-discovery location is `.claude/skills/`, where an adapter stub also points to `.ai/`.
+- **Codex** reads `.agents/skills/codex-claude-handoff/SKILL.md`. It offers approved
+  first-use setup when `.ai/` is absent, then follows the canonical protocol.
+- **Claude Code** discovers the same portable entry point under `.claude/skills/` and
+  follows the role binding and canonical protocol after setup.
 
 Because of this, when asked to "find the handoff skill", Claude Code should not search only `.claude/skills/`. If the protocol is installed, also check `.agents/skills/codex-claude-handoff/SKILL.md` and the canonical `.ai/skills/codex-claude-handoff/` folder.
 
@@ -1182,7 +1206,10 @@ Codex adapter path:
 .agents/skills/codex-claude-handoff/SKILL.md
 ```
 
-This adapter points to the canonical shared protocol at `.ai/skills/codex-claude-handoff/`. When active, Codex reads `CODEX.md`, which resolves its current role via `.ai/roles/ROLE_ASSIGNMENT.md` and sends it to the matching role protocol (`MASTER.md` by default), plus `SKILL.md` for the shared index.
+The Skill installs the bundled protocol on approved first use when necessary. Once
+installed, Codex reads `CODEX.md`, which resolves its current role via
+`.ai/roles/ROLE_ASSIGNMENT.md` and sends it to the matching role protocol
+(`MASTER.md` by default), plus `SKILL.md` for the shared index.
 
 When active, Codex should:
 

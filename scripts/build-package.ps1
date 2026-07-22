@@ -25,6 +25,7 @@ $packageRoot = Join-Path $tempBase $packageName
 $rootFiles = @(
     "bootstrap.ps1",
     "install.ps1",
+    "LICENSE",
     "README.md",
     "QUICKSTART.md",
     "HOW_IT_WORKS.md",

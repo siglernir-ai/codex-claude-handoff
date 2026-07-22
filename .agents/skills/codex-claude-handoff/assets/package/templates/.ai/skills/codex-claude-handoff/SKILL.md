@@ -1,0 +1,89 @@
+---
+name: codex-claude-handoff
+description: Run the project-local Codex to Claude Code to Codex handoff protocol. Use only when the user selects codex-claude-handoff through /skills, mentions $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full Codex-Claude handoff protocol; do not trigger for ordinary project tasks.
+---
+
+# Codex-Claude Handoff Skill
+
+## Purpose
+
+Use this skill to coordinate AI tools in the same software project using a shared handoff file (`AI_HANDOFF.md`) as the execution state.
+
+## Recommended Workspace
+
+The recommended user-facing workspace is VS Code with the same project folder open for
+Codex and Claude Code. The tools coordinate through the project's local handoff files,
+not through a hidden chat bridge. VS Code is a convenient shared workspace; this protocol
+does not install a VS Code extension or provide unrestricted background automation.
+When a window turn is manual, `NEXT_TURN.md` contains the short prompt for the next tool.
+Bounded CLI automation is available only for the states and adapters documented in
+`ADAPTERS.md`, and sensitive actions still require the user.
+
+## Role Model
+
+The protocol is organized around three roles, plus the User. Roles are bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`, so they can be reassigned (with user approval) without rewriting the protocol.
+
+- **Master** - decision router, architect, task writer, and coordinator.
+- **Implementer** - implementation agent; during investigation and planning turns also a read-only repository-local feasibility and capability partner.
+- **Reviewer** - independent review of implementation against approved scope, plus the Verification Gate.
+- **The User** - the approval point. Never one of the three roles.
+
+**Default binding:** Master = Codex, Reviewer = Codex, Implementer = Claude Code. This is behaviorally identical to earlier versions of the protocol.
+
+**Invariant:** the Reviewer must never be the same tool as the Implementer (an implementer cannot be the sole reviewer of its own work). Switching roles requires explicit user approval. See `.ai/roles/ROLE_ASSIGNMENT.md`.
+
+Multi-task coordination (the "Sequence Owner") is a duty of the Master role, not a fourth role. For the operating method, its layers, and the lifecycle vocabulary, read `PROTOCOL_METHOD.md` in this folder (since v0.18.0).
+
+The Master role is read-only with respect to source during consultation: the Implementer does not modify source files during investigation or planning turns, and control returns to the Master before any implementation task is finalized.
+
+## Canonical Shared Folder
+
+This file is in `.ai/skills/codex-claude-handoff/`. The following files contain the full protocol:
+
+| File | Contents |
+|---|---|
+| `SKILL.md` | This file - shared protocol index and role model |
+| `MASTER.md` | Master + Reviewer role protocol: decision router, gates, states, review, verification |
+| `IMPLEMENTER.md` | Implementer role protocol: investigation mode, planning mode, implementation rules, states |
+| `PROTOCOL_METHOD.md` | Protocol method specification: method layers, lifecycle mapping, vocabulary, precedence (since v0.18.0) |
+| `ADAPTERS.md` | Adapter registry and automation capability contract (since v0.19.0) |
+| `CODEX.md` | Codex entry pointer - resolves Codex's current role(s) and points to the role file |
+| `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
+| `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
+| `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, command transparency, model/subagent evidence rules, and continuity artifacts |
+| `README.md` | Human-facing overview of this folder |
+| `VERSION` | Installed protocol version |
+
+The role-to-tool binding lives one level up, in `.ai/roles/ROLE_ASSIGNMENT.md`.
+It is the single source of truth for role binding. `AI_HANDOFF.md` Task Actors are
+derived display data only. Every turn begins by rereading the binding and checking
+for drift or Reviewer==Implementer; failures stop the protocol closed.
+
+## How to Resolve Your Behavior
+
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to find which role(s) your tool currently holds.
+2. If you hold **Master** and/or **Reviewer**: follow `MASTER.md`.
+3. If you hold **Implementer**: follow `IMPLEMENTER.md`.
+4. The tool-named entry pointers (`CODEX.md`, `CLAUDE.md`) exist only to send each tool to the right role file; they do not define behavior themselves.
+
+## Required Project Files
+
+When this protocol is active, expect these files in the project root:
+
+- `AGENTS.md` - project context plus the Master + Reviewer protocol (read by the tool that follows the AGENTS.md convention)
+- `CLAUDE.md` - the operational entry file for Claude Code (resolves its role)
+- `AI_HANDOFF.md` - current state, which role acts next, changed files, verification, risks, and next step
+- `AI_SEQUENCE.md` - local multi-task ordering artifact (since v0.18.1): ordered task list, per-task status, release checkpoints. Local, gitignored, never committed; see `PROTOCOL_METHOD.md`
+- `.ai/skills/codex-claude-handoff/ADAPTERS.md` - adapter registry for callable/manual automation status (since v0.19.0)
+- `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` - Claude execution policy and continuity evidence (since v2.3.0)
+
+## Encoding-Safe Handoff Rule
+
+When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any language with encoding-sensitive characters), every role must follow these rules:
+
+- **Never copy UI text from handoff files.** `AI_HANDOFF.md` and `NEXT_TURN.md` may contain garbled or corrupted characters if the author's terminal encoding was unstable. Do not use that text as a search string, a match pattern, or text to insert.
+- **Write semantic English descriptions in handoff files.** Describe what the text means rather than copying the literal characters.
+- **Always inspect the source file directly.** Before editing, searching for, or reviewing any UI string, open the actual source file and read the text from there.
+- **Point to the exact location.** Reference the file path, component name, line number, or a nearby code comment - not the raw text itself.
+- **If exact text is needed for a search or match, derive it from the source file**, not from terminal output or handoff notes.
+- **The source of truth for UI text is the source file, not the handoff.**
