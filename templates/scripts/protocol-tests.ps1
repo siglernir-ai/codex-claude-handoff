@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.3.1
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.3.2
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -644,13 +644,27 @@ $skillText = Get-Content -Raw -Path (Join-Path $codexSkillRoot "SKILL.md")
 $skillSetupText = Get-Content -Raw -Path $skillSetup
 $skillSetupShText = Get-Content -Raw -Path $skillSetupSh
 
-Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.3\.1"'))
+Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.3\.2"'))
 Check "public Skill positions an accountable engineering pair" (($skillText -match "One drives\. One challenges\. Neither ships alone\.") -and ($skillText -match "accountable engineering"))
 Check "public Skill distinguishes one live task from summaries and parallel answers" (($skillText -match "same live Git task") -and ($skillText -match "pass a summary") -and ($skillText -match "run the same prompt in parallel"))
 Check "public Skill distinguishes bounded correction from unrestricted dialogue" (($skillText -match "bounded by turn, time, and") -and ($skillText -match "General question dialogue still advances through explicit turns"))
 Check "public Skill surfaces independent review and fail-closed safety" (($skillText -match "reviews\s+independently") -and ($skillText -match "Fails closed"))
 Check "public Skill documents approved role flexibility and adapter limits" (($skillText -match "roles configurable") -and ($skillText -match "explicit user approval") -and ($skillText -match "Automation\s+availability depends on the verified adapter"))
 Check "public Skill requires explicit setup approval and forbids implicit invocation" (($skillText -match "explicit user approval") -and ((Get-Content -Raw -Path (Join-Path $codexSkillRoot "agents/openai.yaml")) -match "allow_implicit_invocation:\s*false"))
+$publicSkillEntryFiles = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -Force -File -Filter "SKILL.md" | Where-Object {
+    (Get-Content -Raw -LiteralPath $_.FullName) -match "(?m)^license:\s*Apache-2\.0\s*$"
+})
+$publicSkillFrontmatterIsSafe = ($publicSkillEntryFiles.Count -gt 0)
+$unsafePublicSkillFrontmatter = ""
+foreach ($publicSkillEntryFile in $publicSkillEntryFiles) {
+    $publicSkillEntryText = Get-Content -Raw -LiteralPath $publicSkillEntryFile.FullName
+    if ($publicSkillEntryText -notmatch "(?m)^description:\s*>-\s*$") {
+        $publicSkillFrontmatterIsSafe = $false
+        $unsafePublicSkillFrontmatter = $publicSkillEntryFile.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
+        break
+    }
+}
+Check "all public Skill entry points use YAML-safe folded descriptions" $publicSkillFrontmatterIsSafe $unsafePublicSkillFrontmatter
 Check "standalone Skill bundles local PowerShell and Bash installers" ((Test-Path $skillSetup) -and (Test-Path $skillSetupSh) -and (Test-Path $skillPackageInstall) -and (Test-Path $skillPackageInstallSh))
 Check "standalone Skill bundles the initial handoff template" (Test-Path (Join-Path $codexSkillRoot "assets/package/templates/AI_HANDOFF.md"))
 Check "standalone setup scripts contain no network downloader" (($skillSetupText -notmatch "Invoke-WebRequest|Start-BitsTransfer|https?://") -and ($skillSetupShText -notmatch "curl|wget|https?://"))

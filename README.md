@@ -19,7 +19,7 @@ another pass, while scoped question and re-gating states let either role challen
 assumptions without silently guessing. Automated turns have explicit turn, time,
 and budget limits; general question dialogue still advances through explicit turns.
 
-> **Current release: v3.3.1 public beta.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.3.2 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -70,7 +70,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -105,7 +105,9 @@ and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md). Publication assets and the reproduci
 five-minute demo are maintained in [launch/](launch/README.md). Bug reports and
 pull requests should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-v3.3.1 sharpens public discovery and positioning: the Skill now distinguishes
+v3.3.2 hardens public packaging by making every discoverable Skill frontmatter
+YAML-safe and adding regression coverage for nested release mirrors. v3.3.1
+sharpened public discovery and positioning: the Skill distinguishes
 bounded cross-agent collaboration from session-summary handoffs and parallel
 multi-model answers, surfaces independent review and correction plus fail-closed
 safety, and explains user-approved role flexibility without overstating adapter

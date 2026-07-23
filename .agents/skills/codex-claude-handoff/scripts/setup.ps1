@@ -69,4 +69,4 @@ if (Test-Path -LiteralPath (Join-Path $targetRoot "skills-lock.json")) {
 else {
     Write-Host "  git add .agents .ai .claude scripts .gitignore"
 }
-Write-Host "  git commit -m `"Install codex-claude-handoff v3.3.1`""
+Write-Host "  git commit -m `"Install codex-claude-handoff v3.3.2`""

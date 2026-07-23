@@ -1,7 +1,7 @@
 # Codex-Claude Handoff - Roadmap
 
 This document records the protocol's completed foundations and its intended
-direction beyond the current v3.3.1 public beta.
+direction beyond the current v3.3.2 public beta.
 
 The long-term goal is a safe, role-based multi-agent workflow where the Master, Implementer,
 and Reviewer can run bounded autonomous dialogue with minimal manual prompt-copying, while
@@ -28,6 +28,14 @@ secrets, and product decisions.
 - PowerShell install script.
 
 ## Proposed Milestones
+
+### v3.3.2 - Public Package Frontmatter Hardening
+
+- [x] Make every public Skill entry point and bundled mirror use YAML-safe folded
+  descriptions.
+- [x] Add regression coverage for discoverable and nested public Skill
+  frontmatter.
+- [x] Revalidate clean skills CLI discovery before publication.
 
 ### v3.4.0 - Bounded Dialogue Automation
 

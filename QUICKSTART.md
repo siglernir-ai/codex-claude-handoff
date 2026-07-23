@@ -43,7 +43,7 @@ After setup, review and commit the installed project-local files. Include
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore skills-lock.json
-git commit -m "Install codex-claude-handoff v3.3.1"
+git commit -m "Install codex-claude-handoff v3.3.2"
 ```
 
 ## Windows alternative: install the pinned release
@@ -52,7 +52,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -62,7 +62,7 @@ Commit the installed project-local files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.3.1"
+git commit -m "Install codex-claude-handoff v3.3.2"
 ```
 
 Check the installation:
@@ -134,13 +134,13 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.3.1 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.3.2 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-v3.3.1 packages a self-contained public beta Skill. From a clean Git project, run:
+v3.3.2 packages a self-contained public beta Skill. From a clean Git project, run:
 
 ```powershell
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy

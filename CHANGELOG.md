@@ -3,6 +3,14 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.3.2 - Public Package Frontmatter Hardening
+
+- Replaced colon-sensitive inline descriptions with YAML-safe folded scalars in
+  every public Skill entry point and nested release mirror.
+- Added regression coverage that rejects public Skill frontmatter which could be
+  skipped by the skills CLI parser.
+- Updated pinned setup paths, package metadata, and release guidance to v3.3.2.
+
 ## 3.3.1 - Public Positioning and Discovery
 
 - Reframed the public Skill as a supervised, bounded cross-agent collaboration

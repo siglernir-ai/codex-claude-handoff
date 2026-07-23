@@ -1,10 +1,21 @@
 ---
 name: codex-claude-handoff
-description: Turn Codex and Claude Code into an accountable engineering pair on one Git task: one agent leads or implements, a different agent challenges and reviews, rejected work can return for bounded correction, and neither ships alone. Durable project-local state preserves scope, decisions, evidence, and the next actor across windows and CLI turns; exact-scope and fail-closed checks stop unsafe or inconsistent progress, while the user retains approval over sensitive actions. Roles can be swapped with explicit user approval. Use when the user explicitly selects or names codex-claude-handoff, requests cross-agent implementation and independent review, setup, diagnosis, role reassignment, or the full supervised workflow. Do not trigger for ordinary project tasks. On first use, request approval before installing the bundled protocol.
+description: >-
+  Turn Codex and Claude Code into an accountable engineering pair on one Git
+  task: one agent leads or implements, a different agent challenges and reviews,
+  rejected work can return for bounded correction, and neither ships alone.
+  Durable project-local state preserves scope, decisions, evidence, and the next
+  actor across windows and CLI turns; exact-scope and fail-closed checks stop
+  unsafe or inconsistent progress, while the user retains approval over sensitive
+  actions. Roles can be swapped with explicit user approval. Use when the user
+  explicitly selects or names codex-claude-handoff, requests cross-agent
+  implementation and independent review, setup, diagnosis, role reassignment, or
+  the full supervised workflow. Do not trigger for ordinary project tasks. On
+  first use, request approval before installing the bundled protocol.
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.3.1"
+  version: "3.3.2"
 ---
 
 # Codex-Claude Handoff
