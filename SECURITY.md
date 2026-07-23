@@ -67,7 +67,7 @@ Before running this in a new project:
 
 ## skills.sh Public Beta Package
 
-The v3.3.0 Skill package is self-contained. Its first-use setup runs a bundled local
+The v3.3.1 Skill package is self-contained. Its first-use setup runs a bundled local
 installer and does not download or execute additional remote code. Setup requires an
 existing Git repository and explicit user approval. It installs in opt-in mode, runs
 `doctor`, and does not commit, push, tag, release, deploy, change databases, or change

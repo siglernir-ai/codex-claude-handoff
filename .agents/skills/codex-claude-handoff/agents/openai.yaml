@@ -1,6 +1,6 @@
 interface:
   display_name: "Codex-Claude Handoff"
-  short_description: "Supervised Codex and Claude Code workflow"
-  default_prompt: "Use $codex-claude-handoff to run this task through Codex routing, Claude Code implementation, Codex review, and user approval."
+  short_description: "Two agents. Independent review. Human approval."
+  default_prompt: "Use $codex-claude-handoff to make Codex and Claude Code an accountable engineering pair for this task: one leads or implements, a different agent challenges and reviews, rejected work can return for bounded correction, durable local state preserves continuity, and the user approves sensitive actions."
 policy:
   allow_implicit_invocation: false

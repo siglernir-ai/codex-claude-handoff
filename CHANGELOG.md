@@ -3,6 +3,27 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.3.1 - Public Positioning and Discovery
+
+- Reframed the public Skill as a supervised, bounded cross-agent collaboration
+  protocol rather than a discovery adapter, session-summary handoff, or parallel
+  answer generator.
+- Centered the public promise on an accountable engineering pair: one agent drives
+  or implements, a different agent challenges and reviews, and neither ships alone.
+- Clarified that Reviewer-blocked implementation correction can run in a bounded
+  loop, while general two-way question states still require explicit turns.
+- Added concise human-facing differentiation: live task coordination, independent
+  review, durable project state, exact-scope checks, fail-closed behavior, and user
+  approval gates.
+- Documented user-approved role flexibility while preserving the invariant that
+  Reviewer and Implementer must differ and noting that automation depends on
+  verified adapters.
+- Expanded discovery metadata with `multi-agent`, `cross-agent`, implementation,
+  code-review, and human-in-the-loop language without renaming the Skill.
+- Added a verified live-demo package and evidence record for public sharing, plus
+  platform-specific launch copy for LinkedIn, Reddit, Hacker News, X, Discord, and
+  direct messages.
+
 ## 3.3.0 - skills.sh Public Beta Packaging
 
 - Replaced the discovery-only adapters with portable, explicitly activated Skill

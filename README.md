@@ -1,15 +1,58 @@
 # Codex-Claude Handoff
 
-A simple collaboration protocol for using **Codex** and **Claude Code** together in the same software project.
+**One drives. One challenges. Neither ships alone.**
+
+An open-source Agent Skill that turns **Codex** and **Claude Code** into an
+accountable engineering pair on the same Git task.
 
 [![skills.sh](https://skills.sh/b/siglernir-ai/codex-claude-handoff)](https://skills.sh/siglernir-ai/codex-claude-handoff)
 
-The goal is to avoid copy-pasting long context between tools.
+The handoff is only the transport. The value is separation of duties: Codex routes
+and scopes the task, Claude Code investigates or implements it, Codex independently
+challenges and reviews the result, and the user approves sensitive actions. Durable
+local state replaces repeated context copying while exact-scope and fail-closed
+checks keep the workflow inspectable.
 
-> **Current release: v3.3.0 public beta.** The project-local skill is opt-in by default. Selecting
+The core promise is bounded collaboration, not a magical private chat between
+models. A blocked review can return the exact approved scope to the Implementer for
+another pass, while scoped question and re-gating states let either role challenge
+assumptions without silently guessing. Automated turns have explicit turn, time,
+and budget limits; general question dialogue still advances through explicit turns.
+
+> **Current release: v3.3.1 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
+
+## What Makes It Different
+
+- **One accountable task, not two disconnected answers.** Both agents work from
+  the same durable state, scope, decisions, and evidence in the Git project.
+- **One implements; another challenges.** The Reviewer must remain different from
+  the Implementer and can reject the work instead of merely commenting on it.
+- **Review and correction, not parallel answers.** A rejection can route the exact
+  approved scope back to the Implementer and continue within bounded limits.
+- **Configurable roles.** Codex and Claude Code can exchange responsibilities with
+  explicit user approval; automation depends on the verified adapter available for
+  the selected binding.
+- **Durable project state.** Task status, decisions, changed-file scope,
+  verification, and execution evidence remain available across CLI and window
+  turns.
+- **Fail-closed safety.** Scope mismatches, stale actors, no-progress turns,
+  timeouts, and malformed verdicts stop instead of being reported as success.
+- **Human approval gates.** Commit, push, tag, release, deploy, database, secret,
+  and role-swap actions remain under user control.
+
+| Common pattern | Primary job | What this Skill adds |
+|---|---|---|
+| Session handoff | Preserve context for the next session | One live task with explicit ownership, review, and correction |
+| Parallel multi-model answers | Compare independent responses | Shared task state and a single accountable result |
+| One agent with a review prompt | Ask the same agent stack to critique output | A different bound tool must review the Implementer's exact scope |
+| Unattended agent loop | Continue until the system decides it is done | Bounded turns, fail-closed stops, and human authority over sensitive actions |
+
+The project does not claim to have invented multi-agent dialogue. Its value is the
+specific, inspectable combination of cross-vendor agents, durable Git-local state,
+separation of duties, bounded correction, exact-scope checks, and human approval.
 
 ## Quick Start / Daily Use
 
@@ -27,7 +70,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.1/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -62,9 +105,13 @@ and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md). Publication assets and the reproduci
 five-minute demo are maintained in [launch/](launch/README.md). Bug reports and
 pull requests should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-v3.3.0 is the skills.sh public beta packaging release. It makes the discovered Skill
-self-contained, bundles an offline project installer, publishes Apache-2.0 licensing,
-and keeps first-use setup behind explicit approval. v3.2.2 was the internal publication
+v3.3.1 sharpens public discovery and positioning: the Skill now distinguishes
+bounded cross-agent collaboration from session-summary handoffs and parallel
+multi-model answers, surfaces independent review and correction plus fail-closed
+safety, and explains user-approved role flexibility without overstating adapter
+coverage or claiming fully autonomous dialogue. v3.3.0 made the discovered Skill self-contained,
+bundled an offline project installer, published Apache-2.0 licensing, and kept
+first-use setup behind explicit approval. v3.2.2 was the internal publication
 and workspace guidance release: it explains the
 recommended VS Code shared-window workflow without claiming a native VS Code extension.
 v3.2.1 added colleague onboarding,

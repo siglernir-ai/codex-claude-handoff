@@ -2,9 +2,11 @@
 
 ## What this demo proves
 
-The demo proves one narrow claim: a user can start one supervised task in Codex,
-delegate implementation to Claude Code through project-local state, receive an
-independent Codex review, and reach a user approval gate before commit.
+The demo proves one narrow claim: Codex and Claude Code can operate as an
+accountable engineering pair on one supervised Git task. Codex establishes scope,
+Claude Code implements through durable project-local state, Codex independently
+challenges and reviews the result, and the workflow reaches the user approval gate
+before commit.
 
 It does not attempt to prove full unattended autonomy, deployment safety, or
 performance on a large production change.
@@ -91,13 +93,13 @@ The recording should visibly contain:
 
 | Time | Screen | Caption |
 |---|---|---|
-| 0-4s | VS Code with Codex and terminal | "One project. Two coding agents. One review gate." |
+| 0-4s | VS Code with Codex and terminal | "One drives. One challenges. Neither ships alone." |
 | 4-9s | `doctor` result | "Project-local, explicit, and health-checked." |
 | 9-15s | User submits the exact prompt | "The user states the task and spend boundary." |
 | 15-25s | Handoff state and Claude turn | "Codex routes. Claude Code implements." |
-| 25-34s | Codex review output | "A different agent reviews the exact diff." |
+| 25-34s | Codex review output | "The Implementer cannot approve its own work." |
 | 34-41s | `REVIEW_DONE / User` | "The workflow stops before commit." |
-| 41-45s | GitHub and skills.sh links | "Public beta. Inspect it, test it, challenge it." |
+| 41-45s | GitHub and skills.sh links | "The handoff is transport. Accountability is the product." |
 
 ## Failure policy
 
@@ -109,8 +111,22 @@ recording. Diagnose the failure, fix the product, and record a new complete run.
 
 The launch claim is also backed by the public v3.3.0 acceptance work:
 
-- 216 protocol checks passed.
+- 221 protocol checks passed.
 - A clean install from the public v3.3.0 tag installed the Skill for Codex and
   Claude Code.
 - Bundled setup completed and `handoff.ps1 doctor` returned `PASS`.
 - The public release ZIP matched its published SHA-256 checksum.
+
+## Recorded public-beta run
+
+The live run was completed on 2026-07-23 and rendered as:
+
+- `assets/codex-claude-handoff-live-demo.mp4`
+- `assets/codex-claude-handoff-live-demo.gif`
+- `assets/codex-claude-handoff-live-demo-poster.png`
+
+The recording preserves a real failed-closed Reviewer preflight caused by a
+non-exact Changed Files entry. Only the local coordination line was repaired; the
+task deliverable was not edited. Codex then reviewed the file read-only and the
+workflow reached `REVIEW_DONE / Waiting For: User` with no task commit. Full scope
+and transcript hashes are documented in `LIVE_DEMO_EVIDENCE.md`.

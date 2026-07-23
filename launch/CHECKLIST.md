@@ -5,7 +5,7 @@
 Launch broadly only when every item is true:
 
 - [ ] `npx skills find codex-claude-handoff` returns the Skill.
-- [ ] The skills.sh page displays the v3.3.0 first-use and safety content.
+- [ ] The skills.sh page displays the v3.3.1 positioning, first-use, and safety content.
 - [ ] The public GitHub release and both assets remain downloadable.
 - [ ] The release ZIP matches its SHA-256 checksum.
 - [ ] A fresh project install for Codex and Claude Code completes.

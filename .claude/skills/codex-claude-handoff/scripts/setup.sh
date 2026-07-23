@@ -42,4 +42,4 @@ if [ -f "$TARGET_PATH/skills-lock.json" ]; then
 else
     echo "  git add .agents .ai .claude scripts .gitignore"
 fi
-echo '  git commit -m "Install codex-claude-handoff v3.3.0"'
+echo '  git commit -m "Install codex-claude-handoff v3.3.1"'

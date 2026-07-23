@@ -1,7 +1,7 @@
 # Codex-Claude Handoff - Roadmap
 
-This document describes the intended direction of the protocol from its current state
-through a stable v1.0.0 release.
+This document records the protocol's completed foundations and its intended
+direction beyond the current v3.3.1 public beta.
 
 The long-term goal is a safe, role-based multi-agent workflow where the Master, Implementer,
 and Reviewer can run bounded autonomous dialogue with minimal manual prompt-copying, while
@@ -28,6 +28,41 @@ secrets, and product decisions.
 - PowerShell install script.
 
 ## Proposed Milestones
+
+### v3.4.0 - Bounded Dialogue Automation
+
+**Goal:** Turn the existing two-way question states into an optional, observable
+dialogue session without weakening human approval or independent review.
+
+**Proposed scope:**
+- Make verified `QUESTION_FOR_MASTER`, `QUESTION_FOR_IMPLEMENTER`, and
+  `RE_GATE_REQUESTED` adapter paths eligible for an explicit per-session dialogue
+  opt-in.
+- Record an append-only local dialogue transcript with actor, question, answer,
+  evidence, state transition, and stop reason.
+- Enforce maximum dialogue turns, per-turn and session budgets, timeouts,
+  no-progress detection, and repeated-question/deadlock detection.
+- Escalate unresolved disagreement, product decisions, risky scope changes, and
+  every sensitive action to the user.
+- Keep question turns source-read-only and preserve Reviewer != Implementer,
+  exact-scope review, and fail-closed behavior.
+- Validate only role/tool combinations with proven adapters; role flexibility
+  must not imply symmetric automation that has not been tested.
+
+**Exit criteria:**
+- A real pilot demonstrates question -> answer -> resumed work without manual
+  prompt copying.
+- The transcript makes the agents' disagreement and resolution inspectable.
+- A forced deadlock stops at the user within the configured turn and budget caps.
+- Documentation calls this bounded dialogue, never unrestricted autonomous
+  consensus.
+
+### v3.3.1 - Public Positioning and Discovery
+
+- [x] Distinguish bounded cross-agent collaboration from session-summary handoffs
+  and parallel multi-model answers.
+- [x] Surface independent review, fail-closed safety, and role flexibility.
+- [x] Add a verified live-demo package and evidence record.
 
 ### v3.3.0 - skills.sh Public Beta Packaging
 

@@ -2,9 +2,25 @@
 
 ## What is codex-claude-handoff?
 
-A project-local Agent Skill and protocol for a supervised workflow: Codex routes a
-task, Claude Code implements it, Codex reviews it, and the user approves sensitive
-actions.
+An Agent Skill that turns Codex and Claude Code into an accountable engineering
+pair on one Git task: one agent leads or implements, a different agent challenges
+and reviews, rejected work can return for bounded correction, and the user approves
+sensitive actions.
+
+## What is the main value?
+
+The user no longer has to be the messenger, traffic controller, and sole technical
+judge between two AI tools. The protocol preserves context, assigns ownership,
+requires independent review, and stops at real authority boundaries. In short:
+one drives, one challenges, and neither ships alone.
+
+## Is this just a handoff or two parallel answers?
+
+No. Session handoff skills mainly preserve context for the next session, while
+parallel or council tools mainly compare independent answers. This protocol keeps
+one live engineering task in durable local state and supports an
+implementation-review-correction cycle. Its general question states are
+two-directional but still require explicit turns today.
 
 ## Why use two agents?
 
@@ -12,11 +28,22 @@ The goal is separation of duties, not a claim that two models are always better.
 The Implementer does not approve its own work, and shared files preserve the task,
 scope, evidence, and next actor across tool boundaries.
 
+## Can Codex and Claude Code swap roles?
+
+Yes, with explicit user approval. Codex can implement while Claude Code leads or
+reviews when the installed adapters support that binding. The invariant does not
+change: Reviewer and Implementer must remain different, and unsupported automation
+falls back to an explicit turn instead of being guessed.
+
 ## Is it fully autonomous?
 
 No. It is intentionally human-in-the-loop. It stops before commit, push, tag,
 release, deploy, database work, secrets, role changes, and product decisions unless
 the user explicitly authorizes the relevant action.
+
+The review/correction path can run as a bounded opt-in loop, but this is not an
+unrestricted autonomous conversation. Turn count, time, budget, state, and scope
+guards determine when it must stop.
 
 ## Is it a VS Code extension?
 
@@ -63,7 +90,7 @@ Claude Code in the same repository.
 
 ## Is it production-ready?
 
-v3.3.0 is a public beta ready for supervised use on small, non-critical tasks. It
+v3.3.1 is a public beta ready for supervised use on small, non-critical tasks. It
 has extensive protocol tests and clean-install evidence, but it does not claim full
 unattended production autonomy.
 

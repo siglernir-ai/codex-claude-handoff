@@ -7,13 +7,20 @@ with colleagues inside an organization.
 
 Describe the skill as:
 
-> A supervised handoff workflow for using Codex and Claude Code in the same Git
-> project. It routes work through Master, Implementer, Reviewer, and User approval
-> states using local coordination files.
+> Codex-Claude Handoff turns two coding agents into an accountable engineering
+> pair: one drives, another challenges and reviews, and neither ships alone. It
+> keeps one live Git task in durable project-local state and can return rejected
+> work for bounded correction before the user approves sensitive actions.
 
 Do not describe it as full unattended autonomy. The workflow intentionally stops at
 review, commit, push, tag, release, deploy, database, secret, and production
 decisions until a human explicitly authorizes the relevant step.
+
+Do not claim the project invented multi-agent dialogue. Similar review loops,
+multi-model councils, and file-based collaboration protocols exist. Position this
+Skill by its concrete combination of project-local state, configurable roles,
+exact-scope Git checks, independent review, bounded correction, and fail-closed
+human approval gates.
 
 ## Who Should Try It
 
@@ -49,10 +56,13 @@ Before sharing with colleagues:
 ## Suggested Colleague Message
 
 ```text
-I am piloting codex-claude-handoff, a supervised workflow for coordinating Codex
-and Claude Code in the same repo. The recommended workspace is VS Code with both
-tools pointed at the same project folder. It uses local handoff files so Codex can route,
-Claude can implement, Codex can review, and the user approves commits/releases.
+I am piloting codex-claude-handoff, an Agent Skill that turns Codex and Claude
+Code into an accountable engineering pair in the same repo: one drives or
+implements, a different agent challenges and reviews, and neither ships alone.
+The recommended workspace is VS Code with both tools pointed at the same project
+folder. Durable local state preserves the task, exact scope, evidence, and next
+actor; rejected work can return for bounded correction before the user approves
+commits or releases.
 
 This is not a native VS Code extension or unrestricted background automation; it is a
 project-local protocol with bounded automation and explicit human checkpoints.
@@ -82,7 +92,7 @@ files unless your organization has already approved that support path.
 
 ## skills.sh Readiness
 
-v3.3.0 includes a self-contained public beta Skill in both common agent discovery
+v3.3.1 includes a self-contained public beta Skill in both common agent discovery
 locations. The Skill bundles the installer and protocol templates it needs, so
 `skills add` no longer produces an adapter with missing project-local references.
 

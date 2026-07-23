@@ -1,13 +1,26 @@
 ---
 name: codex-claude-handoff
-description: Run the project-local Codex to Claude Code to Codex handoff protocol. Use only when the user selects codex-claude-handoff through /skills, mentions $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full Codex-Claude handoff protocol; do not trigger for ordinary project tasks.
+description: Turn Codex and Claude Code into an accountable engineering pair for one supervised Git task, with durable local state, configurable roles, independent review by a different agent, bounded correction after rejection, exact-scope verification, fail-closed stops, and user approval gates. Use only when the user selects codex-claude-handoff through /skills, mentions $codex-claude-handoff, names codex-claude-handoff, or explicitly requests the full cross-agent workflow; do not trigger for ordinary project tasks.
 ---
 
 # Codex-Claude Handoff Skill
 
+**One drives. One challenges. Neither ships alone.**
+
 ## Purpose
 
-Use this skill to coordinate AI tools in the same software project using a shared handoff file (`AI_HANDOFF.md`) as the execution state.
+Use this skill to make Codex and Claude Code an accountable engineering pair in
+the same software project, using `AI_HANDOFF.md` as durable execution state. The
+handoff is only the transport: unlike a session-summary handoff, this protocol
+assigns concrete roles, tracks one live task and its exact scope, lets a different
+agent challenge and review the implementation, and stops before sensitive actions
+for user approval.
+
+This is bounded collaboration rather than parallel answer generation or an
+unrestricted private chat. Reviewer-blocked work can return to the Implementer for
+correction inside an opt-in loop with turn, time, and budget limits. The
+two-directional question states remain explicit-turn workflows until a verified
+dialogue adapter is available.
 
 ## Recommended Workspace
 
@@ -22,6 +35,12 @@ Bounded CLI automation is available only for the states and adapters documented 
 ## Role Model
 
 The protocol is organized around three roles, plus the User. Roles are bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`, so they can be reassigned (with user approval) without rewriting the protocol.
+
+The default binding is Codex as Master + Reviewer and Claude Code as Implementer.
+With explicit user approval, the tools can exchange Master and Implementer
+responsibilities. Reviewer and Implementer must always remain different, and
+automation availability depends on the verified adapter for the selected role and
+tool.
 
 - **Master** - decision router, architect, task writer, and coordinator.
 - **Implementer** - implementation agent; during investigation and planning turns also a read-only repository-local feasibility and capability partner.
