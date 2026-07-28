@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.3.2
+    Protocol Test Harness (PowerShell-first) - codex-claude-handoff v3.4.0
 
     Repeatable, black-box protocol tests for scripts/handoff.ps1. Each test runs the
     real handoff.ps1 as a child process against a scripted fixture project in a temp
@@ -404,7 +404,8 @@ $doctorFiles = @{
     ".ai/skills/codex-claude-handoff/SKILL.md" = "fixture";
     ".ai/skills/codex-claude-handoff/ADAPTERS.md" = "fixture";
     ".ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md" = "fixture";
-    ".ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md" = "fixture"
+    ".ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md" = "fixture";
+    ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit"}}}'
 }
 
 function New-BlockedCorrectionHandoff {
@@ -463,6 +464,50 @@ $invalidVersionFiles[".ai/skills/codex-claude-handoff/VERSION"] = "not-a-version
 $invalidVersionFx = New-Fixture -Files $invalidVersionFiles -InitGit
 $r = Invoke-Handoff -WorkDir $invalidVersionFx -Arguments @("doctor")
 Check "doctor fails with exit 10 when VERSION metadata is malformed" (($r.Code -eq 10) -and ($r.Out -match "Protocol VERSION is invalid") -and ($r.Out -match "Doctor result: FAIL"))
+
+# === 4C. Dynamic model resolver ===
+Write-Host "[4C] Dynamic model resolver"
+$modelRouting = @'
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "cheap_readonly": { "claudeModel": "test-cheap-model" },
+    "economy": { "claudeModel": "test-economy-model" },
+    "standard": { "claudeModel": "inherit" },
+    "high_reasoning": { "claudeModel": "test-high-model" }
+  }
+}
+'@
+$modelFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "model resolver default");
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles;
+    ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $modelRouting
+} -InitGit
+$r = Invoke-Handoff -WorkDir $modelFx -Arguments @("models")
+Check "models resolves a legacy handoff through auto to standard/inherit" (($r.Code -eq 0) -and ($r.Out -match "Effective profile:\s+standard") -and ($r.Out -match "Claude model:\s+inherit"))
+
+$investigationHandoff = New-Handoff -State "NEEDS_INVESTIGATION" -WaitingFor "Implementer" -CurrentTask "model resolver investigation"
+Set-Content -LiteralPath (Join-Path $modelFx "AI_HANDOFF.md") -Value $investigationHandoff -Encoding utf8
+$r = Invoke-Handoff -WorkDir $modelFx -Arguments @("models")
+Check "models selects cheap_readonly automatically for investigation" (($r.Code -eq 0) -and ($r.Out -match "Effective profile:\s+cheap_readonly") -and ($r.Out -match "Claude model:\s+test-cheap-model"))
+
+$economyHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "model resolver economy") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: economy"
+Set-Content -LiteralPath (Join-Path $modelFx "AI_HANDOFF.md") -Value $economyHandoff -Encoding utf8
+$r = Invoke-Handoff -WorkDir $modelFx -Arguments @("models")
+Check "models resolves an explicit handoff economy profile from project config" (($r.Code -eq 0) -and ($r.Out -match "Effective profile:\s+economy") -and ($r.Out -match "Claude model:\s+test-economy-model") -and ($r.Out -match "MODEL_ROUTING\.json"))
+
+$prevEconomyModel = $env:HANDOFF_CLAUDE_MODEL_ECONOMY
+$env:HANDOFF_CLAUDE_MODEL_ECONOMY = "test-env-economy-model"
+try {
+    $r = Invoke-Handoff -WorkDir $modelFx -Arguments @("models")
+    Check "environment mapping overrides MODEL_ROUTING.json" (($r.Code -eq 0) -and ($r.Out -match "test-env-economy-model") -and ($r.Out -match "environment HANDOFF_CLAUDE_MODEL_ECONOMY"))
+} finally {
+    if ($null -eq $prevEconomyModel) { Remove-Item Env:\HANDOFF_CLAUDE_MODEL_ECONOMY -ErrorAction SilentlyContinue } else { $env:HANDOFF_CLAUDE_MODEL_ECONOMY = $prevEconomyModel }
+}
+
+Set-Content -LiteralPath (Join-Path $modelFx ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json") -Value "{bad json" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $modelFx -Arguments @("models")
+Check "models fails closed on malformed MODEL_ROUTING.json" (($r.Code -eq 1) -and ($r.Out -match "Status:\s+BLOCKED") -and ($r.Out -match "invalid JSON"))
 
 # === 4D. Project-local opt-in installer ===
 Write-Host "[4D] Project-local opt-in installer"
@@ -644,7 +689,7 @@ $skillText = Get-Content -Raw -Path (Join-Path $codexSkillRoot "SKILL.md")
 $skillSetupText = Get-Content -Raw -Path $skillSetup
 $skillSetupShText = Get-Content -Raw -Path $skillSetupSh
 
-Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.3\.2"'))
+Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.4\.0"'))
 Check "public Skill positions an accountable engineering pair" (($skillText -match "One drives\. One challenges\. Neither ships alone\.") -and ($skillText -match "accountable engineering"))
 Check "public Skill distinguishes one live task from summaries and parallel answers" (($skillText -match "same live Git task") -and ($skillText -match "pass a summary") -and ($skillText -match "run the same prompt in parallel"))
 Check "public Skill distinguishes bounded correction from unrestricted dialogue" (($skillText -match "bounded by turn, time, and") -and ($skillText -match "General question dialogue still advances through explicit turns"))
@@ -1276,6 +1321,7 @@ WAITING_FOR: Implementer
 IMPLEMENTER: Claude Code
 REVIEWER: Codex
 TASK: v2.0.1 - Master Apply Test
+MODEL_PROFILE: economy
 REASON: The task is scoped and ready for implementation.
 "@
 $fx = New-MasterApplyFixture -Capture $masterCaptureReady
@@ -1286,6 +1332,7 @@ $h = Get-Content -Raw -Path $handoffPath
 $afterCommits = & git -C $fx rev-list --count HEAD
 Check "master-apply READY_FOR_IMPLEMENTATION sets Waiting For: Implementer" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
 Check "master-apply records concrete Task Actors from the capture" (($h -match "Implementer:\s+Claude Code") -and ($h -match "Reviewer:\s+Codex"))
+Check "master-apply preserves the Master-selected capability profile" ($h -match "Model Profile:\s+economy")
 Check "master-apply creates no git commit" ("$afterCommits".Trim() -eq "$beforeCommits".Trim())
 
 # Match the real Codex CLI encoding: output-last-message is UTF-8 without a BOM.
@@ -1697,10 +1744,14 @@ set IS_VERSION=
 set SAW_PERMISSION=
 set SAW_DISALLOWED=
 set SAW_NOSESSION=
+set SAW_MODEL=
+set SAW_MODEL_VALUE=
 if not "!ALL:--version=!"=="!ALL!" set IS_VERSION=1
 if not "!ALL:--permission-mode=!"=="!ALL!" if not "!ALL:acceptEdits=!"=="!ALL!" set SAW_PERMISSION=1
 if not "!ALL:--disallowed-tools=!"=="!ALL!" if not "!ALL:Bash=!"=="!ALL!" set SAW_DISALLOWED=1
 if not "!ALL:--no-session-persistence=!"=="!ALL!" set SAW_NOSESSION=1
+if not "!ALL:--model=!"=="!ALL!" set SAW_MODEL=1
+if not "!ALL:test-economy-model=!"=="!ALL!" set SAW_MODEL_VALUE=1
 if defined IS_VERSION (
   echo claude-code-test
   exit /b 0
@@ -1710,6 +1761,8 @@ if "%FAKE_NPX_ARGV%"=="" goto after_arg_capture
 echo permission=!SAW_PERMISSION! > "%FAKE_NPX_ARGV%"
 echo disallowed=!SAW_DISALLOWED! >> "%FAKE_NPX_ARGV%"
 echo nosession=!SAW_NOSESSION! >> "%FAKE_NPX_ARGV%"
+echo model=!SAW_MODEL! >> "%FAKE_NPX_ARGV%"
+echo modelvalue=!SAW_MODEL_VALUE! >> "%FAKE_NPX_ARGV%"
 echo arg3=%~3 >> "%FAKE_NPX_ARGV%"
 echo arg4=%~4 >> "%FAKE_NPX_ARGV%"
 echo arg5=%~5 >> "%FAKE_NPX_ARGV%"
@@ -1746,9 +1799,27 @@ try {
     Check "cycle writes Claude Implementer last capture" ((Test-Path $claudeLast) -and ($captureText -match "FAKE_CLAUDE_FAST_STDOUT") -and ($captureText -match "CLAUDE_EXECUTION_POLICY.md") -and ($captureText -match "Claude Execution Evidence") -and ($captureText -match "Command Transparency") -and ($captureText -match "Model Evidence"))
     Check "cycle writes sanitized Claude command capture" ((Test-Path $claudeCommand) -and ($commandText -match "Claude Implementer Command Capture") -and ($commandText -match "<prompt:redacted>") -and ($commandText -match "--safe-mode") -and ($commandText -match "--permission-mode acceptEdits") -and ($commandText -match "--disallowed-tools Bash") -and ($commandText -match "Sanitized: true"))
     Check "cycle appends Claude Implementer JSONL capture" ((Test-Path $claudeJsonl) -and ($null -ne $captureRecord) -and ($captureRecord.exitCode -eq 0) -and ($captureRecord.timedOut -eq $false) -and ($captureRecord.stdout -match "FAKE_CLAUDE_FAST_STDOUT"))
-    Check "JSONL capture includes command and model evidence" (($null -ne $captureRecord.commands) -and ($captureRecord.commands[0].sanitized -eq $true) -and ($captureRecord.commands[0].cmd -match "<prompt:redacted>") -and ($null -ne $captureRecord.modelEvidence) -and ($captureRecord.modelEvidence.actualModelObserved -eq "unknown/not exposed") -and ($captureRecord.modelEvidence.source -eq "not exposed") -and ($captureRecord.modelEvidence.confidence -eq "low"))
+    Check "JSONL capture includes command and model evidence" (($null -ne $captureRecord.commands) -and ($captureRecord.commands[0].sanitized -eq $true) -and ($captureRecord.commands[0].cmd -match "<prompt:redacted>") -and ($null -ne $captureRecord.modelEvidence) -and ($captureRecord.modelEvidence.requestedProfile -eq "standard") -and ($captureRecord.modelEvidence.actualModelObserved -eq "unknown/not exposed") -and ($captureRecord.modelEvidence.source -eq "built-in fallback") -and ($captureRecord.modelEvidence.confidence -eq "low"))
     $r2 = Invoke-Handoff -WorkDir $fx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
     Check "Claude capture artifacts are clean-tree exempt for cycle (2nd run still reaches the turn)" (($r2.Code -eq 7) -and ($r2.Out -notmatch "Working tree is not clean"))
+
+    Remove-Item -LiteralPath $fastArgv -Force -ErrorAction SilentlyContinue
+    $mappedHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.4.0 - Concrete Model Runner Test") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: economy"
+    $mappedConfig = '{"schemaVersion":1,"profiles":{"economy":{"claudeModel":"test-economy-model"}}}'
+    $mappedFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $mappedHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $mappedConfig } -InitGit
+    Initialize-FixtureGitBaseline -Dir $mappedFx
+    $r3 = Invoke-Handoff -WorkDir $mappedFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    $mappedArgvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
+    Check "Claude runner passes --model only for a concrete resolved mapping" (($r3.Code -eq 7) -and ($mappedArgvText -match "model=1") -and ($mappedArgvText -match "modelvalue=1"))
+    $mappedCapture = Get-Content -Raw -LiteralPath (Join-Path $mappedFx "CLAUDE_IMPLEMENTER_LAST.md")
+    Check "Claude capture records adapter-resolved profile and concrete model" (($mappedCapture -match "Requested policy/profile: economy") -and ($mappedCapture -match "Requested concrete model: test-economy-model") -and ($mappedCapture -match "Model source: MODEL_ROUTING.json"))
+
+    $highHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.4.0 - Escalation Guard Test") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: high_reasoning"
+    $highConfig = '{"schemaVersion":1,"profiles":{"high_reasoning":{"claudeModel":"test-high-model"}}}'
+    $highFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $highHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $highConfig } -InitGit
+    Initialize-FixtureGitBaseline -Dir $highFx
+    $r4 = Invoke-Handoff -WorkDir $highFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "concrete high_reasoning mapping requires explicit escalation approval" (($r4.Code -eq 1) -and ($r4.Out -match "requires explicit cost escalation approval") -and ($r4.Out -match "AllowModelEscalation")) -Detail "code=$($r4.Code); output=$($r4.Out)"
 } finally {
     $env:Path = $prevPath
     if ($null -eq $prevArgv) { Remove-Item Env:\FAKE_NPX_ARGV -ErrorAction SilentlyContinue } else { $env:FAKE_NPX_ARGV = $prevArgv }

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "inherit": {
+      "claudeModel": "inherit"
+    },
+    "economy": {
+      "claudeModel": "inherit"
+    },
+    "cheap_readonly": {
+      "claudeModel": "inherit"
+    },
+    "standard": {
+      "claudeModel": "inherit"
+    },
+    "high_reasoning": {
+      "claudeModel": "inherit"
+    }
+  }
+}

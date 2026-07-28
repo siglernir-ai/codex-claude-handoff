@@ -6,7 +6,7 @@ routine steps.
 
 ## Default Recommendation
 
-Use a capable standard coding model for most work:
+Use the `standard` capability profile for most work:
 
 - Reading repository files.
 - Updating documentation.
@@ -15,12 +15,13 @@ Use a capable standard coding model for most work:
 - Preparing handoff state.
 - Creating internal pilot reports.
 
-In the user's current operating pattern, this is the right place for the normal
-Codex model used for day-to-day work.
+Use `economy` for short, bounded, low-risk implementation and `cheap_readonly`
+for investigation or summarization. The profile is stable even when provider
+model names change.
 
 ## Use a Stronger Model For
 
-Switch to the strongest available model for short, high-value review passes:
+Select `high_reasoning` for short, high-value review passes:
 
 - Final publication readiness review.
 - Security and trust-model review.
@@ -29,8 +30,9 @@ Switch to the strongest available model for short, high-value review passes:
 - Large refactors with cross-file behavior.
 - Ambiguous failures where cheaper passes disagree.
 
-Do not keep the strongest model running for routine file inspection or mechanical
-documentation edits unless the work is highly sensitive.
+Do not keep a high-cost mapping active for routine inspection or mechanical
+documentation edits. A concrete `high_reasoning` Claude mapping requires
+`-AllowModelEscalation`.
 
 ## Suggested Split
 
@@ -53,14 +55,20 @@ Claude Code may expose model information in execution evidence, but it is not
 always available through the CLI. Treat model evidence as useful telemetry, not as
 a mandatory proof of correctness.
 
-Prefer policy-based wording over hard-coded model names:
+The Master writes a policy profile in `AI_HANDOFF.md`; the adapter resolves it
+through `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json` or a
+`HANDOFF_CLAUDE_MODEL_<PROFILE>` environment variable. Prefer profiles over
+hard-coded model names:
 
-- `inherit` for normal tasks.
-- `economical` for simple or repetitive work.
-- `strongest available` for publication, security, release, and architecture
-  review.
+- `economy` for simple, bounded implementation.
+- `cheap_readonly` for investigation.
+- `standard` for normal tasks.
+- `high_reasoning` for publication, security, release, and architecture review.
+- `inherit` when no local mapping is configured.
 
-This keeps the workflow useful when model names change.
+Run `.\scripts\handoff.ps1 models` to see the effective profile, concrete model,
+and resolution source. Updating a provider model requires changing one local
+mapping value, not editing the protocol.
 
 ## Operator Rule
 

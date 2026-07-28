@@ -55,7 +55,7 @@ Before significant work:
 
 After each Implementer turn, include a concise execution evidence note in your response and, when updating `AI_HANDOFF.md`, under verification or risks as appropriate:
 
-- Model policy requested: `inherit` / `standard` / `high_reasoning` / `cheap_readonly` / `explicit_user_choice`
+- Model policy requested: `auto` / `inherit` / `economy` / `standard` / `high_reasoning` / `cheap_readonly` / `explicit_user_choice`
 - Model requested via CLI: `none` or the value passed to the CLI
 - Actual model observed: `unknown` unless directly exposed by Claude Code output
 - Model relevance: `relevant` / `not relevant` / `unknown`

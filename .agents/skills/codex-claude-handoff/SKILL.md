@@ -6,8 +6,10 @@ description: >-
   rejected work can return for bounded correction, and neither ships alone.
   Durable project-local state preserves scope, decisions, evidence, and the next
   actor across windows and CLI turns; exact-scope and fail-closed checks stop
-  unsafe or inconsistent progress, while the user retains approval over sensitive
-  actions. Roles can be swapped with explicit user approval. Use when the user
+  unsafe or inconsistent progress. Stable capability profiles can resolve to
+  replaceable local model mappings without freezing provider model names, while
+  the user retains approval over sensitive actions. Roles can be swapped with
+  explicit user approval. Use when the user
   explicitly selects or names codex-claude-handoff, requests cross-agent
   implementation and independent review, setup, diagnosis, role reassignment, or
   the full supervised workflow. Do not trigger for ordinary project tasks. On
@@ -15,7 +17,7 @@ description: >-
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.3.2"
+  version: "3.4.0"
 ---
 
 # Codex-Claude Handoff
@@ -43,6 +45,11 @@ budget limits. General question dialogue still advances through explicit turns.
   approved scope for another bounded implementation pass.
 - **Continuity survives tool boundaries.** Project-local files preserve the next
   actor and the reasoning needed to resume across VS Code windows and CLI turns.
+- **Model choice follows the work, not a frozen model list.** The Master selects
+  a stable economy, standard, read-only, or high-reasoning profile. The installed
+  Claude adapter maps that profile to whatever current Claude model the project
+  configures and safely inherits the host default when no mapping exists. For
+  Codex UI turns, the same profile is guidance because the host controls selection.
 - Fails closed on inconsistent roles, scope mismatches, no-progress turns,
   timeouts, or malformed review output.
 - Keeps roles configurable: with explicit user approval, Codex and Claude Code can

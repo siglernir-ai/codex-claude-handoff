@@ -19,7 +19,7 @@ another pass, while scoped question and re-gating states let either role challen
 assumptions without silently guessing. Automated turns have explicit turn, time,
 and budget limits; general question dialogue still advances through explicit turns.
 
-> **Current release: v3.3.2 public beta.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.4.0 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -70,7 +70,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.3.2/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.4.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -105,8 +105,9 @@ and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md). Publication assets and the reproduci
 five-minute demo are maintained in [launch/](launch/README.md). Bug reports and
 pull requests should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-v3.3.2 hardens public packaging by making every discoverable Skill frontmatter
-YAML-safe and adding regression coverage for nested release mirrors. v3.3.1
+v3.4.0 adds dynamic, name-agnostic model routing while retaining the public
+packaging hardening that makes every discoverable Skill frontmatter
+YAML-safe and retains regression coverage for nested release mirrors. v3.3.1
 sharpened public discovery and positioning: the Skill distinguishes
 bounded cross-agent collaboration from session-summary handoffs and parallel
 multi-model answers, surfaces independent review and correction plus fail-closed
@@ -212,7 +213,7 @@ authorization is required.
 Current local status:
 
 - Implementer bound to Claude Code is callable for `READY_FOR_IMPLEMENTATION` and read-only `NEEDS_INVESTIGATION` through `handoff.ps1 cycle` / `run-next` / `loop`. Since v2.0.0 it runs through a bounded PowerShell process runner with stdout/stderr capture, `-TimeoutSeconds`, and process-tree termination on timeout. Since v3.1.7, automated turns use Claude Code `--safe-mode`; investigation turns additionally fail closed if any non-handoff file changes.
-- Since v2.3.0, Claude Code Implementer turns write local continuity captures (CLAUDE_IMPLEMENTER_LAST.md and CLAUDE_IMPLEMENTER.jsonl) and follow CLAUDE_EXECUTION_POLICY.md for dynamic model-policy labels, model relevance reporting, subagent evidence, and CLI/window context reconstruction. These files are gitignored and clean-tree-exempt. Since v2.4.0, automated Claude Code Implementer turns also write sanitized command evidence to `CLAUDE_IMPLEMENTER_COMMAND.md` and `CLAUDE_IMPLEMENTER.jsonl.commands[]`, plus model evidence with source/confidence fields.
+- Since v2.3.0, Claude Code Implementer turns write local continuity captures (CLAUDE_IMPLEMENTER_LAST.md and CLAUDE_IMPLEMENTER.jsonl) and follow CLAUDE_EXECUTION_POLICY.md for dynamic model-policy labels, model relevance reporting, subagent evidence, and CLI/window context reconstruction. These files are gitignored and clean-tree-exempt. Since v2.4.0, automated Claude Code Implementer turns also write sanitized command evidence to `CLAUDE_IMPLEMENTER_COMMAND.md` and `CLAUDE_IMPLEMENTER.jsonl.commands[]`, plus model evidence with source/confidence fields. Since v3.4.0, the Master selects a stable capability profile and the Claude adapter resolves it through environment or project-local `MODEL_ROUTING.json`, passing `--model` only when a concrete local mapping exists and otherwise inheriting the current Claude Code default.
 - Master bound to Codex is callable for `NEEDS_ANALYSIS` through explicit
   `handoff.ps1 master-run` + `handoff.ps1 master-apply` commands. Since v2.1.0 the operator
   may also opt this exact turn into one loop session with `loop -IncludeMaster`
@@ -1085,7 +1086,8 @@ in [ROADMAP.md](ROADMAP.md).
   remain hard stops and broader chat-window orchestration is still being built.
 - Full shared memory layer
 - `AI_SKILLS.md` registry
-- Automatic model switching
+- Automatic discovery or ranking of newly released provider models. v3.4.0 resolves
+  stable capability profiles through a replaceable local mapping instead.
 - Token-budget system
 
 ## Tested Workflow
@@ -1201,6 +1203,7 @@ carry the self-contained public-beta setup payload used by compatible skills cli
   CODEX.md         Codex entry pointer (resolves role -> MASTER.md or IMPLEMENTER.md)
   CLAUDE.md        Claude Code entry pointer (resolves role -> IMPLEMENTER.md or MASTER.md)
   CAPABILITIES.md  agent capability profile (tool strengths + default role binding)
+  MODEL_ROUTING.json stable capability-profile to current Claude model mapping
   VERSION          installed protocol version
 
 .agents/skills/codex-claude-handoff/          <- Codex Skill + bundled setup payload
@@ -1220,6 +1223,7 @@ project-local installation without fetching additional code.
 | `.ai/skills/codex-claude-handoff/MASTER.md` | Master + Reviewer role protocol |
 | `.ai/skills/codex-claude-handoff/IMPLEMENTER.md` | Implementer role protocol |
 | `.ai/skills/codex-claude-handoff/ADAPTERS.md` | Adapter registry and automation capability contract |
+| `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json` | Replaceable project-local mapping from stable capability profiles to current Claude models |
 | `.ai/skills/codex-claude-handoff/CODEX.md` | Codex entry pointer - resolves Codex's role |
 | `.ai/skills/codex-claude-handoff/CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's role |
 | `.agents/skills/codex-claude-handoff/` | Codex-facing portable Skill and offline setup payload |

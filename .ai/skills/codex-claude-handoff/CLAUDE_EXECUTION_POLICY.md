@@ -18,21 +18,42 @@ Use these profile labels in handoff notes and capture artifacts:
 
 | Profile | Meaning |
 |---|---|
-| `inherit` | Use Claude Code's configured/default model. This is the default. |
-| `standard` | Ordinary implementation. The runner may still use `inherit` unless the user configures a concrete model. |
+| `auto` | Let the protocol derive `cheap_readonly` for investigation and `standard` for ordinary implementation. This is the backward-compatible default. |
+| `inherit` | Use Claude Code's configured/default model. |
+| `economy` | Short, bounded, low-risk implementation or repetitive work. |
+| `standard` | Ordinary implementation. |
 | `high_reasoning` | Complex, risky, architectural, security, migration, or multi-file work. Requires explicit user approval before raising cost. |
 | `cheap_readonly` | Read-only investigation, summarization, or narrow mechanical checks when a cheaper profile is configured. |
 | `explicit_user_choice` | The user explicitly named a model/profile for this turn. Record the user's requested value. |
 
-The protocol should prefer `inherit` unless the user or a local project policy overrides it.
-Do not hard-code transient model names into the protocol method. If a concrete CLI model flag is used,
-record it as evidence for that turn.
+The Master writes `Model Profile` in the `AI_HANDOFF.md` Status section. It selects a
+capability and cost class, never a transient provider model name. `auto` resolves to
+`cheap_readonly` for `NEEDS_INVESTIGATION` and `standard` for other automated
+Implementer turns.
+
+The adapter resolves the selected profile in this order:
+
+1. Explicit `-Model` command-line choice.
+2. `HANDOFF_CLAUDE_MODEL_<PROFILE>` process environment variable.
+3. Project-local `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json`.
+4. Safe fallback to `inherit`.
+
+`MODEL_ROUTING.json` intentionally ships with every profile mapped to `inherit`.
+Projects may replace a profile value with any model identifier supported by their
+current Claude Code installation. New provider models require only a local mapping
+change, not a protocol release. Run `handoff.ps1 models` to inspect the effective
+selection before spending budget.
+
+When `high_reasoning` resolves to a concrete model, `cycle` and `loop` fail closed
+unless the operator supplies `-AllowModelEscalation`. An explicit `-Model` value is
+recorded as `explicit_user_choice`. Never infer that a requested model was actually
+used unless the runtime exposes direct evidence.
 
 ## Required Claude Execution Evidence
 
 After each Implementer turn, Claude should report these fields in its response and/or `AI_HANDOFF.md`:
 
-- Model policy requested: `inherit` / `standard` / `high_reasoning` / `cheap_readonly` / `explicit_user_choice`
+- Model policy requested: `auto` / `inherit` / `economy` / `standard` / `high_reasoning` / `cheap_readonly` / `explicit_user_choice`
 - Model requested via CLI: `none` or the value passed to the CLI
 - Actual model observed: `unknown` unless directly exposed by Claude Code output
 - Model relevance: `relevant` / `not relevant` / `unknown`

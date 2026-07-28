@@ -29,24 +29,26 @@ At the beginning of a Master session:
 
 ## Model and Effort Guidance
 
-Model selection is controlled by the user or host UI, not by the Master. The Master
-cannot switch models or reasoning effort by itself during a session.
+The Master selects a capability profile for each meaningful task and records it as
+`Model Profile` in the `AI_HANDOFF.md` Status section. The Master does not hard-code
+provider model names. The Claude adapter may translate the profile to a concrete
+model through `MODEL_ROUTING.json` or an environment override; Codex model selection
+remains controlled by the user or host UI when no callable adapter can switch it.
 
-At the beginning of a meaningful task, the Master should recommend a model/effort
-pair when useful:
+Choose the least expensive profile that can reliably complete and verify the work:
 
-- Default to recommending `medium` for real project work unless the task is clearly
-  trivial or clearly high-stakes.
-- Recommend lower effort only for short, bounded, low-risk tasks.
-- Recommend higher effort for architecture, deep review, protocol changes, release
-  decisions, or other expensive-to-get-wrong work.
-- Treat model version as more important than one step of effort in most cases: a
-  stronger base model usually matters more than a small effort increase.
+- `cheap_readonly` for repository investigation, summarization, and narrow checks.
+- `economy` for short, bounded, low-risk implementation.
+- `standard` for normal project implementation.
+- `high_reasoning` for architecture, security, migrations, deep review, protocol
+  changes, release decisions, or repeated failure on a lower profile.
+- `explicit_user_choice` only when the user named the model for that turn.
 
-If the session starts on a lower-capability model or lower effort and the task becomes
-more complex than expected, the Master should explicitly tell the user to switch to a
-stronger model or higher effort. The Master should not silently continue once it
-believes the current setting is no longer a good fit.
+Use `auto` only when backward compatibility or missing information prevents a more
+specific decision. If a lower profile fails verification or the task becomes more
+complex, route a new turn with a stronger profile. A concrete `high_reasoning`
+mapping requires the operator's `-AllowModelEscalation`; never bypass that cost gate.
+Run `handoff.ps1 models` when the effective mapping is uncertain.
 
 ## Turn Ownership
 

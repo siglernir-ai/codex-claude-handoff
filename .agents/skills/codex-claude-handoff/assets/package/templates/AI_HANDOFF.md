@@ -6,6 +6,7 @@
 - Last Updated By: User
 - Last Updated At: YYYY-MM-DD
 - Current Task: Initial setup
+- Model Profile: auto
 
 ## Last Update
 - Actor: User

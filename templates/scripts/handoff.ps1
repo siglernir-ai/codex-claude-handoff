@@ -11,6 +11,8 @@ param(
     [string]$Tag,
     [string]$NextTask,
     [string]$SupersededVersions,
+    [string]$ModelProfile,
+    [string]$Model,
     [int]$TimeoutSeconds = 180,
     [switch]$Yes,
     [switch]$IncludeMaster,
@@ -18,6 +20,7 @@ param(
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [switch]$CheckUpdates,
+    [switch]$AllowModelEscalation,
     [decimal]$BudgetUsd = 2,
     [int]$MaxTurns = 3,
     [decimal]$SessionBudgetUsd = 6
@@ -77,14 +80,119 @@ $StateAlias = @{
 
 function Read-HandoffState {
     param([string[]]$Lines)
-    $status = @{ State = "(unknown)"; WaitingFor = "(unknown)"; CurrentTask = "(unknown)" }
+    $status = @{ State = "(unknown)"; WaitingFor = "(unknown)"; CurrentTask = "(unknown)"; ModelProfile = "auto" }
     foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Status")) {
         if ($line -match "^- State:\s*(.+)")        { $status.State       = $Matches[1].Trim() }
         if ($line -match "^- Waiting For:\s*(.+)")  { $status.WaitingFor  = $Matches[1].Trim() }
         if ($line -match "^- Current Task:\s*(.+)") { $status.CurrentTask = $Matches[1].Trim() }
+        if ($line -match "^- Model Profile:\s*(.+)") { $status.ModelProfile = $Matches[1].Trim() }
     }
     if ($StateAlias.ContainsKey($status.State)) { $status.State = $StateAlias[$status.State] }
     return $status
+}
+
+# --- Dynamic model routing ---
+
+$ModelRoutingFile = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+$ValidModelProfiles = @("auto", "inherit", "economy", "cheap_readonly", "standard", "high_reasoning", "explicit_user_choice")
+
+function Normalize-ModelProfile {
+    param([string]$Value)
+    $normalized = if ([string]::IsNullOrWhiteSpace($Value)) { "auto" } else { $Value.Trim().ToLowerInvariant() }
+    switch ($normalized) {
+        "economical" { return "economy" }
+        "cheap" { return "economy" }
+        "readonly" { return "cheap_readonly" }
+        "deep_reasoning" { return "high_reasoning" }
+        "strongest_available" { return "high_reasoning" }
+        default { return $normalized }
+    }
+}
+
+function Test-SafeModelValue {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    return ($Value -match "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$")
+}
+
+function Resolve-ModelSelection {
+    param(
+        [string]$ForState,
+        [string]$HandoffProfile,
+        [string]$CommandProfile,
+        [string]$CommandModel
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $requested = if (-not [string]::IsNullOrWhiteSpace($CommandProfile)) {
+        Normalize-ModelProfile -Value $CommandProfile
+    } else {
+        Normalize-ModelProfile -Value $HandoffProfile
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CommandModel)) {
+        $requested = "explicit_user_choice"
+    }
+    if ($ValidModelProfiles -notcontains $requested) {
+        $errors.Add("Unknown model profile '$requested'. Valid profiles: $($ValidModelProfiles -join ', ').")
+    }
+
+    $effective = $requested
+    if ($effective -eq "auto") {
+        $effective = if ($ForState -eq "NEEDS_INVESTIGATION") { "cheap_readonly" } else { "standard" }
+    }
+
+    $resolvedModel = "inherit"
+    $source = "built-in fallback"
+    $config = $null
+    if (Test-Path -LiteralPath $ModelRoutingFile) {
+        try {
+            $config = Get-Content -Raw -LiteralPath $ModelRoutingFile | ConvertFrom-Json -ErrorAction Stop
+            if ($config.schemaVersion -ne 1) {
+                $errors.Add("MODEL_ROUTING.json schemaVersion must be 1.")
+            }
+        } catch {
+            $errors.Add("MODEL_ROUTING.json is invalid JSON: $($_.Exception.Message)")
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CommandModel)) {
+        $resolvedModel = $CommandModel.Trim()
+        $source = "command line -Model"
+    } else {
+        $envName = "HANDOFF_CLAUDE_MODEL_" + $effective.ToUpperInvariant()
+        $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
+        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+            $resolvedModel = $envValue.Trim()
+            $source = "environment $envName"
+        } elseif ($null -ne $config -and $null -ne $config.profiles) {
+            $profileConfig = $config.profiles.PSObject.Properties[$effective]
+            if ($null -ne $profileConfig -and $null -ne $profileConfig.Value.claudeModel) {
+                $candidate = [string]$profileConfig.Value.claudeModel
+                if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                    $resolvedModel = $candidate.Trim()
+                    $source = "MODEL_ROUTING.json"
+                }
+            }
+        }
+    }
+
+    if ($resolvedModel -eq "default") { $resolvedModel = "inherit" }
+    if ($resolvedModel -ne "inherit" -and -not (Test-SafeModelValue -Value $resolvedModel)) {
+        $errors.Add("Resolved model value must be a single model identifier using letters, digits, dot, underscore, colon, slash, at-sign, or hyphen.")
+    }
+
+    $needsEscalationApproval = ($effective -eq "high_reasoning" -and $resolvedModel -ne "inherit")
+    return @{
+        Ok = ($errors.Count -eq 0)
+        Errors = $errors
+        RequestedProfile = $requested
+        EffectiveProfile = $effective
+        ClaudeModel = $resolvedModel
+        Source = $source
+        UsesConcreteModel = ($resolvedModel -ne "inherit")
+        NeedsEscalationApproval = $needsEscalationApproval
+    }
 }
 
 # --- Role binding (State -> Role -> Tool) ---
@@ -310,10 +418,38 @@ function Get-ClaudeEvidenceField {
     return $Default
 }
 
+function Get-ClaudeModelCommandSuffix {
+    if ($null -ne $script:ModelSelection -and $script:ModelSelection.UsesConcreteModel) {
+        return " --model `"$($script:ModelSelection.ClaudeModel)`""
+    }
+    return ""
+}
+
+function Get-SanitizedClaudeInvocation {
+    return "npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"$(Get-ClaudeModelCommandSuffix)"
+}
+
+function Test-ModelTurnPreflight {
+    if (-not $script:ModelSelection.Ok) {
+        Write-Host "Model routing blocked."
+        foreach ($error in $script:ModelSelection.Errors) { Write-Host "Reason: $error" }
+        Write-Host "Stop category: Environment/Preflight - repair model routing before retrying."
+        return $false
+    }
+    if ($script:ModelSelection.NeedsEscalationApproval -and -not $AllowModelEscalation) {
+        Write-Host "Model routing blocked."
+        Write-Host "Reason: profile high_reasoning resolves to a concrete model and requires explicit cost escalation approval."
+        Write-Host "Next step: rerun with -AllowModelEscalation after reviewing the resolved model with 'handoff.ps1 models'."
+        Write-Host "Stop category: User Decision - model cost escalation approval required."
+        return $false
+    }
+    return $true
+}
+
 function New-ClaudeCommandEvidence {
     param([int]$ExitCode)
     return @([ordered]@{
-        cmd = "npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`""
+        cmd = Get-SanitizedClaudeInvocation
         exitCode = $ExitCode
         purpose = "run Claude Code Implementer turn through the bounded handoff adapter"
         sanitized = $true
@@ -342,7 +478,7 @@ function Write-ClaudeCommandCapture {
             "## Sanitized Invocation",
             "",
             '```text',
-            "npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            (Get-SanitizedClaudeInvocation),
             '```',
             "",
             "## Redaction Rules",
@@ -372,10 +508,10 @@ function Write-ClaudeImplementerCapture {
         $cleanStdout = Remove-AnsiEscape -Value $StdoutText
         $stdoutForMd = if ([string]::IsNullOrWhiteSpace($cleanStdout)) { "(empty)" } else { $cleanStdout.TrimEnd() }
         $stderrForMd = if ([string]::IsNullOrWhiteSpace($StderrText)) { "(empty)" } else { $StderrText.TrimEnd() }
-        $modelPolicyRequested = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model policy requested" -Default "inherit"
-        $modelRequestedViaCli = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model requested via CLI" -Default "none"
+        $modelPolicyRequested = if ($null -ne $script:ModelSelection) { $script:ModelSelection.EffectiveProfile } else { Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model policy requested" -Default "inherit" }
+        $modelRequestedViaCli = if ($null -ne $script:ModelSelection -and $script:ModelSelection.UsesConcreteModel) { $script:ModelSelection.ClaudeModel } else { "none (inherit)" }
         $actualModelObserved = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Actual model observed" -Default "unknown/not exposed"
-        $modelSource = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model source" -Default "not exposed"
+        $modelSource = if ($null -ne $script:ModelSelection) { $script:ModelSelection.Source } else { Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model source" -Default "not exposed" }
         $modelConfidence = Get-ClaudeEvidenceField -Text $cleanStdout -Label "Model confidence" -Default "low"
         $commands = New-ClaudeCommandEvidence -ExitCode $ExitCode
         Write-ClaudeCommandCapture -Timestamp $ts -ExitCode $ExitCode -TimedOut $TimedOut
@@ -392,7 +528,7 @@ function Write-ClaudeImplementerCapture {
             "## Command Transparency",
             "",
             "- Command Evidence: $ClaudeImplementerCommandName",
-            "- Sanitized Invocation: npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt <system-prompt:redacted> -p <prompt:redacted> --permission-mode acceptEdits --disallowed-tools Bash --max-budget-usd <budget> --no-session-persistence --output-format text --setting-sources `"project,local`"",
+            "- Sanitized Invocation: $(Get-SanitizedClaudeInvocation)",
             "",
             "## Model Evidence",
             "",
@@ -454,7 +590,10 @@ function Invoke-ClaudeTurn {
         return 1
     }
 
+    if (-not (Test-ModelTurnPreflight)) { return 1 }
+
     $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available to talk to during this turn. Do NOT greet anyone, do NOT ask what to work on, do NOT ask for plugin choices, do NOT wait for input, and do NOT treat this as the start of an interactive session.`nRead NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: immediately either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. Do not stop to ask the operator.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nTreat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification: reason about previously supported input classes, and avoid broad transformations or coercion changes unless the task explicitly requires them.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
+    $prompt += "`nModel routing for this turn: effective profile=$($script:ModelSelection.EffectiveProfile); resolved Claude model=$($script:ModelSelection.ClaudeModel); resolution source=$($script:ModelSelection.Source). Report these requested values as adapter evidence, but do not claim they prove the actual runtime model unless Claude Code exposes it directly."
     $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
     $prompt += "`nBash is unavailable in this automated turn. Do NOT create temporary helper, capture, runner, or wrapper scripts to work around that restriction. Create or edit only files required by the approved task. If verification cannot run without Bash, record it as not run with the reason; never claim a command or test passed without observed output."
     $systemPrompt += " Bash is unavailable: never create helper, capture, runner, or wrapper scripts to simulate shell verification, and never claim unobserved verification. Edit only task-required files and the local handoff."
@@ -475,7 +614,8 @@ param(
     [string]$PromptFile,
     [string]$SystemPromptFile,
     [string]$BudgetUsdText,
-    [string]$ChildPidFile
+    [string]$ChildPidFile,
+    [string]$ModelName
 )
 $ErrorActionPreference = "Continue"
 $prompt = (Get-Content -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
@@ -500,6 +640,10 @@ $argList = @(
     '--setting-sources',
     'project,local'
 )
+if (-not [string]::IsNullOrWhiteSpace($ModelName) -and $ModelName -ne '__HANDOFF_INHERIT__') {
+    $argList += '--model'
+    $argList += $ModelName
+}
 try {
     $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
     if (-not $npxCommand) { $npxCommand = Get-Command npx -ErrorAction Stop }
@@ -531,7 +675,8 @@ try {
         Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -NoNewline -ErrorAction Stop
         Set-Content -Path $sysPromptFile -Value $systemPrompt -Encoding utf8 -NoNewline -ErrorAction Stop
         Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
-        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile)
+        $runnerModel = if ($script:ModelSelection.UsesConcreteModel) { $script:ModelSelection.ClaudeModel } else { "__HANDOFF_INHERIT__" }
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile, '-ModelName', $runnerModel)
         $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
         $processJob = New-HandoffProcessJob -Process $proc
     } catch {
@@ -615,8 +760,8 @@ function Get-AdapterProfile {
     if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION");
-            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`"";
-            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; NEEDS_INVESTIGATION is source-read-only and checked after the turn; Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
+            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`" [--model `"<resolved-local-model>`"]";
+            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; dynamic model profile resolves through local configuration and falls back to inherit; concrete high_reasoning routing requires -AllowModelEscalation; NEEDS_INVESTIGATION is source-read-only and checked after the turn; Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated; planning and question turns remain manual.";
             NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION or NEEDS_INVESTIGATION; use next + paste for other Implementer states."
@@ -774,9 +919,11 @@ $HandoffStatus = Read-HandoffState -Lines $Lines
 $State         = $HandoffStatus.State
 $WaitingFor    = $HandoffStatus.WaitingFor
 $CurrentTask   = $HandoffStatus.CurrentTask
+$HandoffModelProfile = $HandoffStatus.ModelProfile
+$script:ModelSelection = Resolve-ModelSelection -ForState $State -HandoffProfile $HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model
 $RoleCheckpoint = Test-RoleCheckpoint
 
-if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status')) {
+if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models')) {
     Write-RoleCheckpointFailure -Checkpoint $RoleCheckpoint
     exit 12
 }
@@ -874,6 +1021,7 @@ function Invoke-UserNext {
     Write-Host "State:        $State"
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
+    Write-Host "Model:        $($script:ModelSelection.EffectiveProfile) -> $($script:ModelSelection.ClaudeModel) ($($script:ModelSelection.Source))"
     Write-Host ""
 
     if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
@@ -980,6 +1128,35 @@ function Write-DoctorLine {
     Write-Host "$Level  $Message"
 }
 
+function Invoke-Models {
+    Write-Host ""
+    Write-Host "Model Routing"
+    Write-Host "State:              $State"
+    Write-Host "Handoff profile:    $HandoffModelProfile"
+    Write-Host "Requested profile:  $($script:ModelSelection.RequestedProfile)"
+    Write-Host "Effective profile:  $($script:ModelSelection.EffectiveProfile)"
+    Write-Host "Claude model:       $($script:ModelSelection.ClaudeModel)"
+    Write-Host "Resolution source:  $($script:ModelSelection.Source)"
+    Write-Host "Config:             .ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+    if (-not $script:ModelSelection.Ok) {
+        Write-Host "Status:             BLOCKED"
+        foreach ($error in $script:ModelSelection.Errors) { Write-Host "Reason:             $error" }
+        exit 1
+    }
+    Write-Host "Status:             OK"
+    if ($script:ModelSelection.ClaudeModel -eq "inherit") {
+        Write-Host "Behavior:           Claude Code uses its configured/default model."
+    } else {
+        Write-Host "Behavior:           The Claude adapter passes --model with the resolved value."
+    }
+    if ($script:ModelSelection.NeedsEscalationApproval) {
+        Write-Host "Approval:           -AllowModelEscalation is required for cycle/loop."
+    }
+    Write-Host ""
+    Write-Host "Override order: -Model, HANDOFF_CLAUDE_MODEL_<PROFILE>, MODEL_ROUTING.json, inherit."
+    Write-Host "The protocol selects capability profiles; concrete provider model names remain local and replaceable."
+}
+
 function Invoke-DoctorRemoteVersionCheck {
     param([string]$InstalledVersion)
 
@@ -1049,6 +1226,7 @@ function Invoke-Doctor {
         Write-DoctorLine "FAIL" "Git repo not detected from this directory."
     }
 
+    $doctorStatus = @{ State = "(unknown)"; WaitingFor = "(unknown)"; CurrentTask = "(unknown)"; ModelProfile = "auto" }
     if (Test-Path $HandoffFile) {
         $doctorStatus = Read-HandoffState -Lines $Lines
         if ($doctorStatus.State -ne "(unknown)" -and $doctorStatus.WaitingFor -ne "(unknown)") {
@@ -1084,6 +1262,7 @@ function Invoke-Doctor {
         ".ai\skills\codex-claude-handoff\ADAPTERS.md",
         ".ai\skills\codex-claude-handoff\PROTOCOL_METHOD.md",
         ".ai\skills\codex-claude-handoff\CLAUDE_EXECUTION_POLICY.md",
+        ".ai\skills\codex-claude-handoff\MODEL_ROUTING.json",
         ".ai\roles\ROLE_ASSIGNMENT.md"
     )
     $missingProtocolFiles = @($requiredProtocolFiles | Where-Object { -not (Test-Path (Join-Path (Get-Location) $_)) })
@@ -1105,6 +1284,14 @@ function Invoke-Doctor {
     } else {
         Write-DoctorLine "FAIL" "Role checkpoint: drift or invalid Reviewer/Implementer binding detected."
         foreach ($error in $RoleCheckpoint.Errors) { Write-Host "      $error" }
+    }
+
+    $doctorModelSelection = Resolve-ModelSelection -ForState $doctorStatus.State -HandoffProfile $doctorStatus.ModelProfile -CommandProfile $ModelProfile -CommandModel $Model
+    if ($doctorModelSelection.Ok) {
+        Write-DoctorLine "OK" "Model routing: profile=$($doctorModelSelection.EffectiveProfile); Claude model=$($doctorModelSelection.ClaudeModel); source=$($doctorModelSelection.Source)"
+    } else {
+        Write-DoctorLine "FAIL" "Model routing configuration is invalid."
+        foreach ($error in $doctorModelSelection.Errors) { Write-Host "      $error" }
     }
 
     $tree = Get-WorkingTreeState
@@ -1328,6 +1515,7 @@ function Invoke-Start {
 - Last Updated By: User
 - Last Updated At: $date
 - Current Task: $taskLine
+- Model Profile: auto
 
 ## Last Update
 - Actor: User
@@ -2155,6 +2343,7 @@ function New-NextHandoffContent {
 - Last Updated By: Sequence Advance
 - Last Updated At: $date
 - Current Task: $nextTask
+- Model Profile: auto
 
 ## Last Update
 - Actor: Sequence Advance (local coordination via handoff.ps1 sequence-advance)
@@ -2867,7 +3056,8 @@ function Invoke-ReviewApply {
         "- Waiting For: $newWaiting",
         "- Last Updated By: Reviewer",
         "- Last Updated At: $date",
-        "- Current Task: $CurrentTask"
+        "- Current Task: $CurrentTask",
+        "- Model Profile: $HandoffModelProfile"
     )
     $lastUpdateBody = @(
         "- Actor: Reviewer (Codex), applied from the captured review verdict via review-apply",
@@ -3086,14 +3276,15 @@ function Invoke-MasterRun {
         "Inspect ONLY these sources, and only as needed: AI_HANDOFF.md for the current task; AI_SEQUENCE.md for current and next task ordering if it exists; the output of git status --short; and, only if needed to classify, the protocol docs .ai/skills/codex-claude-handoff/ADAPTERS.md and .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md. Do not modify any file. " +
         "Decide how the current NEEDS_ANALYSIS task should be routed (which gate it needs and which actors should hold it). " +
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
-        "Finish quickly. End your reply with a recommendation block of EXACTLY six lines, each on its own line, nothing after them, and no surrounding punctuation. " +
+        "Finish quickly. End your reply with a recommendation block of EXACTLY seven lines, each on its own line, nothing after them, and no surrounding punctuation. " +
         "Line 1 must be 'MASTER_RECOMMENDATION: ' followed by exactly one of READY_FOR_IMPLEMENTATION, PLAN_REQUIRED, NEEDS_INVESTIGATION, or BLOCKED. " +
         "Line 2 must be 'WAITING_FOR: ' followed by exactly one of Implementer or User. " +
         "Line 3 must be 'IMPLEMENTER: ' followed by a tool name or TBD. " +
         "Line 4 must be 'REVIEWER: ' followed by a tool name or TBD. " +
         "Line 5 must be 'TASK: ' followed by the current Current Task exactly. " +
-        "Line 6 must be 'REASON: ' followed by a single concise one-line reason. " +
-        "Do not write MASTER_RECOMMENDATION, WAITING_FOR, IMPLEMENTER, REVIEWER, TASK, or REASON at the start of any earlier line."
+        "Line 6 must be 'MODEL_PROFILE: ' followed by exactly one of inherit, economy, cheap_readonly, standard, or high_reasoning. Choose the least expensive profile that can reliably complete and verify the work; use high_reasoning only for expensive-to-get-wrong work. " +
+        "Line 7 must be 'REASON: ' followed by a single concise one-line reason. " +
+        "Do not write MASTER_RECOMMENDATION, WAITING_FOR, IMPLEMENTER, REVIEWER, TASK, MODEL_PROFILE, or REASON at the start of any earlier line."
 
     Write-Host ""
     Write-Host "Running Codex read-only Master analysis (timeout: ${TimeoutSeconds}s)..."
@@ -3225,7 +3416,7 @@ function Invoke-MasterRun {
 
 function Get-MasterRecommendationFromCapture {
     param([string]$Path, [string]$ExpectedTask)
-    $result = @{ Ok = $false; Recommendation = ""; WaitingFor = ""; Implementer = ""; Reviewer = ""; Task = ""; Reason = ""; Error = "" }
+    $result = @{ Ok = $false; Recommendation = ""; WaitingFor = ""; Implementer = ""; Reviewer = ""; Task = ""; ModelProfile = ""; Reason = ""; Error = "" }
     if (-not (Test-Path -LiteralPath $Path)) {
         $result.Error = "No captured Master recommendation file ($MasterLastName) found. Run 'handoff.ps1 master-run' first to capture a Codex Master recommendation."
         return $result
@@ -3244,18 +3435,25 @@ function Get-MasterRecommendationFromCapture {
     $implementerLines = @($captureLines | Where-Object { $_ -match '^\s*IMPLEMENTER:\s*(.+?)\s*$' })
     $reviewerLines    = @($captureLines | Where-Object { $_ -match '^\s*REVIEWER:\s*(.+?)\s*$' })
     $taskLines        = @($captureLines | Where-Object { $_ -match '^\s*TASK:\s*(.+?)\s*$' })
+    $modelProfileLines = @($captureLines | Where-Object { $_ -match '^\s*MODEL_PROFILE:\s*(.+?)\s*$' })
     $reasonLines      = @($captureLines | Where-Object { $_ -match '^\s*REASON:\s*(.+?)\s*$' })
     if ($recLines.Count         -ne 1) { $result.Error = "Captured recommendation must contain exactly one MASTER_RECOMMENDATION: line (found $($recLines.Count)). The capture is malformed or stale; re-run master-run."; return $result }
     if ($waitingLines.Count     -ne 1) { $result.Error = "Captured recommendation must contain exactly one WAITING_FOR: line (found $($waitingLines.Count))."; return $result }
     if ($implementerLines.Count -ne 1) { $result.Error = "Captured recommendation must contain exactly one IMPLEMENTER: line (found $($implementerLines.Count))."; return $result }
     if ($reviewerLines.Count    -ne 1) { $result.Error = "Captured recommendation must contain exactly one REVIEWER: line (found $($reviewerLines.Count))."; return $result }
     if ($taskLines.Count        -ne 1) { $result.Error = "Captured recommendation must contain exactly one TASK: line (found $($taskLines.Count))."; return $result }
+    if ($modelProfileLines.Count -gt 1) { $result.Error = "Captured recommendation may contain at most one MODEL_PROFILE: line (found $($modelProfileLines.Count))."; return $result }
     if ($reasonLines.Count      -ne 1) { $result.Error = "Captured recommendation must contain exactly one REASON: line (found $($reasonLines.Count))."; return $result }
     [void]($recLines[0]         -match '^\s*MASTER_RECOMMENDATION:\s*(.+?)\s*$'); $rec         = $Matches[1].Trim()
     [void]($waitingLines[0]     -match '^\s*WAITING_FOR:\s*(.+?)\s*$');           $waiting     = $Matches[1].Trim()
     [void]($implementerLines[0] -match '^\s*IMPLEMENTER:\s*(.+?)\s*$');           $implementer = $Matches[1].Trim()
     [void]($reviewerLines[0]    -match '^\s*REVIEWER:\s*(.+?)\s*$');              $reviewer    = $Matches[1].Trim()
     [void]($taskLines[0]        -match '^\s*TASK:\s*(.+?)\s*$');                  $task        = $Matches[1].Trim()
+    $capturedModelProfile = ""
+    if ($modelProfileLines.Count -eq 1) {
+        [void]($modelProfileLines[0] -match '^\s*MODEL_PROFILE:\s*(.+?)\s*$')
+        $capturedModelProfile = Normalize-ModelProfile -Value $Matches[1].Trim()
+    }
     [void]($reasonLines[0]      -match '^\s*REASON:\s*(.+?)\s*$');                $reason      = $Matches[1].Trim()
 
     $allowed = @("READY_FOR_IMPLEMENTATION", "PLAN_REQUIRED", "NEEDS_INVESTIGATION", "BLOCKED")
@@ -3273,6 +3471,19 @@ function Get-MasterRecommendationFromCapture {
     }
     if ([string]::IsNullOrWhiteSpace($reason)) {
         $result.Error = "REASON in the captured recommendation must be a non-empty line."
+        return $result
+    }
+    $resolvedProfile = if (-not [string]::IsNullOrWhiteSpace($capturedModelProfile)) {
+        $capturedModelProfile
+    } elseif ($rec -eq "NEEDS_INVESTIGATION") {
+        "cheap_readonly"
+    } elseif ($rec -eq "BLOCKED") {
+        "inherit"
+    } else {
+        "standard"
+    }
+    if (@("inherit", "economy", "cheap_readonly", "standard", "high_reasoning") -notcontains $resolvedProfile) {
+        $result.Error = "MODEL_PROFILE must be exactly one of inherit, economy, cheap_readonly, standard, or high_reasoning (found: '$resolvedProfile')."
         return $result
     }
     if ($rec -eq "BLOCKED") {
@@ -3305,6 +3516,7 @@ function Get-MasterRecommendationFromCapture {
     $result.Implementer = $implementer
     $result.Reviewer = $reviewer
     $result.Task = $task
+    $result.ModelProfile = $resolvedProfile
     $result.Reason = $reason
     return $result
 }
@@ -3360,6 +3572,7 @@ function Show-MasterApplyPlan {
         Write-Host "Recommendation:     $($rec.Recommendation)"
         Write-Host "Captured waiting:   $($rec.WaitingFor)"
         Write-Host "Captured actors:    Implementer=$($rec.Implementer); Reviewer=$($rec.Reviewer)"
+        Write-Host "Model profile:      $($rec.ModelProfile)"
         Write-Host "Captured reason:    $($rec.Reason)"
         Write-Host "Would transition to: $($rec.Recommendation) / Waiting For: $($rec.WaitingFor)"
     } else {
@@ -3413,7 +3626,8 @@ function Invoke-MasterApply {
         "- Waiting For: $($rec.WaitingFor)",
         "- Last Updated By: Master",
         "- Last Updated At: $date",
-        "- Current Task: $CurrentTask"
+        "- Current Task: $CurrentTask",
+        "- Model Profile: $($rec.ModelProfile)"
     )
     $lastUpdateBody = @(
         "- Actor: Master (Codex), applied from the captured Master recommendation via master-apply",
@@ -3652,7 +3866,8 @@ function Invoke-InterruptedCorrectionRecovery {
         "- Waiting For: Reviewer",
         "- Last Updated By: Automation Recovery",
         "- Last Updated At: $date",
-        "- Current Task: $CurrentTask"
+        "- Current Task: $CurrentTask",
+        "- Model Profile: $HandoffModelProfile"
     )
     $lastUpdateBody = @(
         "- Actor: Automation Recovery after interrupted Claude correction",
@@ -3794,6 +4009,7 @@ function Invoke-Cycle {
         Write-Host "${CommandLabel}: resuming the Reviewer's BLOCKED correction on the exact approved Changed Files scope."
         Write-Host "Safety: unrelated dirty files would still block this turn."
     }
+    if (-not (Test-ModelTurnPreflight)) { exit 1 }
 
     Write-Host ""
     Write-Host "Preparing assisted Implementer turn..."
@@ -3802,6 +4018,8 @@ function Invoke-Cycle {
     Write-Host "Actor:        $implementerTool (Implementer)"
     Write-Host "Permission:   acceptEdits  (Bash explicitly disallowed)"
     Write-Host "Budget limit: `$$BudgetUsd"
+    Write-Host "Model profile: $($script:ModelSelection.EffectiveProfile)"
+    Write-Host "Claude model:  $($script:ModelSelection.ClaudeModel)  ($($script:ModelSelection.Source))"
     Write-Host "Adapter:      callable via ADAPTERS.md contract"
     Write-Host ""
     if ($State -eq "NEEDS_INVESTIGATION") {
@@ -3835,7 +4053,7 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Command: bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd $BudgetUsd --no-session-persistence --output-format text --setting-sources `"project,local`""
+    Write-Host "Command: bounded PowerShell runner -> $(Get-SanitizedClaudeInvocation)"
     Write-Host ""
     Write-Host "Timeout:     ${TimeoutSeconds}s (process tree is killed on timeout)"
     if ($State -eq "NEEDS_INVESTIGATION") {
@@ -4133,6 +4351,8 @@ function Invoke-Loop {
         $script:State       = $freshStatus.State
         $script:WaitingFor  = $freshStatus.WaitingFor
         $script:CurrentTask = $freshStatus.CurrentTask
+        $script:HandoffModelProfile = $freshStatus.ModelProfile
+        $script:ModelSelection = Resolve-ModelSelection -ForState $script:State -HandoffProfile $script:HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model
         $script:Binding     = Get-RoleBinding
 
         $entry = $ActionMap[$script:State]
@@ -4363,6 +4583,11 @@ function Invoke-Loop {
             exit 4
         }
 
+        if (-not (Test-ModelTurnPreflight)) {
+            Write-LoopLog "turn=$turnsRun stop reason=model-routing-preflight exit=1"
+            exit 1
+        }
+
         # Preflight: Claude Code availability
         if (-not (Test-ClaudeAvailable)) {
             Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
@@ -4494,6 +4719,7 @@ function Invoke-Loop {
 switch ($Command) {
     "work"         { Invoke-Work }
     "doctor"      { Invoke-Doctor }
+    "models"      { Invoke-Models }
     "status"       { Invoke-Status }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
@@ -4523,7 +4749,9 @@ switch ($Command) {
             Write-Host ""
             Write-Host "Commands:"
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
-    Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
+            Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
+            Write-Host "  models [-ModelProfile P] [-Model M]"
+            Write-Host "                            Show the effective capability profile and Claude model resolution. Read-only."
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
@@ -4549,11 +4777,11 @@ switch ($Command) {
             Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
             Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeMaster."
-            Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
+            Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-Yes]"
             Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
             Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]"
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-IncludeMaster] [-IncludeReviewer] [-Yes]"
             Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor unless that actor is explicitly included for this session. With -IncludeMaster, also auto-runs the Codex Master's NEEDS_ANALYSIS turn in-session (master-run capture + master-apply, fail-closed). With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed). User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
             Write-Host ""
         }

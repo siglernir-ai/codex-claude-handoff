@@ -591,3 +591,28 @@ v3.1.5 closes the recovery gaps found by the real v3.1.4 user-flow acceptance te
   remains the independent Reviewer and must run the checks.
 - No content change, a malformed handoff, or any extra file remains fail-closed. Recovery never
   runs `git add`, commit, push, tag, deploy, database, or secret operations.
+
+## Dynamic Model Resolver (v3.4.0)
+
+The Claude Implementer adapter resolves a stable capability profile before every
+automated turn. The Master records `Model Profile` in `AI_HANDOFF.md`; legacy
+handoffs without the field behave as `auto`.
+
+Resolution order is explicit and inspectable:
+
+1. `-Model` for an operator's concrete one-turn choice.
+2. `HANDOFF_CLAUDE_MODEL_<PROFILE>` process environment variable.
+3. `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json`.
+4. `inherit`, which omits `--model` and lets Claude Code use its configured default.
+
+`auto` selects `cheap_readonly` for `NEEDS_INVESTIGATION` and `standard` for
+ordinary implementation. The Master may select `economy` for bounded low-risk
+edits or `high_reasoning` for expensive-to-get-wrong work. Concrete
+`high_reasoning` routing fails closed unless the operator adds
+`-AllowModelEscalation`.
+
+The adapter passes `--model` only for a concrete resolved value. `handoff.ps1
+models` and `doctor` report the profile, resolved value, and source without
+running an AI turn. Command and continuity evidence record the adapter's requested
+profile/model separately from the actual runtime model, which remains
+`unknown/not exposed` unless Claude Code reports it directly.

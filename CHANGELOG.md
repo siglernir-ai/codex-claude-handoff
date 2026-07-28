@@ -3,6 +3,21 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.4.0 - Dynamic Model Resolver
+
+- Added stable `auto`, `economy`, `cheap_readonly`, `standard`, and
+  `high_reasoning` capability profiles without freezing provider model names.
+- Added project-local `MODEL_ROUTING.json`, environment overrides, explicit
+  one-turn model selection, and safe fallback to the host's configured model.
+- Made Master routing capture and preserve the selected capability profile in
+  `AI_HANDOFF.md`.
+- Added `handoff.ps1 models` and doctor diagnostics for read-only model-routing
+  transparency.
+- Added fail-closed approval for concrete `high_reasoning` cost escalation and
+  structured evidence for the adapter-requested profile and model.
+- Added focused resolver, precedence, malformed-config, CLI argv, evidence, and
+  escalation-guard tests.
+
 ## 3.3.2 - Public Package Frontmatter Hardening
 
 - Replaced colon-sensitive inline descriptions with YAML-safe folded scalars in

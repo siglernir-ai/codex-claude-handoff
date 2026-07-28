@@ -70,6 +70,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
 | `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, command transparency, model/subagent evidence rules, and continuity artifacts |
+| `MODEL_ROUTING.json` | Project-local, replaceable mapping from stable capability profiles to current Claude Code model identifiers |
 | `README.md` | Human-facing overview of this folder |
 | `VERSION` | Installed protocol version |
 

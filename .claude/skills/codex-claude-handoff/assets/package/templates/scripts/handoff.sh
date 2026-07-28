@@ -38,13 +38,14 @@ _section_content() {
 }
 
 _parse_status() {
-    STATE="(unknown)" WAITING_FOR="(unknown)" CURRENT_TASK="(unknown)"
+    STATE="(unknown)" WAITING_FOR="(unknown)" CURRENT_TASK="(unknown)" MODEL_PROFILE="auto"
     local line
     while IFS= read -r line; do
         case "$line" in
             "- State: "*)        STATE="${line#- State: }" ;;
             "- Waiting For: "*)  WAITING_FOR="${line#- Waiting For: }" ;;
             "- Current Task: "*) CURRENT_TASK="${line#- Current Task: }" ;;
+            "- Model Profile: "*) MODEL_PROFILE="${line#- Model Profile: }" ;;
         esac
     done < <(_section_content "Status")
     case "$STATE" in
@@ -224,6 +225,7 @@ cmd_status() {
     echo "State:        $STATE"
     echo "Waiting For:  $WAITING_FOR"
     echo "Task:         $CURRENT_TASK"
+    echo "Model Profile: $MODEL_PROFILE"
     echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
     echo "Adapters:     run 'bash scripts/handoff.sh adapters' for callable/manual automation status"
     echo "Commit:       $(_commit_status_text)"
@@ -598,6 +600,15 @@ cmd_master_blocked() {
     exit 1
 }
 
+cmd_models_blocked() {
+    echo ""
+    echo "Model resolution is implemented by the PowerShell adapter."
+    echo "Run: pwsh scripts/handoff.ps1 models"
+    echo "This is a read-only command and does not run an AI turn."
+    echo ""
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Init and dispatch
 # ---------------------------------------------------------------------------
@@ -608,6 +619,7 @@ _role_checkpoint
 
 case "$COMMAND" in
     status)       cmd_status ;;
+    models)       cmd_models_blocked ;;
     adapters)     cmd_adapters ;;
     next)         cmd_next ;;
     start)        cmd_start ;;
@@ -632,6 +644,7 @@ case "$COMMAND" in
         echo ""
         echo "Commands:"
         echo "  status                    Show current handoff state, role binding, and commit status."
+        echo "  models                    Read-only model routing view; requires PowerShell (pwsh)."
         echo "  adapters                  Show adapter callable/manual status for each role."
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'

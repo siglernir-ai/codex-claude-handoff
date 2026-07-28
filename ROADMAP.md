@@ -1,7 +1,7 @@
 # Codex-Claude Handoff - Roadmap
 
 This document records the protocol's completed foundations and its intended
-direction beyond the current v3.3.2 public beta.
+direction beyond the current v3.4.0 public beta.
 
 The long-term goal is a safe, role-based multi-agent workflow where the Master, Implementer,
 and Reviewer can run bounded autonomous dialogue with minimal manual prompt-copying, while
@@ -37,7 +37,16 @@ secrets, and product decisions.
   frontmatter.
 - [x] Revalidate clean skills CLI discovery before publication.
 
-### v3.4.0 - Bounded Dialogue Automation
+### v3.4.0 - Dynamic Model Resolver
+
+- [x] Select stable capability profiles instead of provider model names.
+- [x] Resolve profiles through project-local configuration or environment
+  overrides with a safe `inherit` fallback.
+- [x] Expose read-only routing diagnostics and preserve requested-vs-observed
+  model evidence.
+- [x] Require explicit approval before a concrete high-reasoning cost escalation.
+
+### v3.5.0 - Bounded Dialogue Automation
 
 **Goal:** Turn the existing two-way question states into an optional, observable
 dialogue session without weakening human approval or independent review.
