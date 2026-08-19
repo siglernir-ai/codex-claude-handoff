@@ -315,7 +315,135 @@ $swappedRoles = @"
 $staleHandoff = New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $staleHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $swappedRoles }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
-Check "stale Task Actors after role swap fail closed" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($r.Out -match "synchronize"))
+# v3.4.1: the block still fails closed, but the guidance no longer tells the user to
+# hand-synchronize Task Actors. On a finished task that silently rewrites who
+# implemented and who reviewed it, which is the audit record the protocol protects.
+Check "stale Task Actors after role swap fail closed" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED") -and ($r.Out -match "Recovery:"))
+Check "role drift guidance never advises rewriting a finished record by hand" (($r.Out -match "Do not hand-edit Task Actors") -and ($r.Out -notmatch "synchronize the derived Task Actors"))
+Check "role drift guidance names the archived start recovery path" ($r.Out -match "handoff\.ps1 start")
+
+# --- v3.4.1 canonical tool identity -------------------------------------------------
+# Before v3.4.1 every role gate compared display text, so one tool wearing two names
+# read as two tools and could implement and review the same task.
+
+# A legacy display alias must resolve to the tool it names, not read as drift.
+$aliasHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Implementer: Claude Code", "- Implementer: Claude Code Window"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $aliasHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "legacy display alias resolves to its canonical tool and is not drift" (($r.Code -ne 12) -and ($r.Out -notmatch "Role checkpoint: BLOCKED"))
+
+# The invariant must survive one tool appearing under two different display names.
+# This is the exact record that shipped in the real repository on 2026-07-17.
+$aliasCollision = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Implementer: Claude Code", "- Implementer: Codex Window"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $aliasCollision; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "one tool under two aliases cannot be both Implementer and Reviewer" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED"))
+
+# An unrecognized identity is rejected, never guessed.
+$unknownRoles = $DefaultRoles -replace "\| Implementer \| Claude Code \|", "| Implementer | Gemini |"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $unknownRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "an unrecognized bound tool fails closed and is named" (($r.Code -eq 12) -and ($r.Out -match "Gemini"))
+
+# TBD stays a legal sentinel for a task whose actors are not bound yet.
+$sentinelHandoff = ((New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master") -replace "- Implementer: Claude Code", "- Implementer: TBD") -replace "- Reviewer: Codex", "- Reviewer: TBD"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $sentinelHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "TBD sentinel actors are not drift and not a collision" (($r.Code -ne 12) -and ($r.Out -notmatch "Role checkpoint: BLOCKED"))
+
+# --- v3.4.1 ignore semantics come from Git ------------------------------------------
+# The shipped .gitignore uses the root-anchored form. Hand-parsing compared against the
+# bare name, so a correctly configured repository was warned on every start. A safety
+# tool that cries wolf teaches the user to dismiss it.
+$fx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    ".gitignore" = "/AI_HANDOFF.md`n/NEXT_TURN.md`n/USER_REQUEST.md`n"
+} -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "root-anchored ignore check")
+Check "root-anchored /USER_REQUEST.md is recognized as ignored (no false warning)" ($r.Out -notmatch "not ignored by Git")
+
+$fx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    ".gitignore" = "/AI_HANDOFF.md`n"
+} -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "missing ignore check")
+Check "an unignored USER_REQUEST.md still warns" ($r.Out -match "not ignored by Git")
+
+# --- v3.4.1 archive before reset (G5) -----------------------------------------------
+# AI_HANDOFF.md is gitignored: it is the only copy of who implemented a task, who
+# reviewed it, and what was approved. Before v3.4.1 start simply overwrote it.
+
+function New-TerminalFixture {
+    param(
+        [string]$Roles = $DefaultRoles,
+        [string]$Handoff = $null,
+        # Some tests occupy the history PATH with a file to force an archive failure.
+        # A trailing-slash rule ignores only a directory, so those tests widen the rule
+        # to keep the working tree clean and isolate the archive failure itself.
+        [string]$HistoryIgnore = "/.ai/handoff-history/"
+    )
+    if (-not $Handoff) { $Handoff = New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Release v9.9.9 prior task" }
+    $d = New-Fixture -Files @{
+        "AI_HANDOFF.md" = $Handoff
+        ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles
+        ".gitignore" = "/AI_HANDOFF.md`n/NEXT_TURN.md`n/USER_REQUEST.md`n$HistoryIgnore`n"
+    } -InitGit
+    Initialize-FixtureGitBaseline -Dir $d
+    return $d
+}
+
+$fx = New-TerminalFixture
+$originalHash = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $fx "AI_HANDOFF.md")).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "a brand new request")
+$archives = @(Get-ChildItem -Path (Join-Path $fx ".ai/handoff-history") -Filter "*-AI_HANDOFF.md" -ErrorAction SilentlyContinue)
+Check "start archives the previous handoff before resetting it" ($archives.Count -eq 1)
+Check "start reports the archive path and its verified hash" (($r.Out -match "Archived previous handoff") -and ($r.Out -match "verified"))
+if ($archives.Count -eq 1) {
+    $archivedHash = (Get-FileHash -Algorithm SHA256 -Path $archives[0].FullName).Hash
+    Check "the archive is byte-identical to the retired record" ($archivedHash -eq $originalHash)
+    Check "the archive carries verifiable sidecar metadata" (Test-Path "$($archives[0].FullName).meta.txt")
+    $meta = Get-Content -Raw -Path "$($archives[0].FullName).meta.txt"
+    Check "sidecar metadata records the hash and the retired actors" (($meta -match [regex]::Escape($originalHash)) -and ($meta -match "implementer:"))
+}
+Check "the handoff was actually reset after a successful archive" ((Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")) -match "State: NEEDS_ANALYSIS")
+
+# A failed archive must leave the live record untouched. Losing history silently is
+# worse than refusing to open a new task.
+$fx = New-TerminalFixture -HistoryIgnore "/.ai/handoff-history"
+# Occupy the history path with a FILE so no archive can be written there.
+Set-Content -Path (Join-Path $fx ".ai/handoff-history") -Value "blocker" -Encoding utf8
+$before = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $fx "AI_HANDOFF.md")).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "request that must not destroy history")
+$after = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $fx "AI_HANDOFF.md")).Hash
+Check "a failed archive blocks the reset and leaves the record untouched" (($before -eq $after) -and ($r.Out -match "was NOT reset because it could not be archived"))
+
+# --- v3.4.1 guarded terminal-drift recovery (G6) ------------------------------------
+# The checkpoint gates every command, so a drifted record blocked the very command
+# that would retire it. The escape is narrow and archives first.
+
+# Both actors are swapped relative to the binding. That is drift and ONLY drift: with
+# two known tools, changing a single actor would also collide the Reviewer with the
+# Implementer, which is an invariant violation and must never be auto-recoverable.
+$driftedTerminal = ((New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task with drifted actors") -replace "- Implementer: Claude Code", "- Implementer: Codex") -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$fx = New-TerminalFixture -Handoff $driftedTerminal
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "retire the drifted finished task")
+$archives = @(Get-ChildItem -Path (Join-Path $fx ".ai/handoff-history") -Filter "*-AI_HANDOFF.md" -ErrorAction SilentlyContinue)
+Check "start recovers a FINISHED task whose Task Actors drifted" (($r.Code -eq 0) -and ($r.Out -match "recovering a finished task"))
+Check "the drifted record is archived, not discarded" ($archives.Count -eq 1)
+
+# Active-state drift must stay blocked: only a finished task may be retired.
+$driftedActive = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Implementer: Claude Code", "- Implementer: Codex"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $driftedActive; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "should not be allowed to retire an active task")
+Check "start does NOT retire an ACTIVE drifted task" (($r.Code -eq 12) -and ($r.Out -match "Role checkpoint: BLOCKED"))
+
+# An unknown identity is never drift-only, so recovery must not launder it.
+$unknownRoles2 = $DefaultRoles -replace "\| Implementer \| Claude Code \|", "| Implementer | Gemini |"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $unknownRoles2 }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("start", "unknown tool must not be waved through")
+Check "start recovery never launders an unrecognized tool identity" (($r.Code -eq 12) -and ($r.Out -match "Gemini"))
 
 # === 2. Turn-ownership mismatch routing ===
 Write-Host "[2] Mismatch routing"
@@ -895,7 +1023,9 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REV
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
 Check "review-check requires Waiting For: Reviewer exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: READY_FOR_REVIEW and Waiting For: Reviewer"))
 
-# Bound Reviewer is not Codex: this POC only invokes Codex.
+# Bound Reviewer is not Codex. v3.4.1 uses an APPROVED swap between two known tools:
+# an unrecognized tool (the pre-v3.4.1 fixture used "Gemini") is now rejected earlier,
+# at the role checkpoint, so it can no longer reach the adapter guard being tested here.
 $nonCodexRoles = @"
 # Role Assignment
 
@@ -904,13 +1034,16 @@ $nonCodexRoles = @"
 | Role | Tool |
 |---|---|
 | Master | Codex |
-| Reviewer | Gemini |
-| Implementer | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
 "@
-$nonCodexHandoff = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Reviewer: Codex", "- Reviewer: Gemini"
+$nonCodexHandoff = ((New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $nonCodexHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
-Check "review-check blocks when the bound Reviewer is not Codex" (($r.Code -eq 1) -and ($r.Out -match "bound Reviewer tool must be Codex"))
+# Still blocked, but the reason is the missing ADAPTER, not the role assignment.
+# Reassigning the Reviewer is legitimate; it routes to a manual window turn.
+Check "review-check blocks when the bound Reviewer has no callable adapter" (($r.Code -eq 1) -and ($r.Out -match "No callable Reviewer adapter"))
+Check "review-check names the manual route instead of rejecting the role swap" ($r.Out -match "role assignment itself is valid")
 
 # Independent-review invariant: actual Reviewer must not equal actual Implementer.
 $badHandoff = New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
@@ -1216,7 +1349,8 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSI
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
 Check "master-check requires Waiting For: Master exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS and Waiting For: Master"))
 
-# Bound Master is not Codex: this POC only invokes Codex.
+# Bound Master is not Codex. v3.4.1 uses an APPROVED swap to a known tool; an
+# unrecognized tool is now rejected at the role checkpoint and never reaches this guard.
 $nonCodexMaster = @"
 # Role Assignment
 
@@ -1224,13 +1358,14 @@ $nonCodexMaster = @"
 
 | Role | Tool |
 |---|---|
-| Master | Gemini |
+| Master | Claude Code |
 | Reviewer | Codex |
 | Implementer | Claude Code |
 "@
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexMaster }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
-Check "master-check blocks when the bound Master is not Codex" (($r.Code -eq 1) -and ($r.Out -match "bound Master tool must be Codex"))
+Check "master-check blocks when the bound Master has no callable adapter" (($r.Code -eq 1) -and ($r.Out -match "No callable Master adapter"))
+Check "master-check keeps the reassigned role valid and routes it manually" ($r.Out -match "role assignment itself is valid")
 
 # master-run fails closed with Environment/Preflight when the Codex CLI is unavailable, and
 # runs no Codex invocation, no git, and no handoff change.
@@ -1335,6 +1470,54 @@ Check "master-apply records concrete Task Actors from the capture" (($h -match "
 Check "master-apply preserves the Master-selected capability profile" ($h -match "Model Profile:\s+economy")
 Check "master-apply creates no git commit" ("$afterCommits".Trim() -eq "$beforeCommits".Trim())
 
+# --- v3.4.1 canonical identity in the Master capture path ---------------------------
+# The capture-level independent-review check compared display strings, so one tool
+# under two names passed as two tools - the exact defect G1 exists to close.
+$captureAliasCollision = @"
+MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION
+WAITING_FOR: Implementer
+IMPLEMENTER: Codex Window
+REVIEWER: Codex
+TASK: v2.0.1 - Master Apply Test
+MODEL_PROFILE: economy
+REASON: The task is scoped and ready for implementation.
+"@
+$fx = New-MasterApplyFixture -Capture $captureAliasCollision
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+$after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
+Check "master-apply rejects a capture naming one tool under two aliases" (($r.Code -ne 0) -and ($r.Out -match "resolve to the same tool") -and ($before -eq $after))
+
+# The mirror failure: a capture whose alias is canonically identical to the binding
+# must NOT be rejected as an unapproved role swap.
+$captureAliasEquivalent = @"
+MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION
+WAITING_FOR: Implementer
+IMPLEMENTER: Claude Code Window
+REVIEWER: Codex
+TASK: v2.0.1 - Master Apply Test
+MODEL_PROFILE: economy
+REASON: The task is scoped and ready for implementation.
+"@
+$fx = New-MasterApplyFixture -Capture $captureAliasEquivalent
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+Check "master-apply accepts a capture alias that canonically matches the binding" (($r.Code -eq 0) -and ($r.Out -notmatch "Role swaps require explicit user approval"))
+
+# A sentinel or unknown actor must never reach the collision check.
+$captureUnknownActor = @"
+MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION
+WAITING_FOR: Implementer
+IMPLEMENTER: Gemini
+REVIEWER: Codex
+TASK: v2.0.1 - Master Apply Test
+MODEL_PROFILE: economy
+REASON: The task is scoped and ready for implementation.
+"@
+$fx = New-MasterApplyFixture -Capture $captureUnknownActor
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
+Check "master-apply rejects a capture naming an unrecognized IMPLEMENTER" (($r.Code -ne 0) -and ($r.Out -match "concrete, recognized IMPLEMENTER"))
+
 # Match the real Codex CLI encoding: output-last-message is UTF-8 without a BOM.
 $utf8MasterTask = (-join @([char]0x05DE, [char]0x05E9, [char]0x05D9, [char]0x05DE, [char]0x05D4)) + " UTF-8"
 $utf8MasterCapture = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: $utf8MasterTask`nREASON: UTF-8 task is ready"
@@ -1403,7 +1586,11 @@ Set-Content -Path $handoffPath -Value $syncedSwapHandoff -Encoding utf8
 $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-apply", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
-Check "master-apply blocks captured actors that do not match current role binding" (($r.Code -eq 1) -and ($r.Out -match "Role swaps require explicit user approval") -and ($before -eq $after))
+# v3.4.1: an unrecognized tool identity is now rejected at the role checkpoint,
+# before master-apply's own captured-actor guard is reached. The block is earlier
+# and broader, and the offending value is named so the user fixes the binding.
+# The guarantee under test is unchanged: nothing is applied and the file is intact.
+Check "master-apply blocks an unrecognized bound tool and changes nothing" (($r.Code -ne 0) -and ($r.Out -match "Gemini") -and ($before -eq $after))
 
 $fx = New-MasterApplyFixture -Capture $masterCaptureReady -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"
 $handoffPath = Join-Path $fx "AI_HANDOFF.md"
@@ -1455,6 +1642,17 @@ Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) 
 Check "loop -IncludeMaster runs the Master turn and applies READY_FOR_IMPLEMENTATION / Implementer (exit 0)" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($h -match "Waiting For:\s+Implementer"))
 Check "loop -IncludeMaster stops on MaxTurns before running Claude" (($r.Out -match "MaxTurns") -and ($r.Out -notmatch "automated Claude Code Implementer turn"))
 Check "loop -IncludeMaster creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# v3.4.1: the opt-in handler used a raw "Codex" comparison, so a binding written with a
+# legacy alias resolved as callable in the adapter profile and then silently failed to
+# enter the handler - callable in one place, invisible in the next.
+$aliasMasterRoles = $DefaultRoles -replace "\| Master \| Codex \|", "| Master | Codex Window |"
+$env:CODEX_CLI = $fakeMasterReady
+$fx = New-MasterApplyFixture -NoCapture -CurrentTask $loopMasterTask -Roles $aliasMasterRoles
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeMaster", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+Check "loop -IncludeMaster enters the Master turn when the binding uses a legacy alias" (($r.Code -eq 0) -and ($h -match "State:\s+READY_FOR_IMPLEMENTATION"))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
@@ -1527,6 +1725,16 @@ Check "loop -IncludeReviewer runs the Reviewer turn and applies APPROVED -> REVI
 Check "loop -IncludeReviewer APPROVED then stops at the non-loop-eligible User turn" ($r.Out -match "Next actor: User")
 Check "loop -IncludeReviewer APPROVED changes no file other than AI_HANDOFF.md" ($reviewedBefore -eq $reviewedAfter)
 Check "loop -IncludeReviewer APPROVED creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
+
+# v3.4.1: same defect as the Master handler - a legacy alias in the binding resolved as
+# callable but never entered the opt-in Reviewer handler.
+$aliasReviewerRoles = $DefaultRoles -replace "\| Reviewer \| Codex \|", "| Reviewer | Codex Window |"
+$env:CODEX_CLI = $fakeApprove
+$fx = New-ReviewApplyFixture -NoCapture -CurrentTask $loopTask -Roles $aliasReviewerRoles
+$handoffPath = Join-Path $fx "AI_HANDOFF.md"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-IncludeReviewer", "-Yes", "-MaxTurns", "1")
+$h = Get-Content -Raw -Path $handoffPath
+Check "loop -IncludeReviewer enters the Reviewer turn when the binding uses a legacy alias" (($r.Code -eq 0) -and ($h -match "State:\s+REVIEW_DONE"))
 
 # Opt-in BLOCKED: loop -IncludeReviewer applies BLOCKED -> READY_FOR_IMPLEMENTATION /
 # Implementer, then stops on MaxTurns WITHOUT involving the user and WITHOUT running Claude.

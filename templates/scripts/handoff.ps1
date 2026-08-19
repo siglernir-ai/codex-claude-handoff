@@ -195,6 +195,207 @@ function Resolve-ModelSelection {
     }
 }
 
+# --- Canonical tool identity (v3.4.1) ---
+#
+# Role gates must compare tool IDENTITY, never display text. Before v3.4.1 the
+# invariant checks used raw string equality, so 'Codex' and 'Codex Window' read as
+# two different tools and one tool could implement and review the same task.
+#
+# Every legal tool has one canonical id, one display name, and an explicit alias
+# list. An identity that is not in the registry is REJECTED, never guessed: an
+# unrecognized actor must fail closed rather than silently satisfy an invariant.
+
+$CanonicalToolRegistry = @(
+    @{
+        Canonical = "codex"
+        Display   = "Codex"
+        Aliases   = @("codex", "codex window", "codex cli", "codex desktop", "openai codex")
+    },
+    @{
+        Canonical = "claude-code"
+        Display   = "Claude Code"
+        Aliases   = @("claude code", "claude-code", "claudecode", "claude code cli", "claude code window")
+    }
+)
+
+# Sentinels are not tools. They are legal placeholders for a freshly opened task
+# whose actors are not bound yet, and they never satisfy or violate the
+# Reviewer != Implementer invariant.
+$ToolIdentitySentinels = @("tbd", "(unknown)", "unknown")
+
+function Resolve-ToolIdentity {
+    param([string]$Tool)
+
+    $raw = if ($null -eq $Tool) { "" } else { $Tool.Trim() }
+
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return @{
+            Ok = $false; Kind = "empty"; Canonical = ""; Display = ""; Input = $raw
+            Reason = "No tool identity was supplied."
+        }
+    }
+
+    $key = $raw.ToLowerInvariant()
+
+    if ($ToolIdentitySentinels -contains $key) {
+        return @{
+            Ok = $true; Kind = "sentinel"; Canonical = ""; Display = $raw; Input = $raw
+            Reason = "Placeholder actor; not bound to a tool yet."
+        }
+    }
+
+    if ($key -eq "user") {
+        return @{
+            Ok = $true; Kind = "user"; Canonical = "user"; Display = "User"; Input = $raw
+            Reason = "The User is the approval authority and is never a tool role."
+        }
+    }
+
+    foreach ($entry in $CanonicalToolRegistry) {
+        if ($entry.Aliases -contains $key) {
+            return @{
+                Ok = $true; Kind = "tool"; Canonical = $entry.Canonical; Display = $entry.Display; Input = $raw
+                Reason = ""
+            }
+        }
+    }
+
+    $known = ($CanonicalToolRegistry | ForEach-Object { $_.Display }) -join ", "
+    return @{
+        Ok = $false; Kind = "unknown"; Canonical = ""; Display = $raw; Input = $raw
+        Reason = "Unrecognized tool identity '$raw'. Known tools: $known. Add an explicit alias to the canonical registry rather than relying on a display name."
+    }
+}
+
+# True only when both values resolve to the SAME real tool. Sentinels, empty
+# values and unresolvable identities never report a collision here; callers that
+# must reject those cases check Resolve-ToolIdentity directly, so that an
+# unknown identity fails closed on its own terms instead of masquerading as
+# "not a collision".
+function Test-SameToolIdentity {
+    param([string]$First, [string]$Second)
+    $a = Resolve-ToolIdentity -Tool $First
+    $b = Resolve-ToolIdentity -Tool $Second
+    if (-not $a.Ok -or -not $b.Ok) { return $false }
+    if ($a.Kind -ne "tool" -or $b.Kind -ne "tool") { return $false }
+    return ($a.Canonical -eq $b.Canonical)
+}
+
+# --- Git ignore semantics (v3.4.1) ---
+#
+# Ask Git whether a path is ignored. Hand-parsing .gitignore text cannot know
+# about anchoring, negation, directory rules or precedence, and getting any of
+# them wrong produces a warning the user learns to dismiss.
+#
+# Unresolvable answers report "not ignored" on purpose: warning when we cannot
+# tell is the safe direction for a file that must never be committed.
+function Test-PathIgnoredByGit {
+    param([string]$RelativePath)
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) { return $false }
+    try {
+        & git check-ignore -q -- $RelativePath *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+# --- Handoff history: archive before reset (v3.4.1) ---
+#
+# AI_HANDOFF.md is gitignored, so the record of who implemented a task, who
+# reviewed it, and what was approved lives on exactly one disk and in exactly one
+# file. Until v3.4.1 `start` overwrote it, and that record was simply gone.
+#
+# The archive lives in a VISIBLE project-local directory rather than inside .git:
+# an audit trail hidden in .git is the most deletable thing in the repository, and
+# it survives neither a fresh clone nor a .git cleanup.
+#
+# Every archive is verified by re-reading the written bytes and comparing hashes.
+# A failed archive must leave the live handoff untouched: losing history silently
+# is worse than refusing to start a new task.
+
+$HandoffHistoryRelative = ".ai/handoff-history"
+
+function Save-HandoffArchive {
+    param(
+        [string]$HandoffPath,
+        [string]$Label = "handoff"
+    )
+
+    $result = @{ Ok = $false; Path = ""; Hash = ""; Error = "" }
+
+    if (-not (Test-Path -LiteralPath $HandoffPath)) {
+        $result.Error = "No handoff file to archive at '$HandoffPath'."
+        return $result
+    }
+
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($HandoffPath)
+        $sourceHash = (Get-FileHash -LiteralPath $HandoffPath -Algorithm SHA256).Hash
+
+        $historyDir = Join-Path (Get-Location) $HandoffHistoryRelative
+        if (-not (Test-Path -LiteralPath $historyDir)) {
+            New-Item -ItemType Directory -Path $historyDir -Force | Out-Null
+        }
+
+        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
+        $slug = ($Label -replace '[^A-Za-z0-9]+', '-').Trim('-')
+        if ([string]::IsNullOrWhiteSpace($slug)) { $slug = "handoff" }
+        if ($slug.Length -gt 60) { $slug = $slug.Substring(0, 60).Trim('-') }
+
+        # Collision-safe: two archives inside the same second must not overwrite
+        # each other, which would defeat the entire point of archiving.
+        $base = "$stamp-$slug"
+        $target = Join-Path $historyDir "$base-AI_HANDOFF.md"
+        $n = 2
+        while (Test-Path -LiteralPath $target) {
+            $target = Join-Path $historyDir "$base-$n-AI_HANDOFF.md"
+            $n++
+        }
+
+        $temp = "$target.tmp"
+        [System.IO.File]::WriteAllBytes($temp, $bytes)
+        Move-Item -LiteralPath $temp -Destination $target -Force
+
+        $archiveHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+        if ($archiveHash -ne $sourceHash) {
+            Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+            $result.Error = "Archive verification failed: written bytes do not match the source hash."
+            return $result
+        }
+
+        # Sidecar metadata so the archive is interpretable without the live file.
+        $commit = "(unknown)"
+        try {
+            $rev = & git rev-parse --short HEAD 2>$null
+            if ($LASTEXITCODE -eq 0 -and $rev) { $commit = "$rev".Trim() }
+        } catch { }
+
+        $actors = Get-TaskActors
+        $meta = @(
+            "archived-at-utc: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))",
+            "sha256: $sourceHash",
+            "bytes: $($bytes.Length)",
+            "commit: $commit",
+            "state: $State",
+            "waiting-for: $WaitingFor",
+            "current-task: $CurrentTask",
+            "implementer: $($actors.Implementer)",
+            "reviewer: $($actors.Reviewer)",
+            "note: exact bytes of AI_HANDOFF.md at archive time; never edit this file."
+        ) -join "`n"
+        [System.IO.File]::WriteAllText("$target.meta.txt", $meta, (New-Object System.Text.UTF8Encoding($false)))
+
+        $result.Ok = $true
+        $result.Path = $target
+        $result.Hash = $sourceHash
+        return $result
+    } catch {
+        $result.Error = "$($_.Exception.Message)"
+        return $result
+    }
+}
+
 # --- Role binding (State -> Role -> Tool) ---
 
 function Get-RoleBinding {
@@ -219,8 +420,20 @@ function Resolve-Actor {
 
 function Test-RoleCheckpoint {
     $errors = [System.Collections.Generic.List[string]]::new()
-    if ($Binding.Reviewer -eq $Binding.Implementer) {
-        $errors.Add("Invalid role binding: Reviewer and Implementer are both '$($Binding.Reviewer)'.")
+    $drifted = $false
+    $driftErrors = 0
+
+    # The bound identities must resolve before anything is compared. An
+    # unrecognized tool in ROLE_ASSIGNMENT.md is rejected outright: guessing what
+    # it means is exactly how one tool ends up reviewing its own work.
+    foreach ($role in @('Implementer', 'Reviewer', 'Master')) {
+        $bound = Resolve-ToolIdentity -Tool $Binding[$role]
+        if (-not $bound.Ok) {
+            $errors.Add("Invalid role binding: $role='$($Binding[$role])'. $($bound.Reason)")
+        }
+    }
+    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) {
+        $errors.Add("Invalid role binding: Reviewer and Implementer both resolve to the same tool ('$($Binding.Reviewer)' / '$($Binding.Implementer)'). An implementer cannot be the sole reviewer of its own work.")
     }
 
     $actors = @{ Implementer = ""; Reviewer = "" }
@@ -230,14 +443,39 @@ function Test-RoleCheckpoint {
     }
     foreach ($role in @('Implementer', 'Reviewer')) {
         $actual = $actors[$role]
-        if ([string]::IsNullOrWhiteSpace($actual) -or $actual -in @('TBD', '(unknown)')) { continue }
+        if ([string]::IsNullOrWhiteSpace($actual)) { continue }
+        $resolved = Resolve-ToolIdentity -Tool $actual
+        # A fresh task may carry a sentinel actor; it is not drift.
+        if ($resolved.Ok -and $resolved.Kind -eq "sentinel") { continue }
+        if (-not $resolved.Ok) {
+            $errors.Add("Unrecognized Task Actors $role='$actual'. $($resolved.Reason)")
+            continue
+        }
         $expected = $Binding[$role]
-        if ($actual -ne $expected) {
+        # Compare canonical identity, not display text, so a legacy alias such as
+        # 'Codex Window' matches the bound 'Codex' instead of reading as drift.
+        if (-not (Test-SameToolIdentity -First $actual -Second $expected)) {
+            $drifted = $true
+            $driftErrors++
             $errors.Add("Role drift: AI_HANDOFF.md Task Actors $role='$actual' but ROLE_ASSIGNMENT.md binds $role='$expected'.")
         }
     }
 
-    return @{ Ok = ($errors.Count -eq 0); Errors = $errors }
+    # The actual actors must also be two different tools, even when both match the
+    # binding, because the binding itself can be edited between turns.
+    if (Test-SameToolIdentity -First $actors.Implementer -Second $actors.Reviewer) {
+        $errors.Add("Independent-review invariant: Task Actors Implementer='$($actors.Implementer)' and Reviewer='$($actors.Reviewer)' resolve to the same tool.")
+    }
+
+    # DriftOnly means the ONLY problem is that Task Actors name different tools than
+    # the binding. An unknown identity or a Reviewer/Implementer collision is never
+    # drift-only, so neither can be waved through by the start recovery path.
+    return @{
+        Ok = ($errors.Count -eq 0)
+        Errors = $errors
+        Drifted = $drifted
+        DriftOnly = ($drifted -and $driftErrors -eq $errors.Count)
+    }
 }
 
 function Write-RoleCheckpointFailure {
@@ -245,7 +483,34 @@ function Write-RoleCheckpointFailure {
     Write-Host ""
     Write-Host "Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync."
     foreach ($error in $Checkpoint.Errors) { Write-Host "Reason: $error" }
-    Write-Host "Repair: read .ai/roles/ROLE_ASSIGNMENT.md, synchronize the derived Task Actors fields in AI_HANDOFF.md, then run the command again."
+    Write-Host ""
+    Write-Host "Recovery:"
+    if ($Checkpoint.Drifted) {
+        # Before v3.4.1 this message told the user to synchronize the Task Actors by
+        # hand. On a finished task that silently rewrites who implemented and who
+        # reviewed it - the audit record the protocol exists to protect. The
+        # supported route archives the finished record first and lets start reset
+        # the actors itself.
+        Write-Host "  If the drifted task is FINISHED (State REVIEW_DONE or BLOCKED, Waiting For: User)"
+        Write-Host "  and the working tree is clean, retire it with a new request:"
+        Write-Host ""
+        Write-Host "      handoff.ps1 start `"<your next request>`""
+        Write-Host ""
+        Write-Host "  start archives the finished record to .ai/handoff-history/ with a verified"
+        Write-Host "  hash, then opens a fresh task. It will refuse if the archive cannot be"
+        Write-Host "  written, so the live handoff is never lost."
+        Write-Host ""
+        Write-Host "  If the drifted task is still ACTIVE, do NOT retire it. Finish or block the"
+        Write-Host "  current turn first, or correct .ai/roles/ROLE_ASSIGNMENT.md so the binding"
+        Write-Host "  matches the tools that actually did the work."
+        Write-Host ""
+        Write-Host "  Do not hand-edit Task Actors on a finished task. That rewrites the audit"
+        Write-Host "  record instead of retiring it."
+    } else {
+        Write-Host "  Correct .ai/roles/ROLE_ASSIGNMENT.md. Reviewer and Implementer must be two"
+        Write-Host "  different known tools, and every bound tool must be a recognized identity."
+    }
+    Write-Host ""
     Write-Host "No role-dependent action was performed."
 }
 
@@ -757,7 +1022,9 @@ function Get-AdapterProfile {
         }
     }
 
-    if ($Role -eq "Implementer" -and $Tool -eq "Claude Code") {
+    # v3.4.1: adapter lookup keys on canonical identity, so a legacy display name
+    # such as 'Codex Window' still finds the adapter it names.
+    if ($Role -eq "Implementer" -and (Test-SameToolIdentity -First $Tool -Second "Claude Code")) {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION");
             Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`" [--model `"<resolved-local-model>`"]";
@@ -772,7 +1039,7 @@ function Get-AdapterProfile {
     # master-run (read-only capture) + master-apply (apply the captured recommendation's
     # local AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose; since v2.1.0,
     # loop -IncludeMaster may opt this exact turn into one authorized loop session.
-    if ($Role -eq "Master" -and $Tool -eq "Codex") {
+    if ($Role -eq "Master" -and (Test-SameToolIdentity -First $Tool -Second "Codex")) {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("NEEDS_ANALYSIS");
             Invocation = "Capture: handoff.ps1 master-run (read-only Codex Master analysis, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes). PowerShell loop -IncludeMaster may run this pair in-session.";
@@ -789,7 +1056,7 @@ function Get-AdapterProfile {
     # "has a verified end-to-end command path", NOT "may be auto-run inside loop/cycle".
     # Reviewer turns are not loop-eligible by default. Since v1.4.0, only
     # `loop -IncludeReviewer` may opt this exact turn into a single loop session; cycle never does.
-    if ($Role -eq "Reviewer" -and $Tool -eq "Codex") {
+    if ($Role -eq "Reviewer" -and (Test-SameToolIdentity -First $Tool -Second "Codex")) {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
             Invocation = "Capture: handoff.ps1 review-run (read-only Codex review, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
@@ -800,9 +1067,18 @@ function Get-AdapterProfile {
         }
     }
 
-    $reason = "$Tool has no verified local callable adapter for the $Role role."
-    if ($Tool -eq "Codex") {
-        $reason = "No callable local adapter is present for $Tool in the $Role role in this repository."
+    # No verified adapter for this role/tool pair. This is a CAPABILITY limit, not a
+    # protocol objection: the role assignment stays valid and the turn simply runs
+    # as a manual window handoff. Before v3.4.1 an unresolvable tool reached here
+    # too and read as a broken configuration; now an unrecognized identity is named
+    # as such so the user fixes the binding instead of hunting for a missing adapter.
+    $identity = Resolve-ToolIdentity -Tool $Tool
+    if (-not $identity.Ok) {
+        $reason = "Unrecognized tool '$Tool' bound to the $Role role. $($identity.Reason)"
+        $nextStep = "Correct the $Role entry in .ai/roles/ROLE_ASSIGNMENT.md to a known tool identity."
+    } else {
+        $reason = "No verified local callable adapter for $($identity.Display) in the $Role role. The role assignment is valid; this turn runs as a manual handoff."
+        $nextStep = "Run 'handoff.ps1 next' and complete this turn manually in $($identity.Display). Automation requires adding and verifying a local adapter for this role/tool pair."
     }
     return @{
         Role = $Role; Tool = $Tool; Callable = $false; AutoLoopEligible = $false; SupportedStates = @();
@@ -810,7 +1086,7 @@ function Get-AdapterProfile {
         SafetyLimits = "Manual prompt handoff only; no commit/push/tag/deploy/db/secrets automation.";
         StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "no for paste; yes for protected actions";
         Reason = $reason;
-        NextStep = "Add and verify a real local adapter before marking this role callable."
+        NextStep = $nextStep
     }
 }
 
@@ -923,9 +1199,35 @@ $HandoffModelProfile = $HandoffStatus.ModelProfile
 $script:ModelSelection = Resolve-ModelSelection -ForState $State -HandoffProfile $HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model
 $RoleCheckpoint = Test-RoleCheckpoint
 
-if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models')) {
+# v3.4.1 (G6): the checkpoint gates every command except the three read-only ones.
+# That left no way out of role drift: `start` is the command that retires a stale
+# record, and it was blocked by the very record it would retire. The only documented
+# repair was to hand-edit Task Actors, which rewrites the audit trail on a finished
+# task - exactly what the protocol exists to prevent.
+#
+# The escape is deliberately narrow. `start` may proceed ONLY when the sole problem
+# is drift, the task is finished and owned by the User, and a new request was given.
+# Everything else - active-state drift, an unknown tool, a Reviewer/Implementer
+# collision - stays blocked. Invoke-Start then archives the record before resetting
+# it, and refuses to reset if that archive cannot be verified.
+$RoleRecoveryAllowed = (
+    $Command -eq 'start' -and
+    $RoleCheckpoint.DriftOnly -and
+    -not [string]::IsNullOrWhiteSpace($Request) -and
+    $WaitingFor -eq "User" -and
+    $State -in @("REVIEW_DONE", "BLOCKED")
+)
+
+if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models') -and -not $RoleRecoveryAllowed) {
     Write-RoleCheckpointFailure -Checkpoint $RoleCheckpoint
     exit 12
+}
+
+if ($RoleRecoveryAllowed -and -not $RoleCheckpoint.Ok) {
+    Write-Host ""
+    Write-Host "Role checkpoint: recovering a finished task with drifted Task Actors."
+    foreach ($checkpointError in $RoleCheckpoint.Errors) { Write-Host "  $checkpointError" }
+    Write-Host "  The finished record will be archived before it is retired."
 }
 
 $CommitStatus = switch ($State) {
@@ -1480,18 +1782,19 @@ function Invoke-Start {
     Write-Host ""
     Write-Host "USER_REQUEST.md written."
 
-    # Safety fallback: warn if not gitignored (pre-v0.10.0 installs)
-    # Line-by-line check to avoid false positives from CRLF line endings on Windows.
-    $gitignorePath = Join-Path (Get-Location) ".gitignore"
-    if (Test-Path $gitignorePath) {
-        $giLines = Get-Content -Path $gitignorePath
-        $isIgnored = $false
-        foreach ($giLine in $giLines) {
-            if ($giLine.Trim() -eq "USER_REQUEST.md") { $isIgnored = $true; break }
-        }
-        if (-not $isIgnored) {
-            Write-Host "WARNING: USER_REQUEST.md is not in .gitignore. Add it to avoid committing user requests."
-        }
+    # Safety fallback: warn if not gitignored (pre-v0.10.0 installs).
+    #
+    # Until v3.4.1 this parsed .gitignore by hand and compared against the bare
+    # name "USER_REQUEST.md". The shipped .gitignore correctly uses the
+    # root-anchored form "/USER_REQUEST.md", so the check never matched and a
+    # correctly configured repository was warned on every start. A safety tool
+    # that cries wolf teaches the user to ignore it.
+    #
+    # Ask Git instead. git check-ignore understands anchoring, negation,
+    # directory rules, and every other .gitignore semantic we would otherwise
+    # have to reimplement.
+    if (-not (Test-PathIgnoredByGit -RelativePath "USER_REQUEST.md")) {
+        Write-Host "WARNING: USER_REQUEST.md is not ignored by Git. Add /USER_REQUEST.md to .gitignore to avoid committing user requests."
     }
 
     $handoffPath = Join-Path (Get-Location) "AI_HANDOFF.md"
@@ -1551,6 +1854,22 @@ function Invoke-Start {
 ## Next Recommended Step
 - Master: read USER_REQUEST.md, route through the Decision Router, assign Task Actors, and set the appropriate next state.
 "@
+                # v3.4.1 (G5): archive before reset, and fail closed. The record about
+                # to be overwritten is the only copy of who did what on the finished
+                # task; refusing to start is strictly better than losing it.
+                $archive = Save-HandoffArchive -HandoffPath $handoffPath -Label $CurrentTask
+                if (-not $archive.Ok) {
+                    Write-Host ""
+                    Write-Host "BLOCKED: AI_HANDOFF.md was NOT reset because it could not be archived."
+                    Write-Host "Reason: $($archive.Error)"
+                    Write-Host "The existing handoff record is untouched. Resolve the archive problem and run start again."
+                    Write-Host ""
+                    return
+                }
+                $archiveRelative = $archive.Path.Substring((Get-Location).Path.Length).TrimStart('\', '/')
+                Write-Host "Archived previous handoff -> $archiveRelative"
+                Write-Host "  SHA256: $($archive.Hash)  (verified)"
+
                 Set-Content -Path $handoffPath -Value $handoffContent -Encoding utf8
                 Write-Host "AI_HANDOFF.md prepared for Master analysis."
             } elseif ($tree.Ok) {
@@ -1828,7 +2147,9 @@ function Get-ReleasePlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer for release audit.")
     }
-    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+    # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
+    # are the same tool and must not pass this gate as two different reviewers.
+    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
         $ok = $false
         $errors.Add("Release audit invariant violation: actual Reviewer must not equal actual Implementer.")
     }
@@ -1880,7 +2201,9 @@ function Get-CommitPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer for commit audit.")
     }
-    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+    # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
+    # are the same tool and must not pass this gate as two different reviewers.
+    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
         $ok = $false
         $errors.Add("Commit audit invariant violation: actual Reviewer must not equal actual Implementer.")
     }
@@ -2556,9 +2879,14 @@ function Get-ReviewPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must be State: READY_FOR_REVIEW and Waiting For: Reviewer for the Codex Reviewer POC.")
     }
-    if ($boundReviewer -ne "Codex") {
+    # v3.4.1: resolve identity before the capability lookup. Only Codex has a
+    # verified callable Reviewer adapter, so review-run remains Codex-only - but
+    # the reason must be the missing ADAPTER, not the role assignment. Reassigning
+    # the Reviewer is a legitimate protocol operation; it simply routes to a manual
+    # window turn until that tool has a verified adapter.
+    if (-not (Test-SameToolIdentity -First $boundReviewer -Second "Codex")) {
         $ok = $false
-        $errors.Add("The bound Reviewer tool must be Codex (found: $boundReviewer). This POC only invokes Codex as Reviewer.")
+        $errors.Add("No callable Reviewer adapter for '$boundReviewer'. review-run automation currently supports Codex only. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Reviewer turn manually in $boundReviewer.")
     }
     if ($taskActors.ImplementerCount -ne 1) {
         $ok = $false
@@ -2568,11 +2896,13 @@ function Get-ReviewPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer.")
     }
-    if ($taskActors.Reviewer -ne "" -and $taskActors.Reviewer -ne "Codex") {
+    if ($taskActors.Reviewer -ne "" -and -not (Test-SameToolIdentity -First $taskActors.Reviewer -Second "Codex")) {
         $ok = $false
-        $errors.Add("The actual task Reviewer must be Codex (found: $($taskActors.Reviewer)).")
+        $errors.Add("No callable Reviewer adapter for the actual task Reviewer '$($taskActors.Reviewer)'. review-run automation currently supports Codex only; complete this turn manually with 'handoff.ps1 next'.")
     }
-    if ($taskActors.Implementer -ne "" -and $taskActors.Reviewer -ne "" -and $taskActors.Reviewer -eq $taskActors.Implementer) {
+    # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
+    # are the same tool and must not pass this gate as two different reviewers.
+    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
         $ok = $false
         $errors.Add("Independent-review invariant: the actual Reviewer must not equal the actual Implementer.")
     }
@@ -2929,8 +3259,8 @@ function Get-VerdictFromCapture {
         $result.Error = "VERDICT must be exactly APPROVED or BLOCKED (found: '$verdict')."
         return $result
     }
-    if ($reviewer -ne "Codex") {
-        $result.Error = "REVIEWER in the captured verdict must be Codex (found: '$reviewer')."
+    if (-not (Test-SameToolIdentity -First $reviewer -Second "Codex")) {
+        $result.Error = "REVIEWER in the captured verdict must resolve to Codex (found: '$reviewer'). Only captures produced by the Codex Reviewer adapter can be applied."
         return $result
     }
     if ($task -ne $ExpectedTask) {
@@ -3137,9 +3467,11 @@ function Get-MasterPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master for the Codex Master capture POC.")
     }
-    if ($boundMaster -ne "Codex") {
+    # v3.4.1: identity first, capability second. Reassigning Master is a valid
+    # protocol operation; only the callable adapter is Codex-specific.
+    if (-not (Test-SameToolIdentity -First $boundMaster -Second "Codex")) {
         $ok = $false
-        $errors.Add("The bound Master tool must be Codex (found: $boundMaster). This POC only invokes Codex as Master.")
+        $errors.Add("No callable Master adapter for '$boundMaster'. master-run automation currently supports Codex only. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Master turn manually in $boundMaster.")
     }
 
     $cli = Resolve-CodexCli
@@ -3496,16 +3828,22 @@ function Get-MasterRecommendationFromCapture {
             $result.Error = "$rec recommendations must set WAITING_FOR: Implementer."
             return $result
         }
-        if ([string]::IsNullOrWhiteSpace($implementer) -or $implementer -eq "TBD") {
-            $result.Error = "$rec recommendations must name a concrete IMPLEMENTER, not TBD."
+        # v3.4.1: a captured recommendation must name concrete, recognized tools.
+        # A sentinel or an unknown identity here would otherwise slip past the
+        # collision check below, which is the capture-level independent-review guard.
+        $implementerIdentity = Resolve-ToolIdentity -Tool $implementer
+        if (-not $implementerIdentity.Ok -or $implementerIdentity.Kind -ne "tool") {
+            $result.Error = "$rec recommendations must name a concrete, recognized IMPLEMENTER (found: '$implementer')."
             return $result
         }
-        if ([string]::IsNullOrWhiteSpace($reviewer) -or $reviewer -eq "TBD") {
-            $result.Error = "$rec recommendations must name a concrete REVIEWER, not TBD."
+        $reviewerIdentity = Resolve-ToolIdentity -Tool $reviewer
+        if (-not $reviewerIdentity.Ok -or $reviewerIdentity.Kind -ne "tool") {
+            $result.Error = "$rec recommendations must name a concrete, recognized REVIEWER (found: '$reviewer')."
             return $result
         }
-        if ($implementer -eq $reviewer) {
-            $result.Error = "IMPLEMENTER and REVIEWER must be different tools."
+        # Canonical comparison: two aliases of one tool are not two tools.
+        if (Test-SameToolIdentity -First $implementer -Second $reviewer) {
+            $result.Error = "IMPLEMENTER '$implementer' and REVIEWER '$reviewer' resolve to the same tool. An implementer cannot be the sole reviewer of its own work."
             return $result
         }
     }
@@ -3531,17 +3869,20 @@ function Get-MasterApplyPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master for master-apply.")
     }
-    if ($boundMaster -ne "Codex") {
+    if (-not (Test-SameToolIdentity -First $boundMaster -Second "Codex")) {
         $ok = $false
-        $errors.Add("The bound Master tool must be Codex (found: $boundMaster). This command only applies Codex Master recommendations.")
+        $errors.Add("No callable Master adapter for '$boundMaster'. master-apply only applies recommendations captured by the Codex Master adapter.")
     }
     $recommendation = Get-MasterRecommendationFromCapture -Path (Join-Path (Get-Location) $MasterLastName) -ExpectedTask $CurrentTask
     if ($recommendation.Ok -and $recommendation.Recommendation -ne "BLOCKED") {
-        if ($recommendation.Implementer -ne $boundImplementer) {
+        # v3.4.1: compare captures to the binding canonically. A capture naming
+        # 'Codex Window' against a binding of 'Codex' is the same tool and must not
+        # be rejected as an unapproved role swap.
+        if (-not (Test-SameToolIdentity -First $recommendation.Implementer -Second $boundImplementer)) {
             $ok = $false
             $errors.Add("Captured IMPLEMENTER '$($recommendation.Implementer)' must match the current bound Implementer '$boundImplementer'. Role swaps require explicit user approval.")
         }
-        if ($recommendation.Reviewer -ne $boundReviewer) {
+        if (-not (Test-SameToolIdentity -First $recommendation.Reviewer -Second $boundReviewer)) {
             $ok = $false
             $errors.Add("Captured REVIEWER '$($recommendation.Reviewer)' must match the current bound Reviewer '$boundReviewer'. Role swaps require explicit user approval.")
         }
@@ -3965,7 +4306,7 @@ function Invoke-Cycle {
 
     # Role invariant: the Reviewer must never be the same tool as the Implementer.
     # An implementer cannot be the sole reviewer of its own work.
-    if ($Binding.Reviewer -eq $implementerTool) {
+    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $implementerTool) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Reviewer:    $($Binding.Reviewer)"
@@ -4245,7 +4586,7 @@ function Invoke-Loop {
     }
 
     # --- Session preflight: role invariant ---
-    if ($Binding.Reviewer -eq $Binding.Implementer) {
+    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) {
         Write-Host ""
         Write-Host "loop: blocked."
         Write-Host "Reviewer:    $($Binding.Reviewer)"
@@ -4270,9 +4611,11 @@ function Invoke-Loop {
     #     changes. That opt-in path checks $IncludeReviewer itself, so this gate does not.
     # The clean-tree requirement is unchanged for every normal (Implementer-first) session and
     # for the per-iteration recheck before each automated Implementer turn.
+    # v3.4.1: canonical identity here too. A binding written with a legacy alias must
+    # take the same session-start path as the canonical display name.
     $startsAtReviewerTurn = ($State -eq "READY_FOR_REVIEW") -and
         (($WaitingFor -eq "Reviewer") -or ($WaitingFor -eq (Resolve-Actor -Role "Reviewer" -Binding $Binding))) -and
-        ((Resolve-Actor -Role "Reviewer" -Binding $Binding) -eq "Codex")
+        (Test-SameToolIdentity -First (Resolve-Actor -Role "Reviewer" -Binding $Binding) -Second "Codex")
 
     $tree = Get-WorkingTreeState
     if (-not $tree.Ok) {
@@ -4403,7 +4746,8 @@ function Invoke-Loop {
         # edits only AI_HANDOFF.md and runs no git. Both fail closed through their existing
         # guards, including stale TASK, role-binding mismatch, invalid actors, and bad state.
         if (-not $loopEligible -and $IncludeMaster -and
-            ($script:State -eq "NEEDS_ANALYSIS") -and ($role -eq "Master") -and ($tool -eq "Codex")) {
+            ($script:State -eq "NEEDS_ANALYSIS") -and ($role -eq "Master") -and
+            (Test-SameToolIdentity -First $tool -Second "Codex")) {
 
             # A Master turn counts against MaxTurns like any other automated protocol turn.
             if ($turnsRun -ge $MaxTurns) {
@@ -4447,7 +4791,8 @@ function Invoke-Loop {
         # process), so a malformed/stale/missing verdict or any guard violation stops the loop
         # with no handoff transition. They edit only AI_HANDOFF.md and run no git.
         if (-not $loopEligible -and $IncludeReviewer -and
-            ($script:State -eq "READY_FOR_REVIEW") -and ($role -eq "Reviewer") -and ($tool -eq "Codex")) {
+            ($script:State -eq "READY_FOR_REVIEW") -and ($role -eq "Reviewer") -and
+            (Test-SameToolIdentity -First $tool -Second "Codex")) {
 
             # A Reviewer turn counts against MaxTurns like any other automated turn.
             if ($turnsRun -ge $MaxTurns) {
@@ -4538,7 +4883,7 @@ function Invoke-Loop {
         }
 
         # Per-turn re-checks: the binding or the tree may have changed since the session started
-        if ($script:Binding.Reviewer -eq $script:Binding.Implementer) {
+        if (Test-SameToolIdentity -First $script:Binding.Reviewer -Second $script:Binding.Implementer) {
             Write-Host ""
             Write-Host "loop: blocked."
             Write-Host "Reason:      Role invariant violation detected mid-session (Reviewer == Implementer)."
