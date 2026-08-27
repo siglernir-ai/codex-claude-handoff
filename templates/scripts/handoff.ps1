@@ -531,26 +531,101 @@ $ClaudeImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
 # change between turns and must never be committed.
 $LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName)
 
+# --- Exact-scope Git status capture (v3.4.1) ---
+#
+# The scope guards compare AI_HANDOFF.md Changed Files against what Git actually
+# reports. Until v3.4.1 that comparison read `git status --short` and sliced the
+# path with Substring(3). Two separate defects hid there:
+#
+#   1. With the default core.quotePath, Git QUOTES and octal-escapes any path
+#      containing non-ASCII characters or spaces. `×ž×¡×ž×š.md` arrives as
+#      "\327\236\327\241\327\236\327\232.md" - quotes and escapes included - which can
+#      never equal a path a human wrote by hand. The comparison failed closed, so
+#      commit-check and release-check were simply unusable in such a repository.
+#
+#   2. Even with -z (which suppresses quoting), `& git` decodes native output using
+#      [Console]::OutputEncoding. Under a non-UTF-8 console - codepage 437 is the
+#      Windows default - the same command yields mojibake. A -z-only fix passes every
+#      test on a UTF-8 machine and silently corrupts non-ASCII paths for everyone
+#      else: the identical failure class, one layer down.
+#
+# So the capture is explicit about BOTH: -z for the wire format, and an explicit
+# UTF-8 decode that does not depend on the host console.
+#
+# Returns @{ Ok = capture succeeded; Fields = raw NUL-delimited fields }.
+function Get-GitStatusFields {
+    $result = @{ Ok = $false; Fields = @() }
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "git"
+        $psi.Arguments = "status --porcelain=v1 -z --untracked-files=all"
+        $psi.WorkingDirectory = (Get-Location).Path
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        # Both redirected pipes must be drained CONCURRENTLY. Reading stdout to EOF
+        # first would hang the moment git wrote enough to fill the stderr buffer:
+        # git blocks on the unread stderr pipe, never closes stdout, and this process
+        # waits forever - a hang, not a fail-closed result. Start stderr asynchronously
+        # before the blocking stdout read so neither pipe can back up.
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $null = $errTask.GetAwaiter().GetResult()
+        $proc.WaitForExit()
+        if ($proc.ExitCode -ne 0) { return $result }
+
+        $result.Ok = $true
+        # A trailing NUL always produces one empty tail field; drop empties.
+        $result.Fields = @($stdout -split "`0" | Where-Object { $_ -ne "" })
+        return $result
+    } catch {
+        return $result
+    }
+}
+
+# Walk the NUL-delimited fields into changed paths.
+#
+# Each entry field is "XY<space><path>". For a rename or copy (X or Y is R or C)
+# the SOURCE path follows as its own bare field with no XY prefix, so it must be
+# consumed and discarded - otherwise the pre-rename path is counted as an extra
+# changed file. The pre-v3.4.1 " -> " regex is meaningless under -z.
+#
+# Paths are used exactly as Git spells them: forward slashes, no normalization.
+# Changed Files must be authored the same way. Normalizing separators would be
+# wrong on filesystems where a backslash is a legal filename character, and it
+# would weaken the exact identity this guard exists to enforce.
+function ConvertFrom-GitStatusFields {
+    param([string[]]$Fields)
+    $files = [System.Collections.Generic.List[string]]::new()
+    $i = 0
+    while ($i -lt $Fields.Count) {
+        $entry = $Fields[$i]
+        $i++
+        if ($null -eq $entry -or $entry.Length -lt 4) { continue }
+        $x = $entry.Substring(0, 1)
+        $y = $entry.Substring(1, 1)
+        $path = $entry.Substring(3)
+        if (($x -eq "R") -or ($x -eq "C") -or ($y -eq "R") -or ($y -eq "C")) {
+            $i++   # discard the source path field that follows
+        }
+        if ([string]::IsNullOrEmpty($path)) { continue }
+        if ($LocalHandoffFiles -contains $path) { continue }
+        $files.Add($path)
+    }
+    return $files
+}
+
 # Working tree state for the automation guards (cycle and loop).
 # Returns @{ Ok = git check succeeded; Files = non-exempt changed files (tracked + untracked) }.
 function Get-WorkingTreeState {
-    $files = [System.Collections.Generic.List[string]]::new()
-    $ok = $false
-    try {
-        $gitStatusLines = & git status --short --untracked-files=all 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $ok = $true
-            foreach ($gitLine in $gitStatusLines) {
-                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
-                $filePart = $gitLine.Substring(3).Trim()
-                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }  # renames
-                if ($filePart -eq "") { continue }
-                if ($LocalHandoffFiles -contains $filePart) { continue }
-                $files.Add($filePart)
-            }
-        }
-    } catch { }
-    return @{ Ok = $ok; Files = $files }
+    $status = Get-GitStatusFields
+    if (-not $status.Ok) { return @{ Ok = $false; Files = [System.Collections.Generic.List[string]]::new() } }
+    return @{ Ok = $true; Files = (ConvertFrom-GitStatusFields -Fields $status.Fields) }
 }
 
 function Test-ClaudeAvailable {
@@ -1933,24 +2008,13 @@ function Get-ReleaseChangedFiles {
     return $files
 }
 
+# v3.4.1: shares the single encoding-explicit, NUL-delimited capture with
+# Get-WorkingTreeState. Both gates must agree on what a changed file is; two
+# parsers meant two answers for the same repository.
 function Get-GitChangedFilesForRelease {
-    $files = [System.Collections.Generic.List[string]]::new()
-    $ok = $false
-    try {
-        $gitLines = & git status --short --untracked-files=all 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $ok = $true
-            foreach ($gitLine in $gitLines) {
-                if ($null -eq $gitLine -or $gitLine.Length -lt 3) { continue }
-                $filePart = $gitLine.Substring(3).Trim()
-                if ($filePart -match ' -> (.+)$') { $filePart = $Matches[1].Trim() }
-                if ($filePart -ne "" -and ($LocalHandoffFiles -notcontains $filePart)) {
-                    $files.Add($filePart)
-                }
-            }
-        }
-    } catch { }
-    return @{ Ok = $ok; Files = $files }
+    $status = Get-GitStatusFields
+    if (-not $status.Ok) { return @{ Ok = $false; Files = [System.Collections.Generic.List[string]]::new() } }
+    return @{ Ok = $true; Files = (ConvertFrom-GitStatusFields -Fields $status.Fields) }
 }
 
 function Get-TaskActors {
@@ -2163,7 +2227,7 @@ function Get-ReleasePlan {
     }
     if ($gitState.Ok -and -not (Test-SameFileSet -Expected $releaseFiles -Actual $gitState.Files)) {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files.")
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
     if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
         & git rev-parse -q --verify "refs/tags/$RequestedVersion" *> $null
@@ -2221,7 +2285,7 @@ function Get-CommitPlan {
     }
     if ($gitState.Ok -and -not (Test-SameFileSet -Expected $commitFiles -Actual $gitState.Files)) {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files.")
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
 
     return @{
@@ -2916,7 +2980,7 @@ function Get-ReviewPlan {
     }
     if ($gitState.Ok -and -not (Test-SameFileSet -Expected $reviewFiles -Actual $gitState.Files)) {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files.")
+        $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
 
     $cli = if ($RequireCli) {

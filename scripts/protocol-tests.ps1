@@ -942,6 +942,119 @@ Set-Content -Path (Join-Path $fx "COMMIT_TARGET.md") -Value "# approved commit f
 Set-Content -Path (Join-Path $fx "EXTRA.md") -Value "# extra" -Encoding utf8
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "Mismatch fixture")
 Check "commit-check blocks when Changed Files does not match git status" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
+Check "the scope mismatch diagnostic states the canonical path spelling" ($r.Out -match "forward slashes")
+
+# --- v3.4.1 exact-scope path hardening (S-2) ----------------------------------------
+# Git quotes and octal-escapes any path with non-ASCII characters or spaces under the
+# default core.quotePath, so the pre-v3.4.1 parser could never match a hand-written
+# path and exact-scope comparison failed closed on every such repository.
+
+function New-ScopeFixture {
+    param([string[]]$Paths, [string[]]$Declared = $null)
+    if (-not $Declared) { $Declared = $Paths }
+    $h = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
+    $list = ($Declared | ForEach-Object { "- $_" }) -join "`n"
+    $h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n$list"
+    $d = New-Fixture -Files @{ "AI_HANDOFF.md" = $h; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $d
+    foreach ($p in $Paths) {
+        $full = Join-Path $d $p
+        $parent = Split-Path -Parent $full
+        if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        Set-Content -LiteralPath $full -Value "scope fixture" -Encoding utf8
+    }
+    return $d
+}
+
+# Both redirected pipes must be drained concurrently. Reading stdout to EOF while
+# stderr sits unread deadlocks as soon as git fills the stderr buffer: git blocks,
+# stdout never closes, and the guard hangs instead of failing closed.
+$captureSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+$captureBody = ""
+if ($captureSource -match '(?s)function Get-GitStatusFields\s*\{(.*?)\n\}') { $captureBody = $Matches[1] }
+Check "the git capture drains stderr asynchronously (no sequential-read deadlock)" ($captureBody -match 'StandardError\.ReadToEndAsync\(\)')
+Check "the git capture starts the stderr read before the blocking stdout read" (
+    ($captureBody.IndexOf('StandardError.ReadToEndAsync') -ge 0) -and
+    ($captureBody.IndexOf('StandardError.ReadToEndAsync') -lt $captureBody.IndexOf('StandardOutput.ReadToEnd()'))
+)
+Check "the git capture pins porcelain=v1 so a Git default change cannot alter the format" ($captureBody -match '--porcelain=v1')
+Check "the git capture pins UTF-8 decoding independent of the console codepage" ($captureBody -match 'StandardOutputEncoding')
+
+# The Bash entry point must reach the SAME verdict as PowerShell. Git can emit a
+# partial record set and then fail; a process substitution discards that exit status
+# and the parser would accept the truncated set as the exact scope.
+$bashSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
+Check "the Bash exact-scope parser reads Git's NUL-delimited porcelain" ($bashSource -match '--porcelain=v1 -z --untracked-files=all')
+Check "the Bash exact-scope parser checks git status exit status before trusting any field" ($bashSource -match 'if ! git status --porcelain=v1 -z')
+Check "the Bash exact-scope parser fails closed when git status fails" ($bashSource -match 'git status failed; exact scope cannot be verified')
+Check "the Bash exact-scope parser no longer consumes git through a process substitution" ($bashSource -notmatch '< <\(git status')
+Check "the Bash exact-scope parser discards rename and copy source fields" ($bashSource -match 'R\?\|C\?\|\?R\|\?C')
+
+# A wide changed set exercises a large stdout stream through the same capture.
+$manyPaths = 1..40 | ForEach-Object { "bulk/file $_.md" }
+$fx = New-ScopeFixture -Paths $manyPaths
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "wide changed set")
+Check "exact scope survives a wide changed set through one capture" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+$fx = New-ScopeFixture -Paths @("a space.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "spaced path")
+Check "exact scope matches a path containing spaces" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+# Non-ASCII names are built from code points so THIS FILE stays pure ASCII.
+# Windows PowerShell 5.1 reads a .ps1 without a BOM as ANSI, so a literal Hebrew
+# name written here is mangled by the parser before the test can run - the same
+# encoding trap that cost v3.1.4. Building the string at runtime sidesteps the
+# file encoding entirely.
+$hebDoc  = [string]([char]0x05DE + [char]0x05E1 + [char]0x05DE + [char]0x05DA)   # "document"
+$hebName = [string]([char]0x05E9 + [char]0x05DD)                                 # "name"
+
+$fx = New-ScopeFixture -Paths @("$hebDoc.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "non-ASCII path")
+Check "exact scope matches a non-ASCII path" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+$fx = New-ScopeFixture -Paths @("$hebDoc $hebName.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "non-ASCII with spaces")
+Check "exact scope matches a non-ASCII path containing spaces" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+$fx = New-ScopeFixture -Paths @("nested/deeper/$hebDoc.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "nested non-ASCII path")
+Check "exact scope matches a nested non-ASCII path" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+# A rename emits the destination AND the source as separate NUL fields. Only the
+# destination is a changed file; counting the source too would break exact scope.
+$renameTarget = "$hebName $hebDoc.md"
+$h = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
+$h = $h -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- $renameTarget"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $h; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Set-Content -LiteralPath (Join-Path $fx "old name.md") -Value "renamed fixture" -Encoding utf8
+Initialize-FixtureGitBaseline -Dir $fx
+Push-Location $fx; try { & git mv "old name.md" $renameTarget *> $null } finally { Pop-Location }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "rename to a non-ASCII name")
+Check "a rename contributes only its destination path to exact scope" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+
+# Fail-closed must survive the rewrite: an undeclared file still blocks.
+$fx = New-ScopeFixture -Paths @("$hebDoc.md", "undeclared extra.md") -Declared @("$hebDoc.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "still fails closed")
+Check "an undeclared non-ASCII-adjacent file still fails closed" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
+
+# Separator spelling stays strict by decision: Changed Files must use Git-style
+# forward slashes. A backslash spelling is a genuine mismatch, not a normalization gap.
+$fx = New-ScopeFixture -Paths @("nested/deeper/$hebDoc.md") -Declared @("nested\deeper\$hebDoc.md")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "backslash spelling")
+Check "a backslash-spelled path is treated as a mismatch, not normalized" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
+
+# Paths containing a literal quote or backslash are not creatable on NTFS, so the
+# case is exercised where the filesystem permits it and reported as skipped otherwise.
+$quoteProbe = Join-Path ([System.IO.Path]::GetTempPath()) ("q" + [Guid]::NewGuid().ToString("N") + '"x.md')
+$quoteSupported = $false
+try { Set-Content -LiteralPath $quoteProbe -Value "x" -ErrorAction Stop; $quoteSupported = $true; Remove-Item -LiteralPath $quoteProbe -Force } catch { }
+if ($quoteSupported) {
+    $fx = New-ScopeFixture -Paths @('has"quote.md')
+    $r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "quoted path")
+    Check "exact scope matches a path containing a literal quote" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+} else {
+    Write-Host "  SKIP  literal-quote path: this filesystem forbids the character"
+}
 
 # === 6. Sequence advance guards (fail closed) ===
 Write-Host "[6] Sequence advance guards (sequence-check)"

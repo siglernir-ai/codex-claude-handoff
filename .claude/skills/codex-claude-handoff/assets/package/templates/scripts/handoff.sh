@@ -402,21 +402,54 @@ cmd_commit_check() {
             esac
         done < <(tr -d '\r' < "$HANDOFF_FILE")
 
-        local gstatus gl fp
-        gstatus=$(git status --short --untracked-files=all 2>/dev/null) || gstatus=""
-        if [ -n "$gstatus" ]; then
-            while IFS= read -r gl; do
-                [ ${#gl} -lt 3 ] && continue
-                fp="${gl:3}"
-                fp="${fp#"${fp%%[! ]*}"}"
-                case "$fp" in *" -> "*) fp="${fp##* -> }" ;; esac
-                [ -z "$fp" ] && continue
-                case " $LOCAL_IGNORED " in
-                    *" $fp "*) ;;
-                    *) actual_files+=("$fp") ;;
-                esac
-            done <<< "$gstatus"
+        # v3.4.1: read Git's NUL-delimited porcelain instead of --short.
+        #
+        # With the default core.quotePath, --short QUOTES and octal-escapes any path
+        # containing non-ASCII characters or spaces, so the parsed value could never
+        # equal a path written by hand under Changed Files and the exact-scope check
+        # failed closed on every such repository.
+        #
+        # Command substitution cannot carry NUL bytes, so the -z stream is written to a
+        # temporary file and consumed with `read -d ''`. A process substitution would be
+        # shorter, but it discards Git's exit status: Git can emit a partial record set
+        # and THEN fail, and the parser would accept that truncated set as the exact
+        # scope. Staging the stream lets the exit status be checked before a single
+        # field is trusted, so a failed status blocks instead of approving a subset.
+        #
+        # For a rename or copy the SOURCE path follows as its own field and must be
+        # discarded, or the pre-rename path is counted as an extra changed file. The old
+        # " -> " split is meaningless under -z.
+        #
+        # Paths are used exactly as Git spells them - forward slashes, no normalization.
+        local gl fp xy gtmp
+        gtmp=$(mktemp 2>/dev/null) || gtmp=""
+        if [ -z "$gtmp" ]; then
+            echo "Commit: BLOCKED - could not stage git status output for verification."
+            echo "Exact scope cannot be verified, so no commit is authorized."
+            echo ""
+            return
         fi
+        if ! git status --porcelain=v1 -z --untracked-files=all >"$gtmp" 2>/dev/null; then
+            rm -f "$gtmp"
+            echo "Commit: BLOCKED - git status failed; exact scope cannot be verified."
+            echo "No commit is authorized while the changed-file set is unknown."
+            echo ""
+            return
+        fi
+        while IFS= read -r -d '' gl; do
+            [ ${#gl} -lt 4 ] && continue
+            xy="${gl:0:2}"
+            fp="${gl:3}"
+            case "$xy" in
+                R?|C?|?R|?C) IFS= read -r -d '' _ || true ;;
+            esac
+            [ -z "$fp" ] && continue
+            case " $LOCAL_IGNORED " in
+                *" $fp "*) ;;
+                *) actual_files+=("$fp") ;;
+            esac
+        done < "$gtmp"
+        rm -f "$gtmp"
 
         if [ ${#actual_files[@]} -eq 0 ]; then
             echo "Commit: No tracked changes to commit."
