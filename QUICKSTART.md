@@ -1,5 +1,7 @@
 # Quick Start
 
+> **First time?** Read [START_HERE.md](START_HERE.md) before installing. This page is the install steps only.
+
 Install `codex-claude-handoff` into one project and activate it only for the tasks
 that should use the Codex -> Claude Code -> Codex review workflow.
 

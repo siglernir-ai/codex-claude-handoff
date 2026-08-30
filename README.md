@@ -19,6 +19,8 @@ another pass, while scoped question and re-gating states let either role challen
 assumptions without silently guessing. Automated turns have explicit turn, time,
 and budget limits; general question dialogue still advances through explicit turns.
 
+> **New here? Read [START_HERE.md](START_HERE.md) first** - what this is, what it refuses to do, and why it blocks you.
+
 > **Current release: v3.4.1 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
