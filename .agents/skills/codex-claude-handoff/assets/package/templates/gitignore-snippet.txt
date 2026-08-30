@@ -14,3 +14,4 @@
 /CLAUDE_IMPLEMENTER_COMMAND.md
 /IMPLEMENTER_CLI_BRIEF.md
 /.ai/handoff-history/
+/HANDOFF_RUN.json

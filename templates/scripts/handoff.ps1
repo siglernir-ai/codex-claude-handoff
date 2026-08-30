@@ -527,9 +527,12 @@ $ClaudeImplementerJsonlName = "CLAUDE_IMPLEMENTER.jsonl"
 $ClaudeImplementerLastName  = "CLAUDE_IMPLEMENTER_LAST.md"
 $ClaudeImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
 
+# Marker written while an automated turn is in flight (v3.4.2). Local and gitignored.
+$RunMarkerName = "HANDOFF_RUN.json"
+
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName)
 
 # --- Exact-scope Git status capture (v3.4.1) ---
 #
@@ -921,6 +924,112 @@ function Write-ClaudeImplementerCapture {
         Write-Host "WARNING: could not write Claude Implementer capture artifacts: $_"
     }
 }
+# --- Running-turn visibility and stop (v3.4.2) ---
+#
+# Automated turns are bounded by timeout, MaxTurns and budget, and nothing runs unless
+# the operator asks for it. But until v3.4.2 a turn in flight was invisible from any
+# other window, and the only way to end one was Ctrl+C in the window that started it.
+# A bounded process you cannot see or stop still feels like a runaway.
+#
+# The marker is local and gitignored, like every other coordination file. A marker
+# whose process is gone is reported as stale and cleared - never treated as a live run,
+# because a false "something is running" is its own kind of alarm.
+
+function Write-RunMarker {
+    param([int]$ProcessId, [string]$Kind, [decimal]$Budget, [int]$Timeout)
+    try {
+        # A process id alone is not an identity: the operating system reuses ids, so a
+        # recycled id would let stop terminate an unrelated process. Recording the
+        # process start time makes the pair unique in practice.
+        $startTicks = 0
+        try { $startTicks = (Get-Process -Id $ProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { $startTicks = 0 }
+        $marker = [ordered]@{
+            processId  = $ProcessId
+            startTicks = $startTicks
+            kind       = $Kind
+            startedUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            budgetUsd  = $Budget
+            timeoutSec = $Timeout
+        }
+        $path = Join-Path (Get-Location) $RunMarkerName
+        [System.IO.File]::WriteAllText($path, ($marker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
+function Clear-RunMarker {
+    try {
+        $path = Join-Path (Get-Location) $RunMarkerName
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    } catch { }
+}
+
+function Get-RunMarkerState {
+    $result = @{ Present = $false; Alive = $false; Stale = $false; ProcessId = 0; StartTicks = 0; Kind = ""; StartedUtc = ""; BudgetUsd = 0; TimeoutSec = 0 }
+    $path = Join-Path (Get-Location) $RunMarkerName
+    if (-not (Test-Path -LiteralPath $path)) { return $result }
+    $result.Present = $true
+    try {
+        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $result.ProcessId  = [int]$data.processId
+        if ($null -ne $data.startTicks) { $result.StartTicks = [int64]$data.startTicks }
+        $result.Kind       = [string]$data.kind
+        $result.StartedUtc = [string]$data.startedUtc
+        $result.BudgetUsd  = $data.budgetUsd
+        $result.TimeoutSec = $data.timeoutSec
+    } catch {
+        $result.Stale = $true
+        return $result
+    }
+    # Alive means "the recorded process is still running", not "some process holds that
+    # id". A reused id must read as stale, so stop can never target a stranger.
+    # No verifiable identity means STALE, never alive. Falling back to a bare id match
+    # when startTicks is missing or zero would reintroduce exactly the hazard the field
+    # exists to remove: a recycled id could then be terminated by stop. The cost of
+    # being wrong here is asymmetric - refusing to kill something is recoverable,
+    # killing a stranger is not.
+    $alive = $false
+    if ($result.StartTicks -gt 0) {
+        try {
+            $running = Get-Process -Id $result.ProcessId -ErrorAction Stop
+            $alive = ($running.StartTime.ToUniversalTime().Ticks -eq $result.StartTicks)
+        } catch { $alive = $false }
+    }
+    $result.Alive = $alive
+    $result.Stale = -not $alive
+    return $result
+}
+
+function Invoke-Stop {
+    $state = Get-RunMarkerState
+    Write-Host ""
+    if (-not $state.Present) {
+        Write-Host "stop: nothing to stop."
+        Write-Host "No automated turn is recorded as running in this project."
+        Write-Host "Nothing runs in the background here: turns start only from cycle or loop."
+        Write-Host ""
+        return
+    }
+    if ($state.Stale) {
+        Clear-RunMarker
+        Write-Host "stop: nothing to stop."
+        Write-Host "A stale run marker was found (process $($state.ProcessId) is no longer running) and has been cleared."
+        Write-Host ""
+        return
+    }
+
+    Write-Host "Stopping the running turn."
+    Write-Host "  Kind:       $($state.Kind)"
+    Write-Host "  Process:    $($state.ProcessId)"
+    Write-Host "  Started:    $($state.StartedUtc) UTC"
+    Stop-ProcessTree -ProcessId $state.ProcessId
+    Clear-RunMarker
+    Write-Host ""
+    Write-Host "stop: complete. The process tree was terminated and the marker cleared."
+    Write-Host "AI_HANDOFF.md was not changed, and no git, deploy, database or secret action was run."
+    Write-Host "The turn stopped mid-flight, so re-read AI_HANDOFF.md and git status before continuing."
+    Write-Host ""
+}
+
 # Run one Claude Code Implementer turn with the standard safety constraints.
 function Invoke-ClaudeTurn {
     if ($TimeoutSeconds -lt 1) {
@@ -1019,6 +1128,7 @@ try {
         $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ChildPidFile', $childPidFile, '-ModelName', $runnerModel)
         $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
         $processJob = New-HandoffProcessJob -Process $proc
+        Write-RunMarker -ProcessId $proc.Id -Kind "Claude Code Implementer turn" -Budget $BudgetUsd -Timeout $TimeoutSeconds
     } catch {
         Write-Host "Claude Code turn blocked."
         Write-Host "Reason: failed to start bounded Claude Code runner: $_"
@@ -1050,6 +1160,7 @@ try {
         }
         try { $proc.WaitForExit(5000) | Out-Null } catch { }
     }
+    Clear-RunMarker
 
     $stdoutText = ""
     if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
@@ -1425,6 +1536,13 @@ function Invoke-UserNext {
         Write-Host "Safety: commits only AI_HANDOFF.md Changed Files after scope checks; no push/tag/deploy/db/secrets."
         Write-Host "Do not commit local coordination/evidence files."
         Write-Host ""
+        # v3.4.2: name the release path here too. This command previously offered only
+        # commit-approved, and because release rebuilt the commit itself, following that
+        # advice left the release executor permanently unreachable.
+        Write-Host "If this change is a RELEASE, the guarded release executor is the other path:"
+        Write-Host "  handoff.ps1 release-check -Version vX.Y.Z"
+        Write-Host "Either order works since v3.4.2 - release verifies scope against HEAD when the tree is already clean."
+        Write-Host ""
         return
     }
 
@@ -1535,9 +1653,47 @@ function Invoke-Models {
     if ($script:ModelSelection.NeedsEscalationApproval) {
         Write-Host "Approval:           -AllowModelEscalation is required for cycle/loop."
     }
+    if (Test-ModelRoutingInert) {
+        Write-Host ""
+        Write-Host "Routing:            INERT - every profile in MODEL_ROUTING.json resolves to inherit."
+        Write-Host "                    The Master still selects a capability profile per task, but the"
+        Write-Host "                    selection currently changes nothing: every turn runs on whatever"
+        Write-Host "                    model Claude Code is already using."
+        Write-Host "                    To activate, map profiles to concrete local models in"
+        Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
+    }
+
     Write-Host ""
     Write-Host "Override order: -Model, HANDOFF_CLAUDE_MODEL_<PROFILE>, MODEL_ROUTING.json, inherit."
     Write-Host "The protocol selects capability profiles; concrete provider model names remain local and replaceable."
+}
+
+# v3.4.2: a feature that silently does nothing is worse than one that is off, because
+# the user cannot tell which they have. The shipped MODEL_ROUTING.json maps every
+# profile to inherit - deliberately, since the v3.1.7 rule forbids an install that
+# changes default behavior, and freezing vendor model names is exactly what the
+# capability-profile design avoids. The defect was never the default; it was that no
+# output said the routing was doing nothing. This reports that state without changing it.
+function Test-ModelRoutingInert {
+    $configPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+    if (-not (Test-Path -LiteralPath $configPath)) { return $false }
+    try {
+        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    if ($null -eq $config -or $null -eq $config.profiles) { return $false }
+
+    $any = $false
+    foreach ($property in $config.profiles.PSObject.Properties) {
+        $value = $property.Value
+        if ($null -eq $value) { continue }
+        $model = $value.claudeModel
+        if ([string]::IsNullOrWhiteSpace($model)) { continue }
+        $any = $true
+        if ($model -ne "inherit") { return $false }
+    }
+    return $any
 }
 
 function Invoke-DoctorRemoteVersionCheck {
@@ -1719,9 +1875,30 @@ function Invoke-Doctor {
         foreach ($error in $RoleCheckpoint.Errors) { Write-Host "      $error" }
     }
 
+    # Report run state UNCONDITIONALLY, before and independent of model resolution.
+    # Nesting it inside the model-selection-OK branch meant that a repository with
+    # invalid routing - one of the states a user is most likely to run doctor in -
+    # silently lost the answer to "is something running right now?".
+    $doctorRun = Get-RunMarkerState
+    if ($doctorRun.Alive) {
+        Write-DoctorLine "INFO" "An automated turn is running now: $($doctorRun.Kind), process $($doctorRun.ProcessId). Stop it with handoff.ps1 stop."
+    } elseif ($doctorRun.Present) {
+        # doctor deliberately does NOT clear this. It closes every run by stating that
+        # no files were changed, and that guarantee is worth more than tidying a marker
+        # here: a diagnostic that silently mutates state is no longer a diagnostic.
+        # status and stop both clear it, and the message says so.
+        Write-DoctorLine "WARN" "A stale run marker is present for process $($doctorRun.ProcessId), which is no longer running. doctor is read-only and will not remove it; run handoff.ps1 status or handoff.ps1 stop to clear it."
+    } else {
+        Write-DoctorLine "OK" "No automated turn is running."
+    }
+
     $doctorModelSelection = Resolve-ModelSelection -ForState $doctorStatus.State -HandoffProfile $doctorStatus.ModelProfile -CommandProfile $ModelProfile -CommandModel $Model
     if ($doctorModelSelection.Ok) {
         Write-DoctorLine "OK" "Model routing: profile=$($doctorModelSelection.EffectiveProfile); Claude model=$($doctorModelSelection.ClaudeModel); source=$($doctorModelSelection.Source)"
+    if (Test-ModelRoutingInert) {
+        Write-DoctorLine "INFO" "Model routing is INERT: every profile in MODEL_ROUTING.json resolves to inherit, so profile selection currently changes no model."
+        Write-Host "      Map profiles to concrete local models in .ai/skills/codex-claude-handoff/MODEL_ROUTING.json to activate per-task routing."
+    }
     } else {
         Write-DoctorLine "FAIL" "Model routing configuration is invalid."
         foreach ($error in $doctorModelSelection.Errors) { Write-Host "      $error" }
@@ -1795,6 +1972,18 @@ function Invoke-Status {
     $skillAdapter = Join-Path (Get-Location) ".agents/skills/codex-claude-handoff/SKILL.md"
     if (Test-Path $skillAdapter) {
         Write-Host "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
+    }
+    $runState = Get-RunMarkerState
+    if ($runState.Alive) {
+        Write-Host "Running:      YES - $($runState.Kind), process $($runState.ProcessId), started $($runState.StartedUtc) UTC. Stop it with: handoff.ps1 stop"
+    } elseif ($runState.Present) {
+        # Clear it here as well as in stop. A marker whose process is gone is not
+        # information, it is a false alarm, and leaving it for a second command to tidy
+        # up means the next status call repeats the same false alarm.
+        Clear-RunMarker
+        Write-Host "Running:      no (a stale marker for process $($runState.ProcessId) was found and cleared)"
+    } else {
+        Write-Host "Running:      no automated turn in flight"
     }
     Write-Host ""
 }
@@ -2254,6 +2443,38 @@ function Invoke-ReleasePreflightChecks {
     return $true
 }
 
+# The file set of the current commit, read NUL-delimited so non-ASCII and spaced paths
+# survive exactly as they do everywhere else in the exact-scope machinery.
+function Get-HeadCommitFiles {
+    $files = [System.Collections.Generic.List[string]]::new()
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "git"
+        $psi.Arguments = "show --name-only -z --format= HEAD"
+        $psi.WorkingDirectory = (Get-Location).Path
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $stdout = $proc.StandardOutput.ReadToEnd()
+        $null = $errTask.GetAwaiter().GetResult()
+        $proc.WaitForExit()
+        if ($proc.ExitCode -ne 0) { return @{ Ok = $false; Files = $files } }
+        foreach ($entry in ($stdout -split "`0")) {
+            if ([string]::IsNullOrEmpty($entry)) { continue }
+            if ($LocalHandoffFiles -contains $entry) { continue }
+            $files.Add($entry)
+        }
+        return @{ Ok = $true; Files = $files }
+    } catch {
+        return @{ Ok = $false; Files = $files }
+    }
+}
+
 # --- Packaging gate (v3.4.1, G4) ---
 #
 # The release artifacts live in dist/, which is gitignored. Every guard that
@@ -2347,7 +2568,27 @@ function Get-ReleasePlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md Changed Files has no releasable files.")
     }
-    if ($gitState.Ok -and -not (Test-SameFileSet -Expected $releaseFiles -Actual $gitState.Files)) {
+    # v3.4.2: accept an already-committed HEAD.
+    #
+    # release performs add, commit, push and tag, so it assumed uncommitted work. But
+    # user-next at REVIEW_DONE always points at commit-approved, and once that has run
+    # the tree is clean, git status lists nothing, and this check failed on an empty
+    # set - making the release executor unreachable by following the tool's own
+    # instructions. That happened while releasing v3.4.1; push and tag were done by hand.
+    #
+    # Scope is still verified exactly. When the tree is clean, the comparison moves to
+    # the file set of HEAD: the reviewed commit must contain exactly the approved files.
+    # A HEAD that does not match still blocks.
+    $releaseFromHead = $false
+    if ($gitState.Ok -and $gitState.Files.Count -eq 0) {
+        $headFiles = Get-HeadCommitFiles
+        if ($headFiles.Ok -and (Test-SameFileSet -Expected $releaseFiles -Actual $headFiles.Files)) {
+            $releaseFromHead = $true
+        } else {
+            $ok = $false
+            $errors.Add("The working tree is clean, so the release would use the files already committed at HEAD - but HEAD's file set does not match AI_HANDOFF.md Changed Files. Release the commit that was reviewed, or restore the pending changes.")
+        }
+    } elseif ($gitState.Ok -and -not (Test-SameFileSet -Expected $releaseFiles -Actual $gitState.Files)) {
         $ok = $false
         $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
@@ -2378,6 +2619,7 @@ function Get-ReleasePlan {
         GitFiles = $gitState.Files
         TaskActors = $taskActors
         Package = $package
+        ReleaseFromHead = $releaseFromHead
     }
 }
 
@@ -2615,11 +2857,22 @@ function Invoke-Release {
 
     Write-Host ""
     Write-Host "Authorization accepted. Executing release."
-    $fileArray = [string[]]$plan.ReleaseFiles
-    & git add -- @fileArray
-    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git add"; exit 1 }
-    & git commit -m $Message
-    if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git commit"; exit 1 }
+    # v3.4.2: when the reviewed change is already committed, releasing must NOT try to
+    # build the commit again. git add would stage nothing and git commit would fail on
+    # an empty commit, which is precisely why the release executor was unreachable after
+    # commit-approved. Get-ReleasePlan has already verified that HEAD's file set equals
+    # the approved Changed Files, so the commit step is complete, not skipped.
+    if ($plan.ReleaseFromHead) {
+        Write-Host "Working tree is clean and HEAD matches the approved Changed Files."
+        Write-Host "Releasing the existing reviewed commit: $(& git rev-parse --short HEAD)"
+        Write-Host "Skipping git add and git commit - the commit step is already done."
+    } else {
+        $fileArray = [string[]]$plan.ReleaseFiles
+        & git add -- @fileArray
+        if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git add"; exit 1 }
+        & git commit -m $Message
+        if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git commit"; exit 1 }
+    }
     & git push origin HEAD
     if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: git push origin HEAD"; exit 1 }
     & git tag -a $Version -m $Version
@@ -5351,6 +5604,7 @@ switch ($Command) {
     "doctor"      { Invoke-Doctor }
     "models"      { Invoke-Models }
     "status"       { Invoke-Status }
+    "stop"         { Invoke-Stop }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
     "next"         { Invoke-Next }
@@ -5379,6 +5633,7 @@ switch ($Command) {
             Write-Host ""
             Write-Host "Commands:"
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
+            Write-Host "  stop                      Stop an automated turn that is running now. No git, deploy, database or secret action."
             Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
             Write-Host "  models [-ModelProfile P] [-Model M]"
             Write-Host "                            Show the effective capability profile and Claude model resolution. Read-only."

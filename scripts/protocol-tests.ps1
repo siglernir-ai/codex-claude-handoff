@@ -996,6 +996,104 @@ Check "the Bash exact-scope parser fails closed when git status fails" ($bashSou
 Check "the Bash exact-scope parser no longer consumes git through a process substitution" ($bashSource -notmatch '< <\(git status')
 Check "the Bash exact-scope parser discards rename and copy source fields" ($bashSource -match 'R\?\|C\?\|\?R\|\?C')
 
+# --- v3.4.2 first-run clarity -------------------------------------------------------
+# A feature that silently does nothing is worse than one that is off, because the user
+# cannot tell which they have. Shipped routing maps every profile to inherit - correct,
+# per the v3.1.7 rule - but nothing said so, so the headline feature of v3.4.0 appeared
+# to work while changing nothing.
+$handoffSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "inert model routing is detectable" ($handoffSrc -match 'function Test-ModelRoutingInert')
+Check "shipped routing keeps every profile on inherit (install changes no behavior)" (
+    ((Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")) -notmatch '"claudeModel"\s*:\s*"(?!inherit)')
+)
+Check "the shipped routing file documents how to activate it" ((Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")) -match '_readme')
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit"},"economy":{"claudeModel":"inherit"}}}' }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("models")
+Check "models reports INERT when every profile resolves to inherit" ($r.Out -match "INERT")
+Check "the INERT message names the file to edit" ($r.Out -match "MODEL_ROUTING\.json")
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"some-local-model"},"economy":{"claudeModel":"inherit"}}}' }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("models")
+Check "models does NOT report INERT once any profile maps to a concrete model" ($r.Out -notmatch "INERT")
+
+# A bounded turn that cannot be seen or stopped still feels like a runaway.
+Check "a stop command exists" ($handoffSrc -match 'function Invoke-Stop')
+Check "a run marker is written when an automated turn starts" ($handoffSrc -match 'Write-RunMarker -ProcessId \$proc\.Id')
+Check "the run marker is cleared when the turn ends" ($handoffSrc -match 'Clear-RunMarker')
+Check "the run marker is a local coordination file, never committed" ($handoffSrc -match '"HANDOFF_LOOP\.log", \$RunMarkerName')
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("status")
+Check "status states plainly that nothing is running" ($r.Out -match "Running:\s+no automated turn in flight")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("stop")
+Check "stop reports there is nothing to stop when no turn is running" ($r.Out -match "stop: nothing to stop")
+
+# A marker whose process is gone must never read as a live run.
+Set-Content -Path (Join-Path $fx "HANDOFF_RUN.json") -Value '{"processId":999999,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}' -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("status")
+Check "a stale run marker is reported as stale, not as running" ($r.Out -match "stale marker")
+# status must clear it too. A dead-PID marker is a false alarm, not information, and
+# leaving it for stop to tidy up means every later status repeats the same false alarm.
+Check "status clears the stale marker it reports" (-not (Test-Path (Join-Path $fx "HANDOFF_RUN.json")))
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("status")
+Check "a cleared stale marker does not reappear on the next status" ($r.Out -match "Running:\s+no automated turn in flight")
+
+Set-Content -Path (Join-Path $fx "HANDOFF_RUN.json") -Value '{"processId":999999,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}' -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("stop")
+Check "stop clears a stale marker instead of pretending to kill something" ($r.Out -match "stale run marker was found")
+Check "the stale marker is actually removed" (-not (Test-Path (Join-Path $fx "HANDOFF_RUN.json")))
+# doctor deliberately does NOT clear the marker. It closes every run by stating that no
+# files were changed; a diagnostic that silently mutates state is no longer a diagnostic.
+Set-Content -Path (Join-Path $fx "HANDOFF_RUN.json") -Value '{"processId":999999,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}' -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("doctor")
+Check "doctor reports a stale marker" ($r.Out -match "stale run marker is present")
+Check "doctor stays read-only and does not clear the marker" (Test-Path (Join-Path $fx "HANDOFF_RUN.json"))
+Check "doctor names the commands that do clear it" ($r.Out -match "handoff\.ps1 status or handoff\.ps1 stop")
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("status")
+Check "status clears what doctor only reported" (-not (Test-Path (Join-Path $fx "HANDOFF_RUN.json")))
+# Run state must be reported even when model routing is broken - one of the states a
+# user is most likely to run doctor in.
+$fxBadModel = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = 'not valid json at all' }
+$r = Invoke-Handoff -WorkDir $fxBadModel -Arguments @("doctor")
+Check "doctor still reports run state when model routing is invalid" ($r.Out -match "No automated turn is running|automated turn is running now|stale run marker is present")
+
+# A recycled process id must not be mistaken for the recorded turn.
+Check "the run marker records process start time, not just the id" ($handoffSrc -match 'startTicks')
+Check "liveness compares the recorded start time, so a reused id reads as stale" ($handoffSrc -match 'StartTime\.ToUniversalTime\(\)\.Ticks -eq \$result\.StartTicks')
+$fxPid = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+Set-Content -Path (Join-Path $fxPid "HANDOFF_RUN.json") -Value ('{"processId":' + $PID + ',"startTicks":1,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}') -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fxPid -Arguments @("status")
+Check "a live id with a mismatched start time is treated as stale, not as our turn" ($r.Out -match "stale marker")
+# Missing or zero startTicks must ALSO read as stale. Falling back to a bare id match
+# would reintroduce the exact hazard the field removes.
+$fxNoTicks = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+Set-Content -Path (Join-Path $fxNoTicks "HANDOFF_RUN.json") -Value ('{"processId":' + $PID + ',"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}') -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fxNoTicks -Arguments @("status")
+Check "a marker with no startTicks reads as stale, never as a live turn" ($r.Out -match "stale marker")
+$fxZeroTicks = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+Set-Content -Path (Join-Path $fxZeroTicks "HANDOFF_RUN.json") -Value ('{"processId":' + $PID + ',"startTicks":0,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}') -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fxZeroTicks -Arguments @("stop")
+Check "stop refuses to kill a process it cannot positively identify" ($r.Out -match "stale run marker was found")
+
+# release was unreachable by following the tool's own instructions: user-next always
+# pointed at commit-approved, and release then failed on an empty git status.
+Check "the release path accepts an already-committed HEAD" ($handoffSrc -match 'function Get-HeadCommitFiles')
+Check "HEAD's file set is read NUL-delimited like every other scope check" ($handoffSrc -match 'show --name-only -z --format= HEAD')
+Check "a HEAD that does not match Changed Files still blocks" ($handoffSrc -match "HEAD's file set does not match AI_HANDOFF.md Changed Files")
+# The flag must be RETURNED and USED, not just computed. Setting it and then still
+# running git add / git commit unconditionally left the executor exactly as unreachable
+# as before, with the added risk of a failed empty commit mid-release.
+Check "the already-committed decision is returned from the release plan" ($handoffSrc -match 'ReleaseFromHead = \$releaseFromHead')
+Check "the release executor honours it and skips add/commit" ($handoffSrc -match 'if \(\$plan\.ReleaseFromHead\) \{')
+Check "push and tag still run on the already-committed path" (
+    ($handoffSrc -match 'Skipping git add and git commit') -and ($handoffSrc -match 'git push origin HEAD')
+)
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
+Check "user-next at REVIEW_DONE names the release path as well as the commit path" (($r.Out -match "commit-approved") -and ($r.Out -match "release-check"))
+
 # --- v3.4.1 packaging and release awareness (G2, G3, G4) ----------------------------
 # v3.4.0 was tagged and pushed with no package ever built. dist/ is gitignored, so
 # every tracked-file check was blind to it, and doctor called the newest TAG "the

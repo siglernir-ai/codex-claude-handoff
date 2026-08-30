@@ -1,5 +1,18 @@
 {
   "schemaVersion": 1,
+
+  "_readme": [
+    "The protocol picks a capability profile per task; this file maps profiles to concrete local models.",
+    "Shipped default: every profile is 'inherit', so installing changes nothing about which model runs.",
+    "While every profile is 'inherit', routing is INERT - 'handoff.ps1 models' and 'doctor' say so.",
+    "To activate, replace 'inherit' with a model name your Claude Code accepts, for example:",
+    "  cheap_readonly -> a small fast model, used for read-only investigation turns",
+    "  economy        -> a small fast model, used for low-risk work",
+    "  standard       -> your normal working model",
+    "  high_reasoning -> your strongest model; concrete escalation also requires -AllowModelEscalation",
+    "Model names are intentionally NOT shipped here: they change often and belong to your setup, not the protocol."
+  ],
+
   "profiles": {
     "inherit": {
       "claudeModel": "inherit"
