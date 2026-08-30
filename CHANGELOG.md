@@ -3,6 +3,35 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.4.1 - Identity, History and Packaging Hardening
+
+- Added a canonical tool-identity layer (`Resolve-ToolIdentity`, `Test-SameToolIdentity`)
+  with an explicit registry and legacy display aliases. Every role gate, adapter
+  lookup and capture comparison now resolves identity instead of comparing display
+  text, so one tool under two names can no longer satisfy the Reviewer != Implementer
+  invariant. An unrecognized identity is rejected, never guessed.
+- Added archive-before-reset. `start` copies the outgoing `AI_HANDOFF.md` byte-for-byte
+  into the gitignored `.ai/handoff-history/`, verifies it by SHA-256, writes sidecar
+  metadata, and refuses to reset when the archive cannot be written.
+- Added a narrow guarded recovery path for terminal role drift, and rewrote the role
+  checkpoint failure message so it describes that path instead of advising a manual
+  rewrite of a finished record.
+- Replaced the hand-rolled `.gitignore` scan with `git check-ignore`, removing a false
+  warning on correctly configured repositories.
+- Hardened exact-scope path handling. Both PowerShell parsers and the Bash parser now
+  read `git status --porcelain=v1 -z`, share one encoding-explicit UTF-8 capture that
+  does not depend on the console codepage, discard rename and copy source fields, and
+  fail closed on a failed `git status`. Non-ASCII and spaced paths are handled exactly.
+- Added a packaging gate. `release-check` and `release` now refuse a version whose ZIP
+  and `.sha256` do not exist in `dist/` and agree with each other.
+- `bootstrap.ps1` installs from the published release asset and verifies its SHA-256
+  before extracting. A missing asset, missing or malformed checksum, name mismatch or
+  hash mismatch aborts before anything is written.
+- `doctor -CheckUpdates` now reports the latest source tag, whether a GitHub Release
+  exists for it, and whether the required ZIP and checksum assets are attached, as
+  three separate results. A tag without a release is a WARN, not a PASS.
+- `next` now surfaces the callable automated route alongside the manual paste, and
+  `user-next` prints a runnable command including the repository path.
 ## 3.4.0 - Dynamic Model Resolver
 
 - Added stable `auto`, `economy`, `cheap_readonly`, `standard`, and

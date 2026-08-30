@@ -538,7 +538,7 @@ $LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_
 # path with Substring(3). Two separate defects hid there:
 #
 #   1. With the default core.quotePath, Git QUOTES and octal-escapes any path
-#      containing non-ASCII characters or spaces. `×ž×¡×ž×š.md` arrives as
+#      containing non-ASCII characters or spaces. A short Hebrew filename
 #      "\327\236\327\241\327\236\327\232.md" - quotes and escapes included - which can
 #      never equal a path a human wrote by hand. The comparison failed closed, so
 #      commit-check and release-check were simply unusable in such a repository.
@@ -1416,7 +1416,10 @@ function Invoke-UserNext {
         Write-Host "Do this next: approve the guarded local commit if you are satisfied with the review."
         Write-Host ""
         Write-Host "Command:"
-        Write-Host "  .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
+        # v3.4.1: print a runnable command, not a relative fragment. A bare
+        # ".\scripts\handoff.ps1" fails with "not recognized" from anywhere but the
+        # repository root, and the error names nothing about the working directory.
+        Write-Host "  cd `"$((Get-Location).Path)`"; .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
         Write-Host "  git status --short --branch"
         Write-Host ""
         Write-Host "Safety: commits only AI_HANDOFF.md Changed Files after scope checks; no push/tag/deploy/db/secrets."
@@ -1470,7 +1473,10 @@ function Invoke-Work {
         Write-Host "Next action: approve the guarded local commit if you are satisfied with the review."
         Write-Host ""
         Write-Host "Run:"
-        Write-Host "  .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
+        # v3.4.1: print a runnable command, not a relative fragment. A bare
+        # ".\scripts\handoff.ps1" fails with "not recognized" from anywhere but the
+        # repository root, and the error names nothing about the working directory.
+        Write-Host "  cd `"$((Get-Location).Path)`"; .\scripts\handoff.ps1 commit-approved -Message `"$commitMessage`" -Authorize `"I_AUTHORIZE_COMMIT`""
         Write-Host ""
         Write-Host "Safety: commits only AI_HANDOFF.md Changed Files after scope checks; no push/tag/deploy/db/secrets."
         Write-Host ""
@@ -1571,14 +1577,64 @@ function Invoke-DoctorRemoteVersionCheck {
     try { $installed = [version]$InstalledVersion } catch { }
     if ($null -eq $installed) { return }
 
+    # v3.4.1 (G3): a TAG is not a RELEASE. Until now this compared against tags and
+    # then called the newest tag "the latest stable release", so v3.4.0 - tagged and
+    # pushed with no package, no ZIP and no checksum ever published - was reported as
+    # a healthy latest release. The safety tool was blind to the exact gap it should
+    # have caught. Report the three facts separately instead of conflating them.
     if ($installed -lt $latest) {
         $script:DoctorUpdateAvailable = $true
-        Write-DoctorLine "WARN" "Update available: installed $InstalledVersion; latest stable release is $latest."
+        Write-DoctorLine "WARN" "Source tag: installed $InstalledVersion; latest source tag is v$latest."
         Write-Host "      Use the pinned bootstrap command from QUICKSTART.md to update safely."
     } elseif ($installed -eq $latest) {
-        Write-DoctorLine "OK" "Version check: installed $InstalledVersion is the latest stable release."
+        Write-DoctorLine "OK" "Source tag: installed $InstalledVersion matches the latest source tag v$latest."
     } else {
-        Write-DoctorLine "INFO" "Version check: installed $InstalledVersion is newer than the latest public release $latest."
+        Write-DoctorLine "INFO" "Source tag: installed $InstalledVersion is newer than the latest public tag v$latest."
+    }
+
+    Invoke-DoctorReleaseCheck -LatestTag "v$latest"
+}
+
+# Ask GitHub what has actually been RELEASED, and whether that release carries the
+# artifacts an installer needs. A tag with no release, or a release with no ZIP and
+# checksum, is reported as a WARN - it is publishable source, not an installable
+# product. Network failure is a WARN too, never a hard failure: local checks must
+# still be able to finish.
+function Invoke-DoctorReleaseCheck {
+    param([string]$LatestTag)
+
+    $api = "https://api.github.com/repos/siglernir-ai/codex-claude-handoff/releases/tags/$LatestTag"
+    $release = $null
+    try {
+        $release = Invoke-RestMethod -Uri $api -Headers @{ "User-Agent" = "codex-claude-handoff-doctor" } -TimeoutSec 15
+    } catch {
+        $release = $null
+    }
+
+    if ($null -eq $release) {
+        $script:DoctorRemoteCheckUnavailable = $true
+        Write-DoctorLine "WARN" "GitHub Release: no published release found for $LatestTag (or GitHub was unreachable)."
+        Write-Host "      A tag is not a release. Until a release is published, the pinned install command has nothing to download."
+        return
+    }
+
+    Write-DoctorLine "OK" "GitHub Release: $LatestTag is published."
+
+    $zipName = "codex-claude-handoff-$LatestTag.zip"
+    $assetNames = @()
+    if ($release.assets) { $assetNames = @($release.assets | ForEach-Object { $_.name }) }
+    $hasZip = $assetNames -contains $zipName
+    $hasSum = $assetNames -contains "$zipName.sha256"
+
+    if ($hasZip -and $hasSum) {
+        Write-DoctorLine "OK" "Release assets: $zipName and its .sha256 are attached to $LatestTag."
+    } else {
+        $script:DoctorRemoteCheckUnavailable = $true
+        $missing = @()
+        if (-not $hasZip) { $missing += $zipName }
+        if (-not $hasSum) { $missing += "$zipName.sha256" }
+        Write-DoctorLine "WARN" "Release assets: $LatestTag is missing $($missing -join ' and ')."
+        Write-Host "      The installer verifies the checksum before extracting, so this release cannot be installed safely."
     }
 }
 
@@ -1823,6 +1879,21 @@ function Invoke-Next {
             Write-Host "Paste: $pasteInstruction"
             Write-Host (Get-StopCategoryLine -ForState $State -ActorTool $actor)
             Write-Host ""
+
+            # v3.4.1: lead with the automated route when one exists.
+            #
+            # This command printed "Open / Paste" and nothing else, so the manual
+            # window handoff read as THE way to take a turn - even for roles that
+            # have had a verified callable adapter since v1.3.0. The information was
+            # in `adapters`, which nobody opens. A default command should offer the
+            # best available route and keep the manual one as the fallback.
+            $turnAdapter = Resolve-TurnAdapter -ForState $State -Role $role -Tool $actor
+            if ($turnAdapter.Callable) {
+                Write-Host "Automated route available - no paste required:"
+                Write-Host "  $($turnAdapter.NextStep)"
+                Write-Host "Manual paste above remains valid if you prefer to drive the turn yourself."
+                Write-Host ""
+            }
 
             if ($Clip -or $MenuMode) {
                 try {
@@ -2183,6 +2254,57 @@ function Invoke-ReleasePreflightChecks {
     return $true
 }
 
+# --- Packaging gate (v3.4.1, G4) ---
+#
+# The release artifacts live in dist/, which is gitignored. Every guard that
+# inspects tracked files is therefore blind to a missing package: v3.4.0 was
+# tagged and pushed while its ZIP was never built, and no check objected.
+#
+# This verifies the artifact the same way an installer must: the ZIP exists, the
+# checksum file exists, its format is strict, it names this exact ZIP, and the
+# recorded hash matches the file on disk. Anything else blocks the release.
+function Test-ReleasePackage {
+    param([string]$Version)
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $zipName = "codex-claude-handoff-$Version.zip"
+    $zipPath = Join-Path (Get-Location) "dist/$zipName"
+    $sumPath = "$zipPath.sha256"
+    $hash = ""
+
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        $errors.Add("Release package dist/$zipName does not exist. Build it with scripts/build-package.ps1 before releasing; a tag without a package is not a release.")
+    }
+    if (-not (Test-Path -LiteralPath $sumPath)) {
+        $errors.Add("Release checksum dist/$zipName.sha256 does not exist. The installer verifies this file, so a release without it cannot be installed safely.")
+    }
+
+    if ($errors.Count -eq 0) {
+        $text = ""
+        try { $text = (Get-Content -LiteralPath $sumPath -Raw).Trim() } catch { $text = "" }
+        if ($text -notmatch '^([0-9a-fA-F]{64})\s+(\S.*)$') {
+            $errors.Add("Malformed checksum file dist/$zipName.sha256. Expected '<64-hex>  $zipName'.")
+        } else {
+            $expected = $Matches[1].ToLowerInvariant()
+            $named = $Matches[2].Trim()
+            if ($named -ne $zipName) {
+                $errors.Add("Checksum file names '$named' but the package is '$zipName'. Refusing to release a mismatched pair.")
+            }
+            $actual = ""
+            try { $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant() } catch { $actual = "" }
+            if ($actual -eq "") {
+                $errors.Add("Could not hash dist/$zipName to verify it against its checksum.")
+            } elseif ($actual -ne $expected) {
+                $errors.Add("SHA-256 mismatch for dist/$zipName. Checksum records $expected but the file is $actual. Rebuild the package.")
+            } else {
+                $hash = $actual
+            }
+        }
+    }
+
+    return @{ Ok = ($errors.Count -eq 0); Errors = $errors; Zip = $zipPath; Checksum = $sumPath; Hash = $hash }
+}
+
 function Get-ReleasePlan {
     param([string]$RequestedVersion)
 
@@ -2229,11 +2351,23 @@ function Get-ReleasePlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
+    $package = $null
     if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
         & git rev-parse -q --verify "refs/tags/$RequestedVersion" *> $null
         if ($LASTEXITCODE -eq 0) {
             $ok = $false
             $errors.Add("Tag $RequestedVersion already exists.")
+        }
+
+        # v3.4.1 (G4): packaging gate. A release is not a tag - it is a verified
+        # artifact. v3.4.0 was tagged and pushed with no package ever built, and
+        # nothing objected, because dist/ is gitignored and therefore invisible to
+        # every check that only looks at tracked files. Refuse to release a version
+        # whose ZIP and checksum do not exist and agree.
+        $package = Test-ReleasePackage -Version $RequestedVersion
+        if (-not $package.Ok) {
+            $ok = $false
+            foreach ($packageError in $package.Errors) { $errors.Add($packageError) }
         }
     }
 
@@ -2243,6 +2377,7 @@ function Get-ReleasePlan {
         ReleaseFiles = $releaseFiles
         GitFiles = $gitState.Files
         TaskActors = $taskActors
+        Package = $package
     }
 }
 
@@ -3062,6 +3197,69 @@ function Invoke-ReviewCheck {
     Write-Host ""
 }
 
+# --- Protocol-run review evidence (v3.4.1) ---
+#
+# Runs the protocol suite from the harness - not from either agent - and binds the
+# result to the exact bytes it was run against. The Reviewer recomputes the hashes
+# in its own read-only sandbox, so the evidence is checkable rather than trusted.
+#
+# A suite that cannot be found or cannot complete produces an explicitly negative
+# summary, never an optimistic one: the Reviewer must block on it.
+function Get-ReviewTestEvidence {
+    param([string[]]$Files)
+
+    $suite = Join-Path (Get-Location) "scripts/protocol-tests.ps1"
+    $summary = ""
+    if (-not (Test-Path -LiteralPath $suite)) {
+        $summary = "NOT RUN - scripts/protocol-tests.ps1 was not found in this repository. Treat readiness as unverified and return BLOCKED."
+    } else {
+        try {
+            Write-Host "Running the protocol suite for review evidence (outside the sandbox)..."
+            $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $suite 2>&1
+            $suiteExit = $LASTEXITCODE
+            $resultLine = @($output | Select-String -Pattern '^\s*Results:\s+\d+\s+passed,\s+\d+\s+failed' | Select-Object -Last 1)
+            if ($resultLine.Count -eq 0) {
+                $summary = "INCONCLUSIVE - the suite produced no Results line (exit code $suiteExit). Treat readiness as unverified and return BLOCKED."
+            } else {
+                $line = $resultLine[0].ToString().Trim()
+                $failedNames = @($output | Select-String -Pattern '^\s+-\s+' | ForEach-Object { $_.ToString().Trim() })
+                # The printed Results line is a claim by the suite about itself. The
+                # process exit code is the independent signal: a run that crashes after
+                # printing, or fails in a way the counter never sees, still exits
+                # nonzero. Requiring BOTH keeps the evidence fail-closed - trusting the
+                # printed line alone would report success for an unsuccessful run.
+                if (($line -match 'Results:\s+(\d+)\s+passed,\s+0\s+failed') -and ($suiteExit -eq 0)) {
+                    $summary = "$line (run by handoff.ps1; suite exit code 0)."
+                } elseif ($line -match 'Results:\s+(\d+)\s+passed,\s+0\s+failed') {
+                    $summary = "INCONSISTENT - the suite printed '$line' but exited with code $suiteExit. A nonzero exit means the run did not succeed regardless of the printed counters. Treat readiness as unverified and return BLOCKED."
+                } else {
+                    $summary = "$line (run by handoff.ps1; suite exit code $suiteExit). Failing checks: " + ([string]::Join(" | ", $failedNames))
+                }
+            }
+            Write-Host "  $summary"
+        } catch {
+            $summary = "NOT RUN - the suite could not be executed: $($_.Exception.Message). Treat readiness as unverified and return BLOCKED."
+        }
+    }
+
+    $pairs = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in $Files) {
+        $full = Join-Path (Get-Location) $f
+        if (Test-Path -LiteralPath $full) {
+            try {
+                $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLowerInvariant()
+                $pairs.Add("$f = $h")
+            } catch {
+                $pairs.Add("$f = UNREADABLE")
+            }
+        } else {
+            $pairs.Add("$f = MISSING")
+        }
+    }
+
+    return @{ Summary = $summary; Hashes = [string]::Join(" ; ", $pairs) }
+}
+
 function Invoke-ReviewRun {
     if ($TimeoutSeconds -lt 1) {
         Write-Host ""
@@ -3128,7 +3326,30 @@ function Invoke-ReviewRun {
     # diffs, and only the safe local read-only checks needed for technical readiness.
     # Keep it free of shell metacharacters; it is delivered on stdin.
     $reviewFileList = [string]::Join("; ", @($plan.ReviewFiles))
+
+    # v3.4.1: the PROTOCOL runs the test suite, not the Implementer and not the Reviewer.
+    #
+    # The Reviewer executes in --sandbox read-only, which denies the temporary fixture
+    # directory the suite needs, so every review that required running tests blocked
+    # forever. Relaxing the sandbox was rejected: the only mode that grants a writable
+    # temp also makes the repository writable, and a reviewer that can edit the work is
+    # not a reviewer. Verified empirically - --add-dir does not grant write under
+    # read-only.
+    #
+    # So the harness runs the suite itself, outside the sandbox, and hands the Reviewer
+    # the result together with the SHA-256 of every file under review. The Reviewer
+    # recomputes those hashes in its own read-only sandbox and compares. That keeps the
+    # v3.1.6 rule intact - a handoff report is an untrusted claim - while making the
+    # claim checkable: if the code changed after the tests ran, the hashes disagree and
+    # the Reviewer blocks. Neither agent attests to its own work.
+    $evidence = Get-ReviewTestEvidence -Files @($plan.ReviewFiles)
+
     $reviewPrompt = "Read-only code review. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
+        "PROTOCOL-RUN TEST EVIDENCE (produced by handoff.ps1 itself, outside your sandbox, immediately before this review): $($evidence.Summary) " +
+        "The exact files under review had these SHA-256 values at the moment the suite ran: $($evidence.Hashes) " +
+        "Verify this evidence rather than trusting it: recompute the SHA-256 of each file listed above using a read-only command such as Get-FileHash, and compare. " +
+        "If any hash differs, the code changed after the tests ran and you must return BLOCKED. If the evidence reports failures, return BLOCKED. " +
+        "Do NOT attempt to run the protocol test suite yourself; your sandbox cannot create its fixtures and the attempt is not evidence of anything. " +
         "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files. " +
         "Inspect ONLY these sources initially: AI_HANDOFF.md for the current task and approved scope; the output of git status --short; and git diff -- for each of these Changed Files: $reviewFileList . " +
         "For a Changed File that git status marks as untracked or new, if git diff -- for that file is empty or insufficient, inspect that file's current content directly as the diff equivalent; do not run git add, git add -N, or any other command that mutates the index or working tree. " +
@@ -5196,3 +5417,4 @@ switch ($Command) {
         }
     }
 }
+

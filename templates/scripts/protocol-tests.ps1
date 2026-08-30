@@ -817,7 +817,13 @@ $skillText = Get-Content -Raw -Path (Join-Path $codexSkillRoot "SKILL.md")
 $skillSetupText = Get-Content -Raw -Path $skillSetup
 $skillSetupShText = Get-Content -Raw -Path $skillSetupSh
 
-Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match 'version:\s*"3\.4\.0"'))
+# v3.4.1: assert the Skill version matches the VERSION file rather than a hardcoded
+# literal. Pinning the number here meant every release broke this check for a reason
+# that had nothing to do with the property under test - and a stale literal would
+# equally have hidden a real mismatch.
+$canonicalVersion = (Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/VERSION")).Trim()
+Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match ('version:\s*"' + [regex]::Escape($canonicalVersion) + '"')))
+Check "the public Skill version matches the canonical VERSION file" ($skillText -match ('version:\s*"' + [regex]::Escape($canonicalVersion) + '"'))
 Check "public Skill positions an accountable engineering pair" (($skillText -match "One drives\. One challenges\. Neither ships alone\.") -and ($skillText -match "accountable engineering"))
 Check "public Skill distinguishes one live task from summaries and parallel answers" (($skillText -match "same live Git task") -and ($skillText -match "pass a summary") -and ($skillText -match "run the same prompt in parallel"))
 Check "public Skill distinguishes bounded correction from unrestricted dialogue" (($skillText -match "bounded by turn, time, and") -and ($skillText -match "General question dialogue still advances through explicit turns"))
@@ -989,6 +995,96 @@ Check "the Bash exact-scope parser checks git status exit status before trusting
 Check "the Bash exact-scope parser fails closed when git status fails" ($bashSource -match 'git status failed; exact scope cannot be verified')
 Check "the Bash exact-scope parser no longer consumes git through a process substitution" ($bashSource -notmatch '< <\(git status')
 Check "the Bash exact-scope parser discards rename and copy source fields" ($bashSource -match 'R\?\|C\?\|\?R\|\?C')
+
+# --- v3.4.1 packaging and release awareness (G2, G3, G4) ----------------------------
+# v3.4.0 was tagged and pushed with no package ever built. dist/ is gitignored, so
+# every tracked-file check was blind to it, and doctor called the newest TAG "the
+# latest stable release". A tag is not a release.
+
+# --- v3.4.1 script encoding is proof against re-saves ------------------------------
+# Windows PowerShell 5.1 reads a .ps1 without a BOM as ANSI, and `Set-Content -Encoding
+# utf8` WRITES a BOM. Between those two behaviours, an ordinary edit can add a BOM,
+# double-encode existing non-ASCII text, or mangle a literal - and the file still
+# parses, so nothing complains. This project already paid for that once in v3.1.4,
+# and again while implementing v3.4.1. Keeping the shipped scripts pure ASCII removes
+# the failure mode entirely instead of relying on every future editor behaving.
+foreach ($scriptRel in @("scripts/handoff.ps1", "scripts/protocol-tests.ps1", "bootstrap.ps1", "install.ps1")) {
+    $scriptPath = Join-Path $RepoRoot $scriptRel
+    if (-not (Test-Path -LiteralPath $scriptPath)) { continue }
+    $scriptBytes = [System.IO.File]::ReadAllBytes($scriptPath)
+    $hasBom = ($scriptBytes.Length -ge 3 -and $scriptBytes[0] -eq 0xEF -and $scriptBytes[1] -eq 0xBB -and $scriptBytes[2] -eq 0xBF)
+    $nonAscii = @($scriptBytes | Where-Object { $_ -gt 127 }).Count
+    Check "$scriptRel has no UTF-8 BOM" (-not $hasBom)
+    Check "$scriptRel is pure ASCII (encoding-proof against re-saves)" ($nonAscii -eq 0)
+}
+
+$bootstrapSource = Get-Content -Raw -Path (Join-Path $RepoRoot "bootstrap.ps1")
+Check "bootstrap installs from the published release asset, not the tag archive" (($bootstrapSource -match 'releases/download/') -and ($bootstrapSource -notmatch 'archive/refs/tags/\$Version'))
+Check "bootstrap downloads the checksum alongside the package" ($bootstrapSource -match '\$checksumUri')
+Check "bootstrap verifies SHA-256 before extracting" (
+    ($bootstrapSource -match 'Get-FileHash -Algorithm SHA256') -and
+    ($bootstrapSource.IndexOf('Get-FileHash -Algorithm SHA256') -lt $bootstrapSource.IndexOf('Expand-Archive'))
+)
+Check "bootstrap refuses a checksum naming a different asset" ($bootstrapSource -match 'Refusing to install a mismatched pair')
+Check "bootstrap enforces a strict 64-hex checksum format" ($bootstrapSource -match '\[0-9a-fA-F\]\{64\}')
+
+$handoffSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+
+# --- v3.4.1 protocol-run review evidence --------------------------------------------
+# The Reviewer runs in --sandbox read-only, which denies the suite's temp fixtures, so
+# a review that required running tests blocked forever. The only sandbox mode granting
+# a writable temp also makes the repository writable, and a reviewer that can edit the
+# work is not a reviewer. The harness therefore runs the suite itself and binds the
+# result to the reviewed bytes, so the Reviewer can VERIFY the evidence instead of
+# trusting it - keeping the v3.1.6 rule that a handoff report is an untrusted claim.
+Check "the harness produces its own test evidence for review" ($handoffSource -match 'function Get-ReviewTestEvidence')
+Check "review evidence is bound to the SHA-256 of the reviewed files" ($handoffSource -match 'Get-FileHash -Algorithm SHA256 -LiteralPath \$full')
+Check "the review prompt labels the evidence as protocol-run, not self-reported" ($handoffSource -match 'PROTOCOL-RUN TEST EVIDENCE')
+Check "the review prompt tells the Reviewer to recompute the hashes itself" ($handoffSource -match 'recompute the SHA-256')
+Check "a hash mismatch forces BLOCKED" ($handoffSource -match 'the code changed after the tests ran and you must return BLOCKED')
+Check "reported test failures force BLOCKED" ($handoffSource -match 'If the evidence reports failures, return BLOCKED')
+Check "the Reviewer is told not to run the suite in its own sandbox" ($handoffSource -match 'Do NOT attempt to run the protocol test suite yourself')
+Check "a missing or inconclusive suite yields a negative summary, never an optimistic one" (($handoffSource -match 'NOT RUN - scripts/protocol-tests\.ps1 was not found') -and ($handoffSource -match 'INCONCLUSIVE - the suite produced no Results line'))
+# The printed Results line is the suite's claim about itself; the exit code is the
+# independent signal. A run that crashes after printing, or fails where the counter
+# cannot see it, still exits nonzero - so success requires BOTH.
+Check "review evidence requires a zero suite exit code, not just a zero-failure line" (($handoffSource -match '\$suiteExit = \$LASTEXITCODE') -and ($handoffSource -match 'suiteExit -eq 0'))
+Check "a zero-failure line with a nonzero exit is reported as INCONSISTENT and blocks" ($handoffSource -match 'INCONSISTENT - the suite printed')
+Check "the review sandbox stays read-only" ($handoffSource -match "'--sandbox', 'read-only'")
+
+Check "doctor reports the source tag and the GitHub Release separately" (($handoffSource -match 'Source tag:') -and ($handoffSource -match 'GitHub Release:'))
+Check "doctor reports whether the required release assets are attached" ($handoffSource -match 'Release assets:')
+Check "doctor treats a tag without a release as a WARN, not a pass" ($handoffSource -match 'no published release found for')
+Check "the release path has a packaging gate" ($handoffSource -match 'function Test-ReleasePackage')
+
+# The gate must actually block, not merely exist.
+$relHandoff = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
+$relHandoff = $relHandoff -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- RELEASE_TARGET.md"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $relHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "RELEASE_TARGET.md") -Value "# release fixture" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v9.9.9")
+Check "release-check blocks a version with no built package" (($r.Code -ne 0) -and ($r.Out -match "does not exist. Build it with scripts/build-package.ps1"))
+Check "release-check blocks a version with no checksum file" ($r.Out -match "\.sha256 does not exist")
+
+# A ZIP whose checksum disagrees must block just as hard as a missing one.
+New-Item -ItemType Directory -Path (Join-Path $fx "dist") -Force | Out-Null
+Set-Content -Path (Join-Path $fx "dist/codex-claude-handoff-v9.9.9.zip") -Value "not a real package" -Encoding ascii
+Set-Content -Path (Join-Path $fx "dist/codex-claude-handoff-v9.9.9.zip.sha256") -Value ("0" * 64 + "  codex-claude-handoff-v9.9.9.zip") -Encoding ascii
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v9.9.9")
+Check "release-check blocks a package whose checksum does not match" (($r.Code -ne 0) -and ($r.Out -match "SHA-256 mismatch for dist/"))
+
+# --- v3.4.1 next/user-next surface the automated route ------------------------------
+# The manual paste read as THE way to take a turn, for roles that have had a verified
+# callable adapter since v1.3.0. That cost a full day of hand-pasting.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("next")
+Check "next surfaces the callable automated route when one exists" ($r.Out -match "Automated route available")
+Check "next still offers the manual paste as a fallback" (($r.Out -match "Paste:") -and ($r.Out -match "Manual paste above remains valid"))
+
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("user-next")
+Check "user-next prints a runnable command including the repository path" ($r.Out -match 'cd "')
 
 # A wide changed set exercises a large stdout stream through the same capture.
 $manyPaths = 1..40 | ForEach-Object { "bulk/file $_.md" }
