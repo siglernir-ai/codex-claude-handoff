@@ -3,6 +3,25 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.4.2 - First-run Clarity
+
+- Inert model routing is now visible. `models` and `doctor` report INERT when every
+  profile in `MODEL_ROUTING.json` resolves to `inherit`, and name the file to edit.
+  Shipped defaults are unchanged: installing still alters no behavior, and concrete
+  provider model names are still deliberately not shipped.
+- A running turn can be seen and stopped. A local gitignored `HANDOFF_RUN.json` records
+  an in-flight automated turn; `status` and `doctor` report it; `handoff.ps1 stop` ends
+  it without touching Git or task state. A marker is identified by process id AND start
+  time, so a recycled id is never mistaken for the recorded turn, and a marker that
+  cannot be positively identified reads as stale rather than live.
+- The release executor is reachable again. When the working tree is clean, `release`
+  verifies scope against the file set of HEAD instead of failing on an empty
+  `git status`, so `commit-approved` followed by `release` now works. `user-next` at
+  REVIEW_DONE names both paths.
+- Added `START_HERE.md`, a first-run orientation page: what the protocol is and is not,
+  the roles and the user's sole approval authority, a first task end to end, the four
+  blocks a newcomer actually hits with the command that resolves each, how to stop, and
+  how to remove only the paths the protocol owns.
 ## 3.4.1 - Identity, History and Packaging Hardening
 
 - Added a canonical tool-identity layer (`Resolve-ToolIdentity`, `Test-SameToolIdentity`)

@@ -1,6 +1,6 @@
 param(
     [string]$Project = (Get-Location).Path,
-    [string]$Version = "v3.4.1",
+    [string]$Version = "v3.4.2",
     [switch]$Force,
     [switch]$AlwaysOn,
     [switch]$DisableAlwaysOn,
