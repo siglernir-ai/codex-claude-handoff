@@ -21,6 +21,11 @@ param(
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [switch]$CheckUpdates,
     [switch]$AllowModelEscalation,
+    [switch]$Activate,
+    [string]$Standard,
+    [string]$CheapReadonly,
+    [string]$Economy,
+    [string]$HighReasoning,
     [decimal]$BudgetUsd = 2,
     [int]$MaxTurns = 3,
     [decimal]$SessionBudgetUsd = 6
@@ -1629,7 +1634,101 @@ function Write-DoctorLine {
     Write-Host "$Level  $Message"
 }
 
+# v3.4.3: activation is one guarded command instead of hand-edited JSON.
+#
+# The shipped file maps every profile to inherit and stays that way: the v3.1.7 rule
+# forbids an install that changes default behavior, and concrete provider model names
+# do not belong in the product - that is the whole point of capability profiles. But
+# leaving activation to hand-editing JSON and inventing model names is friction that
+# kept a working feature switched off.
+#
+# This writes only the profiles you name, preserves the rest and the file's _readme,
+# validates by reading the result back, and touches no git or handoff state.
+function Invoke-ModelActivate {
+    $requested = [ordered]@{}
+    if (-not [string]::IsNullOrWhiteSpace($Standard))      { $requested["standard"]       = $Standard.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($CheapReadonly)) { $requested["cheap_readonly"] = $CheapReadonly.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($Economy))       { $requested["economy"]        = $Economy.Trim() }
+    if (-not [string]::IsNullOrWhiteSpace($HighReasoning)) { $requested["high_reasoning"] = $HighReasoning.Trim() }
+
+    Write-Host ""
+    Write-Host "Model Routing Activation"
+    if ($requested.Count -eq 0) {
+        Write-Host "Blocked: no mapping supplied, so nothing was changed."
+        Write-Host ""
+        Write-Host "Name at least one profile, for example:"
+        Write-Host '  handoff.ps1 models -Activate -Standard "<model>" -CheapReadonly "<smaller model>"'
+        Write-Host ""
+        Write-Host "Profiles: standard, cheap_readonly, economy, high_reasoning."
+        Write-Host "Use the model names your local Claude Code accepts; the protocol does not choose them."
+        Write-Host ""
+        exit 1
+    }
+
+    $configPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        Write-Host "Blocked: MODEL_ROUTING.json was not found at .ai/skills/codex-claude-handoff/."
+        Write-Host "Install or repair the protocol before activating routing."
+        Write-Host ""
+        exit 1
+    }
+
+    $before = "inert"
+    if (-not (Test-ModelRoutingInert)) { $before = "active" }
+
+    try {
+        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    } catch {
+        Write-Host "Blocked: MODEL_ROUTING.json is not valid JSON and was left untouched."
+        Write-Host "Reason: $($_.Exception.Message)"
+        Write-Host ""
+        exit 1
+    }
+    if ($null -eq $config.profiles) {
+        Write-Host "Blocked: MODEL_ROUTING.json has no 'profiles' object. Nothing was changed."
+        Write-Host ""
+        exit 1
+    }
+
+    foreach ($name in $requested.Keys) {
+        if ($null -eq $config.profiles.$name) {
+            $config.profiles | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]@{ claudeModel = $requested[$name] }) -Force
+        } else {
+            $config.profiles.$name | Add-Member -NotePropertyName "claudeModel" -NotePropertyValue $requested[$name] -Force
+        }
+        Write-Host "  $name -> $($requested[$name])"
+    }
+
+    $temp = "$configPath.tmp"
+    try {
+        [System.IO.File]::WriteAllText($temp, ($config | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+        # Read it back before replacing the original: a file that cannot be parsed would
+        # block every later command, so it must never become the live configuration.
+        $null = Get-Content -Raw -LiteralPath $temp | ConvertFrom-Json
+        Move-Item -LiteralPath $temp -Destination $configPath -Force
+    } catch {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+        Write-Host "Blocked: the updated configuration could not be written or re-read. The original file is unchanged."
+        Write-Host "Reason: $($_.Exception.Message)"
+        Write-Host ""
+        exit 1
+    }
+
+    $after = "inert"
+    if (-not (Test-ModelRoutingInert)) { $after = "active" }
+    Write-Host ""
+    Write-Host "Routing before: $before"
+    Write-Host "Routing after:  $after"
+    Write-Host ""
+    Write-Host "models-activate: complete. Only .ai/skills/codex-claude-handoff/MODEL_ROUTING.json was changed."
+    Write-Host "No git action was run and no handoff state was modified."
+    Write-Host "Run 'handoff.ps1 models' to see the resolution for the current state."
+    Write-Host ""
+}
+
 function Invoke-Models {
+    if ($Activate) { Invoke-ModelActivate; return }
     Write-Host ""
     Write-Host "Model Routing"
     Write-Host "State:              $State"

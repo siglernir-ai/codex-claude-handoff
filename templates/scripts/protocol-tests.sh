@@ -302,6 +302,86 @@ if [ -d "$can" ]; then
     check "canonical/template .ai skill files match" $ok
 fi
 
+# --- v3.4.3: execute the Bash exact-scope parser against a real repository ----------
+# Until now the Bash parser was covered only by source-level assertions inside the
+# PowerShell suite: nobody ran it. It carries the same exact-scope semantics as
+# PowerShell, and v3.4.1 rewrote it for NUL-delimited parsing, so it needs to be
+# exercised, not read.
+
+scope_fixture() {
+    # scope_fixture <dir> <declared-list-file> ; creates a repo whose Changed Files
+    # section names exactly the paths it creates.
+    local d="$1"
+    mkdir -p "$d/.ai/roles"
+    ( cd "$d" && git init -q . && git config user.email t@e.com && git config user.name T ) >/dev/null 2>&1
+    cat > "$d/.ai/roles/ROLE_ASSIGNMENT.md" <<'ROLES'
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Codex |
+| Reviewer | Codex |
+| Implementer | Claude Code |
+ROLES
+    printf 'x\n' > "$d/baseline.md"
+    ( cd "$d" && git add -A && git commit -q -m base ) >/dev/null 2>&1
+}
+
+write_handoff() {
+    # write_handoff <dir> <path...> ; REVIEW_DONE/User with the given Changed Files
+    local d="$1"; shift
+    {
+        printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n'
+        printf -- '- Last Updated By: Test\n- Last Updated At: 2026-08-31\n- Current Task: bash scope fixture\n\n'
+        printf '## Task Actors\n- Implementer: Claude Code\n- Reviewer: Codex\n\n## Changed Files\n'
+        for f in "$@"; do printf -- '- %s\n' "$f"; done
+        printf '\n'
+    } > "$d/AI_HANDOFF.md"
+}
+
+BASH_TMP="$(mktemp -d 2>/dev/null || echo "")"
+if [ -z "$BASH_TMP" ]; then
+    check "bash exact-scope: temp directory available" 1 "mktemp failed"
+else
+    # A spaced path, a non-ASCII path built from UTF-8 bytes, a nested path, and a rename.
+    HEB=$(printf '\xd7\x9e\xd7\xa1\xd7\x9e\xd7\x9a')
+
+    FX="$BASH_TMP/ok"; mkdir -p "$FX"; scope_fixture "$FX"
+    printf 'a\n' > "$FX/a space.md"
+    printf 'b\n' > "$FX/$HEB.md"
+    mkdir -p "$FX/nested/deeper"; printf 'c\n' > "$FX/nested/deeper/$HEB.md"
+    ( cd "$FX" && git mv baseline.md "renamed file.md" ) >/dev/null 2>&1
+    write_handoff "$FX" "a space.md" "$HEB.md" "nested/deeper/$HEB.md" "renamed file.md"
+    out="$( cd "$FX" && bash "$HANDOFF_SH" commit-check 2>&1 )"
+    printf '%s' "$out" | grep -q "Commit: ALLOWED"
+    check "bash exact-scope accepts spaced, non-ASCII, nested and renamed paths" $?
+
+    printf '%s' "$out" | grep -q "does not match"
+    if [ $? -eq 0 ]; then check "bash exact-scope reports no mismatch for a matching set" 1 "$out"; else check "bash exact-scope reports no mismatch for a matching set" 0; fi
+
+    # An undeclared file must still block.
+    FX2="$BASH_TMP/extra"; mkdir -p "$FX2"; scope_fixture "$FX2"
+    printf 'a\n' > "$FX2/a space.md"
+    printf 'z\n' > "$FX2/undeclared.md"
+    write_handoff "$FX2" "a space.md"
+    out2="$( cd "$FX2" && bash "$HANDOFF_SH" commit-check 2>&1 )"
+    printf '%s' "$out2" | grep -q "does not match"
+    check "bash exact-scope still blocks an undeclared file" $?
+
+    # git status failing must block, never approve a partial set.
+    FX3="$BASH_TMP/nogit"; mkdir -p "$FX3/.ai/roles"
+    cp "$FX/.ai/roles/ROLE_ASSIGNMENT.md" "$FX3/.ai/roles/ROLE_ASSIGNMENT.md"
+    write_handoff "$FX3" "a space.md"
+    out3="$( cd "$FX3" && bash "$HANDOFF_SH" commit-check 2>&1 )"
+    printf '%s' "$out3" | grep -q "BLOCKED - git status failed"
+    check "bash exact-scope blocks when git status fails" $?
+
+    rm -rf "$BASH_TMP"
+fi
+
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed."
 if [ "$FAIL" -gt 0 ]; then

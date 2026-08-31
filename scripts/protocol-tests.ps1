@@ -1016,6 +1016,47 @@ Check "the INERT message names the file to edit" ($r.Out -match "MODEL_ROUTING\.
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"some-local-model"},"economy":{"claudeModel":"inherit"}}}' }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("models")
 Check "models does NOT report INERT once any profile maps to a concrete model" ($r.Out -notmatch "INERT")
+# v3.4.3: activation is a guarded command, not hand-edited JSON. It must write only the
+# profiles named, keep the rest, stay valid, and refuse to do anything with no mapping.
+$routing = '{"schemaVersion":1,"_readme":["keep me"],"profiles":{"standard":{"claudeModel":"inherit"},"cheap_readonly":{"claudeModel":"inherit"},"economy":{"claudeModel":"inherit"}}}'
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $routing }
+$cfgPath = Join-Path $fx ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+$beforeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $cfgPath).Hash
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("models", "-Activate")
+Check "models -Activate with no mapping refuses" ($r.Out -match "no mapping supplied")
+Check "models -Activate with no mapping changes nothing" ((Get-FileHash -Algorithm SHA256 -LiteralPath $cfgPath).Hash -eq $beforeHash)
+
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("models", "-Activate", "-Standard", "some-standard-model")
+$cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
+Check "models -Activate maps the profile it was given" ($cfg.profiles.standard.claudeModel -eq "some-standard-model")
+Check "models -Activate leaves unnamed profiles alone" (($cfg.profiles.cheap_readonly.claudeModel -eq "inherit") -and ($cfg.profiles.economy.claudeModel -eq "inherit"))
+Check "models -Activate preserves the file's _readme" ($null -ne $cfg._readme)
+Check "models -Activate reports the routing transition" (($r.Out -match "Routing before: inert") -and ($r.Out -match "Routing after:  active"))
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("models")
+Check "activated routing no longer reports INERT" ($r.Out -notmatch "INERT")
+Check "models with no arguments performs no write" ((Get-FileHash -Algorithm SHA256 -LiteralPath $cfgPath).Hash -eq (Get-FileHash -Algorithm SHA256 -LiteralPath $cfgPath).Hash)
+
+$fxBad = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = 'not json' }
+$badBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $fxBad ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")).Hash
+$r = Invoke-Handoff -WorkDir $fxBad -Arguments @("models", "-Activate", "-Standard", "x")
+Check "models -Activate refuses to edit an unparseable config" ($r.Out -match "not valid JSON")
+Check "an unparseable config is left byte-identical" ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $fxBad ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")).Hash -eq $badBefore)
+
+# The Bash suite is run for real when a Bash interpreter exists, and reported as SKIPPED
+# - never as passing - when one does not. A suite that silently counts as green when it
+# never ran is worse than no suite at all.
+Write-Host "[bash] Bash companion suite"
+$bashExe = (Get-Command bash -ErrorAction SilentlyContinue)
+if ($null -eq $bashExe) {
+    Write-Host "  SKIP  bash companion suite: no bash interpreter on this machine"
+} else {
+    $bashOut = & $bashExe.Source (Join-Path $RepoRoot "scripts/protocol-tests.sh") 2>&1
+    $bashLine = @($bashOut | Select-String -Pattern '^Results:\s+\d+\s+passed,\s+\d+\s+failed' | Select-Object -Last 1)
+    Check "the Bash companion suite runs and reports results" ($bashLine.Count -eq 1)
+    if ($bashLine.Count -eq 1) {
+        Check "the Bash companion suite passes" ($bashLine[0].ToString() -match 'Results:\s+\d+\s+passed,\s+0\s+failed')
+    }
+}
 
 # A bounded turn that cannot be seen or stopped still feels like a runaway.
 Check "a stop command exists" ($handoffSrc -match 'function Invoke-Stop')
