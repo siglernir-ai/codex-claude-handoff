@@ -3484,11 +3484,38 @@ function Get-ReviewPlan {
         $ok = $false
         $errors.Add("Could not read git status.")
     }
+    # v3.4.4: plan mode. The Master can route to PLAN_REQUIRED, which asks for a plan to
+    # be reviewed before implementation - and until now the Reviewer could not open that
+    # gate, because review-run refused whenever Changed Files was empty. The Master could
+    # send you somewhere the Reviewer could not follow. This task was itself routed to
+    # PLAN_REQUIRED, so the defect demonstrated itself on the attempt to fix it.
+    #
+    # Plan mode is entered only when there is genuinely a plan and genuinely no code.
+    # Nothing to review is still nothing to review: an empty Changed Files list with no
+    # Plan section keeps the original refusal.
+    # "Genuinely no code" means the WORKING TREE is clean, not merely that Changed Files
+    # was left empty. Deciding plan mode from the declared list alone would let undeclared
+    # implementation pass as a plan-only review and skip code review entirely - declaring
+    # nothing would become a way to review nothing. The declared list and git must agree
+    # that there is no code.
+    $planMode = $false
     if ($reviewFiles.Count -eq 0) {
-        $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files has no reviewable files.")
+        $planText = (Get-SectionLines -Lines $Lines -Heading "Plan") -join "`n"
+        $treeIsClean = ($gitState.Ok -and $gitState.Files.Count -eq 0)
+        if ([string]::IsNullOrWhiteSpace($planText)) {
+            $ok = $false
+            $errors.Add("AI_HANDOFF.md Changed Files has no reviewable files, and there is no '## Plan' section to review instead.")
+        } elseif (-not $gitState.Ok) {
+            $ok = $false
+            $errors.Add("A plan review requires a verified-clean working tree, and git status could not be read. Refusing to treat an unknown tree as empty.")
+        } elseif (-not $treeIsClean) {
+            $ok = $false
+            $errors.Add("A plan review requires no implementation, but the working tree has changes that AI_HANDOFF.md does not declare: $([string]::Join(', ', $gitState.Files)). Declare them under Changed Files for a code review, or revert them for a plan review. Undeclared work must never bypass code review.")
+        } else {
+            $planMode = $true
+        }
     }
-    if ($gitState.Ok -and -not (Test-SameFileSet -Expected $reviewFiles -Actual $gitState.Files)) {
+    if (-not $planMode -and $gitState.Ok -and -not (Test-SameFileSet -Expected $reviewFiles -Actual $gitState.Files)) {
         $ok = $false
         $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
@@ -3503,6 +3530,7 @@ function Get-ReviewPlan {
         Ok = $ok
         Errors = $errors
         ReviewFiles = $reviewFiles
+        PlanMode    = $planMode
         GitFiles = $gitState.Files
         TaskActors = $taskActors
         BoundReviewer = $boundReviewer
@@ -3717,6 +3745,27 @@ function Invoke-ReviewRun {
     # v3.1.6 rule intact - a handoff report is an untrusted claim - while making the
     # claim checkable: if the code changed after the tests ran, the hashes disagree and
     # the Reviewer blocks. Neither agent attests to its own work.
+    # v3.4.4: reviewing a PLAN, not code. Evidence is the handoff itself, hashed the same
+    # way, so a plan edited after the evidence was produced fails the same check.
+    if ($plan.PlanMode) {
+        $planEvidence = Get-ReviewTestEvidence -Files @("AI_HANDOFF.md")
+        Write-Host ""
+        Write-Host "PLAN REVIEW: Changed Files is empty and AI_HANDOFF.md carries a Plan section."
+        Write-Host "Codex will judge the plan's scope and acceptance criteria, not code."
+        Write-Host "An APPROVED plan authorizes implementation; it does not finish the task."
+        $reviewPrompt = "Read-only PLAN review. There is no implementation yet and no changed files: do not look for code defects, and do not report their absence as a finding. " +
+            "Read ONLY AI_HANDOFF.md. Judge the '## Plan' section on four things: whether its scope is bounded and unambiguous; whether its acceptance criteria are checkable rather than aspirational; whether the stated out-of-scope list is honest, meaning it does not quietly exclude work the task obviously requires; and what the plan's main risk is. " +
+            "PROTOCOL-RUN EVIDENCE (produced by handoff.ps1 outside your sandbox): $($planEvidence.Summary) The file under review had this SHA-256 when the evidence was produced: $($planEvidence.Hashes) " +
+            "Verify rather than trust it: recompute that hash with Get-FileHash and compare. If it differs, the plan changed after the evidence was produced and you must return BLOCKED. " +
+            "Approving a plan authorizes implementation; it does not approve any code. Block if the scope is open-ended, if acceptance criteria cannot be checked, or if the out-of-scope list hides required work. " +
+            "Never modify any file or mutate the working tree or git index. " +
+            "End your reply with a verdict block of EXACTLY four lines, each on its own line, nothing after them, and no surrounding punctuation. " +
+            "Line 1 must be exactly 'VERDICT: APPROVED' or exactly 'VERDICT: BLOCKED' (uppercase). " +
+            "Line 2 must be exactly 'REVIEWER: Codex'. " +
+            "Line 3 must be 'TASK: ' followed by the Current Task value copied verbatim from the Status section of AI_HANDOFF.md. " +
+            "Line 4 must be 'REASON: ' followed by a single concise one-line reason. " +
+            "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
+    } else {
     $evidence = Get-ReviewTestEvidence -Files @($plan.ReviewFiles)
 
     $reviewPrompt = "Read-only code review. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
@@ -3739,6 +3788,7 @@ function Invoke-ReviewRun {
         "Line 3 must be 'TASK: ' followed by the Current Task value copied verbatim from the Status section of AI_HANDOFF.md. " +
         "Line 4 must be 'REASON: ' followed by a single concise one-line reason. " +
         "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
+    }
 
     Write-Host ""
     Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
@@ -3982,7 +4032,11 @@ function Show-ReviewApplyPlan {
     Write-Host "Actual Implementer:  $(if ($Base.TaskActors.Implementer -ne '') { $Base.TaskActors.Implementer } else { '(missing or ambiguous)' })"
     Write-Host "Capture file:        $ReviewLastName (local, gitignored capture from review-run)"
     if ($Verdict.Ok) {
-        $target = if ($Verdict.Verdict -eq "APPROVED") { "REVIEW_DONE / Waiting For: User" } else { "READY_FOR_IMPLEMENTATION / Waiting For: Implementer" }
+        # v3.4.4: an APPROVED PLAN authorizes implementation; it does not finish the
+        # task. Only an approved code review reaches REVIEW_DONE.
+        $target = if ($Verdict.Verdict -ne "APPROVED") { "READY_FOR_IMPLEMENTATION / Waiting For: Implementer" }
+                  elseif ($Base.PlanMode) { "READY_FOR_IMPLEMENTATION / Waiting For: Implementer (approved PLAN)" }
+                  else { "REVIEW_DONE / Waiting For: User" }
         Write-Host "Captured verdict:    $($Verdict.Verdict)"
         Write-Host "Captured reason:     $($Verdict.Reason)"
         Write-Host "Would transition to: $target"
@@ -4019,7 +4073,10 @@ function Invoke-ReviewApply {
     }
 
     $date = (Get-Date).ToString("yyyy-MM-dd")
-    if ($verdict.Verdict -eq "APPROVED") {
+    # v3.4.4: an approved PLAN authorizes implementation; it does not finish the task.
+    # Sending an approved plan to REVIEW_DONE would put a task with no code written into
+    # the state whose only remaining step is the user's commit authorization.
+    if ($verdict.Verdict -eq "APPROVED" -and -not $plan.Base.PlanMode) {
         $newState = "REVIEW_DONE"; $newWaiting = "User"
     } else {
         $newState = "READY_FOR_IMPLEMENTATION"; $newWaiting = "Implementer"

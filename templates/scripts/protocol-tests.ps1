@@ -1190,6 +1190,39 @@ Check "a missing or inconclusive suite yields a negative summary, never an optim
 Check "review evidence requires a zero suite exit code, not just a zero-failure line" (($handoffSource -match '\$suiteExit = \$LASTEXITCODE') -and ($handoffSource -match 'suiteExit -eq 0'))
 Check "a zero-failure line with a nonzero exit is reported as INCONSISTENT and blocks" ($handoffSource -match 'INCONSISTENT - the suite printed')
 Check "the review sandbox stays read-only" ($handoffSource -match "'--sandbox', 'read-only'")
+# --- v3.4.4: the planning gate is reviewable ----------------------------------------
+# The Master can route to PLAN_REQUIRED, and until now review-run refused whenever
+# Changed Files was empty - so the Master could send you to a gate the Reviewer could
+# not open. This task was itself routed to PLAN_REQUIRED.
+Check "review-run has a plan mode" ($handoffSource -match '\$planMode = \$true')
+Check "plan mode requires an actual Plan section" ($handoffSource -match 'Get-SectionLines -Lines \$Lines -Heading "Plan"')
+Check "plan mode evidence is the handoff itself" ($handoffSource -match 'Get-ReviewTestEvidence -Files @\("AI_HANDOFF\.md"\)')
+Check "the plan prompt tells the Reviewer not to hunt for code defects" ($handoffSource -match 'do not look for code defects')
+Check "an approved plan does NOT reach REVIEW_DONE" ($handoffSource -match '-and -not \$plan\.Base\.PlanMode')
+
+$planHandoff = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") + "
+## Plan
+
+Do the thing, bounded to these files, with these acceptance criteria.
+"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $planHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "an empty Changed Files list with a Plan section no longer refuses" ($r.Out -notmatch "has no reviewable files")
+
+$noPlan = New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $noPlan; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "an empty Changed Files list with no Plan section still refuses" ($r.Out -match "no '## Plan' section to review instead")
+# Declaring nothing must never become a way to review nothing. Plan mode requires the
+# WORKING TREE to be clean, not merely the declared list to be empty - otherwise
+# undeclared implementation would pass as a plan-only review and skip code review.
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $planHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fx
+Set-Content -Path (Join-Path $fx "sneaky.md") -Value "undeclared implementation" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "plan mode refuses when the working tree has undeclared changes" ($r.Out -match "A plan review requires no implementation")
+Check "the refusal names the undeclared files" ($r.Out -match "sneaky\.md")
+Check "undeclared work cannot bypass code review" ($r.Out -match "must never bypass code review")
 
 Check "doctor reports the source tag and the GitHub Release separately" (($handoffSource -match 'Source tag:') -and ($handoffSource -match 'GitHub Release:'))
 Check "doctor reports whether the required release assets are attached" ($handoffSource -match 'Release assets:')

@@ -3,6 +3,21 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.4.4 - Reviewable Planning Gate
+
+- `review-run` gains a plan mode. The Master can route a task to PLAN_REQUIRED, asking
+  for a plan to be reviewed before implementation, but `review-run` previously refused
+  whenever Changed Files was empty - so the Master could send you to a gate the Reviewer
+  could not open. Plan mode is entered automatically when Changed Files is empty and
+  AI_HANDOFF.md carries a non-empty `## Plan` section, and the Reviewer is asked to judge
+  scope boundaries, acceptance criteria and honesty of the out-of-scope list rather than
+  to hunt for code defects that do not exist yet.
+- An approved PLAN transitions to READY_FOR_IMPLEMENTATION, not REVIEW_DONE. Approving a
+  plan authorizes work; it does not finish it.
+- Plan-mode evidence is the SHA-256 of AI_HANDOFF.md, verified by the Reviewer the same
+  way changed files are, so a plan edited after the evidence was produced fails closed.
+- An empty Changed Files list with no Plan section still refuses. Nothing to review is
+  still nothing to review.
 ## 3.4.3 - Adoption and Efficiency
 
 - Exact-scope paths now compare case-SENSITIVELY. `Test-SameFileSet` used
