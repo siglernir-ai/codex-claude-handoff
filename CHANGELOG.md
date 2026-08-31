@@ -3,6 +3,62 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.5.0 - Symmetric Role Adapters
+
+- **Permission now follows the role, not the tool.** Until this release the permission a
+  turn ran under was in practice a property of the vendor: Codex was always invoked
+  read-only because Codex only ever held Master or Reviewer, and Claude Code was always
+  invoked write-enabled because it only ever held Implementer. Nothing stated the rule -
+  it was an accident of who sat where, and it would have handed a Reviewer write access
+  the moment the roles were swapped. The rule is now written once, in
+  `Get-RolePermission`, and every adapter and invocation reads it: Master and Reviewer
+  are read-only, Implementer is write-enabled, whichever tool holds the role.
+- **All six role/tool combinations are callable.** Master, Reviewer and Implementer, each
+  held by either Codex or Claude Code. Previously three of the six were automated and the
+  other three fell back to manual copy-paste, so the roles were swappable in name while
+  the automation ran in one direction only. `handoff.ps1 adapters` now prints the full
+  matrix, independent of the current binding, so the symmetry is checkable rather than
+  promised.
+- Claude Code can hold the Master and Reviewer roles. Its read-only turns disable the
+  file-writing tools at the CLI (`Bash,Edit,Write,NotebookEdit`), state the restriction in
+  both the prompt and the system prompt, and compare the working tree after the turn. A
+  read-only turn that changed anything fails and its capture is discarded - a verdict from
+  a reviewer that touched the work is worth less than no verdict at all.
+- Codex can hold the Implementer role, invoked with `--sandbox workspace-write`, never
+  with `--ask-for-approval` and never with `--dangerously-bypass-approvals-and-sandbox`.
+  A NEEDS_INVESTIGATION turn keeps `workspace-write`: it has to record its findings in
+  AI_HANDOFF.md and transition the state, so a read-only sandbox would have deadlocked a
+  state advertised as callable. Source-read-only never meant "writes nothing" - it is a
+  boundary no sandbox mode expresses, and it is enforced after the turn, identically for
+  both tools, by the same check that has always bounded the Claude Implementer. The
+  exact-scope check runs after the turn for both tools as well. Caught by the Codex
+  Reviewer while reviewing this release.
+- Captures are named after the role that produced them - `REVIEW_LAST.md`,
+  `MASTER_LAST.md`, `IMPLEMENTER_LAST.md` and their event logs - instead of after the
+  vendor. A vendor-named capture would have become a false statement the first time the
+  roles were swapped. Legacy `CODEX_*` and `CLAUDE_IMPLEMENTER_*` files are still read
+  when no role-named capture is present, so an install that upgrades mid-task keeps
+  working.
+- The captured-verdict guard now requires REVIEWER to match the **bound Reviewer** rather
+  than to be Codex. That was always the check it meant to make, and it is strictly
+  stronger: it also refuses a capture produced by the wrong tool, which the old form would
+  have accepted.
+- `review-apply` no longer records "Reviewer (Codex)" regardless of who reviewed. After a
+  swap that was a false entry in the audit record.
+- The read-only boundary is measured by file CONTENT, not by the set of changed file
+  names. A Reviewer runs on a dirty tree by definition, so a name-set comparison would
+  have let a read-only turn edit a file that was already dirty and pass unnoticed - the
+  reviewer could have rewritten the very code it was reviewing. Every changed file and
+  every local coordination file is hashed before and after the turn; a differing hash, a
+  vanished path or a new path all fail the turn. Found by the Codex Reviewer while
+  reviewing this release.
+- **Upgrade fix:** `install.ps1` added the `.gitignore` block only when it was missing
+  entirely, so a project installed before this release would never have received the new
+  local capture names. Those files would then be untracked-but-not-ignored, and the very
+  next `review-run` would fail its own exact-scope guard on artifacts the protocol itself
+  had just written. The installer now reconciles the ignore list line by line, adding only
+  what is missing and preserving everything already there.
+
 ## 3.4.4 - Reviewable Planning Gate
 
 - `review-run` gains a plan mode. The Master can route a task to PLAN_REQUIRED, asking

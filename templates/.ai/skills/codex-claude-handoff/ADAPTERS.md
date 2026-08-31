@@ -38,6 +38,72 @@ orchestrator exists.
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; `NEEDS_INVESTIGATION` receives read-only prompts and a post-turn source-change boundary; Claude customizations/plugins/hooks disabled; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
+## Symmetric Role Adapters (v3.5.0)
+
+**Permission is a property of the ROLE, not of the tool that holds it.**
+
+| Role | Permission | Rationale |
+|---|---|---|
+| Master | read-only | It routes work; it must never edit what it routes. |
+| Reviewer | read-only | It judges work; a reviewer that can edit is not independent. |
+| Implementer | write | It is the only role that changes the repository. |
+
+Before v3.5.0 this rule existed only by accident. Codex was always invoked read-only
+because Codex only ever held Master or Reviewer; Claude Code was always invoked
+write-enabled because it only ever held Implementer. Nothing stated the rule, and it
+would have granted a Reviewer write access the moment the roles were swapped. It is now
+stated once, in `Get-RolePermission`, and every adapter and invocation reads it.
+
+All six role/tool combinations are callable. `handoff.ps1 adapters` prints the whole
+matrix independent of the current binding:
+
+| Role | Tool | Callable | Permission | Automated states |
+|---|---|---|---|---|
+| Master | Codex | yes | read-only | `NEEDS_ANALYSIS` |
+| Master | Claude Code | yes | read-only | `NEEDS_ANALYSIS` |
+| Implementer | Codex | yes | write | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` |
+| Implementer | Claude Code | yes | write | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` |
+| Reviewer | Codex | yes | read-only | `READY_FOR_REVIEW` |
+| Reviewer | Claude Code | yes | read-only | `READY_FOR_REVIEW` |
+
+Only the **invocation** differs per tool, because only the command line is
+vendor-specific.
+
+**Read-only enforcement, per tool.** Codex is confined by `--sandbox read-only`. Claude
+Code is confined by disallowing the file-writing tools at the CLI
+(`--disallowed-tools "Bash,Edit,Write,NotebookEdit"`), stating the restriction in both
+the prompt and the system prompt, and comparing the working tree after the turn. A
+read-only turn that changed anything fails and its capture is discarded.
+
+**Write enforcement for the Implementer.** Codex runs `--sandbox workspace-write`, which
+confines writes to the repository working directory - never `danger-full-access`.
+`--ask-for-approval` and `--dangerously-bypass-approvals-and-sandbox` are never passed:
+there is no human in a headless turn to answer an approval prompt, and a turn that
+bypasses the sandbox is not bounded at all.
+
+A `NEEDS_INVESTIGATION` turn keeps `workspace-write`. Fencing it with a read-only sandbox
+looks stricter and is actually a deadlock: an investigation turn has to record its
+findings in `AI_HANDOFF.md` and transition the state, which a read-only sandbox forbids.
+"Source-read-only" never meant "writes nothing" - it means the coordination files may
+move and source, test and configuration files may not, which is a boundary no sandbox
+mode expresses. It is enforced after the turn, identically for both tools, by the same
+check that has always bounded the Claude Implementer. The exact-scope check likewise runs
+after the turn for both tools.
+
+**Swapping roles.** Edit `.ai/roles/ROLE_ASSIGNMENT.md`, keeping Reviewer != Implementer.
+A task already recorded under one binding will not run under another: the role checkpoint
+blocks on drift, and `handoff.ps1 start` opens a fresh task under the new binding after
+archiving the old record.
+
+**Captures are named by role.** `REVIEW_LAST.md`, `MASTER_LAST.md`,
+`IMPLEMENTER_LAST.md` and their event logs. A vendor-named capture became a false
+statement the first time the roles were swapped. Legacy `CODEX_*` and
+`CLAUDE_IMPLEMENTER_*` files are still read when no role-named capture is present.
+
+**The captured-verdict guard** requires `REVIEWER` to match the bound Reviewer, not to be
+Codex. That was always the check it meant to make, and it is strictly stronger: it also
+refuses a capture produced by the wrong tool.
+
 ## Approved Commit Execution Adapter
 
 Commit execution is an authorized operator action, not a protocol role turn. It is

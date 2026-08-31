@@ -179,9 +179,33 @@ if (Test-Path -LiteralPath $snippetPath) {
         ""
     }
 
+    # v3.5.0: reconcile line by line, not block-presence.
+    #
+    # This used to append the whole snippet only when AI_HANDOFF.md was absent from
+    # .gitignore. That is correct for a first install and silently wrong for an upgrade:
+    # a project installed before v3.5.0 already contains the block, so a version that
+    # adds new local capture files would skip them entirely. Those files would then be
+    # untracked-but-not-ignored, and the very next review-run would fail the exact-scope
+    # guard on artifacts the protocol itself had just written.
+    #
+    # Compare the paths the snippet declares against the paths already ignored, and
+    # append only what is missing. Existing entries and hand-written additions are left
+    # untouched.
+    $snippetLines = @($snippet -split "`r`n|`n|`r" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch "^#" })
+    $currentLines = @($current -split "`r`n|`n|`r" | ForEach-Object { $_.Trim() })
     if ($current -notmatch [regex]::Escape("AI_HANDOFF.md")) {
         Add-Content -LiteralPath $gitignorePath -Value ""
         Add-Content -LiteralPath $gitignorePath -Value $snippet
+    }
+    else {
+        $missingIgnores = @($snippetLines | Where-Object { $currentLines -notcontains $_ })
+        if ($missingIgnores.Count -gt 0) {
+            Add-Content -LiteralPath $gitignorePath -Value ""
+            Add-Content -LiteralPath $gitignorePath -Value "# Codex-Claude handoff protocol (added by upgrade)"
+            foreach ($missingLine in $missingIgnores) {
+                Add-Content -LiteralPath $gitignorePath -Value $missingLine
+            }
+        }
     }
 }
 

@@ -210,7 +210,7 @@ function New-ReviewHandoff {
 
 # Build a disposable review-apply fixture: clean git baseline, the reviewed file
 # (scripts/handoff.ps1) untracked so scope matches Changed Files, and optionally a
-# captured verdict file (CODEX_REVIEW_LAST.md). Returns the fixture dir path.
+# captured verdict file (REVIEW_LAST.md). Returns the fixture dir path.
 function New-ReviewApplyFixture {
     param(
         [string]$Capture,
@@ -229,12 +229,12 @@ function New-ReviewApplyFixture {
     New-Item -ItemType Directory -Path (Join-Path $fx "scripts") -Force | Out-Null
     Set-Content -Path (Join-Path $fx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
     if ($AddExtraUntracked) { Set-Content -Path (Join-Path $fx "EXTRA_FILE.txt") -Value "extra" -Encoding utf8 }
-    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "CODEX_REVIEW_LAST.md") -Value $Capture -Encoding utf8 }
+    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "REVIEW_LAST.md") -Value $Capture -Encoding utf8 }
     return $fx
 }
 
 # Build a disposable master-apply fixture: NEEDS_ANALYSIS handoff plus an optional
-# captured Master recommendation file (CODEX_MASTER_LAST.md).
+# captured Master recommendation file (MASTER_LAST.md).
 function New-MasterApplyFixture {
     param(
         [string]$Capture,
@@ -253,7 +253,7 @@ function New-MasterApplyFixture {
 "@
     $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles } -InitGit
     Initialize-FixtureGitBaseline -Dir $fx
-    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "CODEX_MASTER_LAST.md") -Value $Capture -Encoding utf8 }
+    if (-not $NoCapture) { Set-Content -Path (Join-Path $fx "MASTER_LAST.md") -Value $Capture -Encoding utf8 }
     return $fx
 }
 
@@ -1415,9 +1415,14 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REV
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
 Check "review-check requires Waiting For: Reviewer exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: READY_FOR_REVIEW and Waiting For: Reviewer"))
 
-# Bound Reviewer is not Codex. v3.4.1 uses an APPROVED swap between two known tools:
-# an unrecognized tool (the pre-v3.4.1 fixture used "Gemini") is now rejected earlier,
-# at the role checkpoint, so it can no longer reach the adapter guard being tested here.
+# v3.5.0: THE MIRROR SWAP. This fixture binds Reviewer = Claude Code and
+# Implementer = Codex - the exact reverse of the default - and it must now be ACCEPTED.
+#
+# Until v3.5.0 this same fixture asserted the opposite: that the swap blocked with
+# "No callable Reviewer adapter", because only Codex had one. That was never a protocol
+# decision, only the set of adapters that happened to exist, and it meant the roles were
+# swappable in name while the automation ran in one direction only. The check is
+# inverted here deliberately: the swap is the feature.
 $nonCodexRoles = @"
 # Role Assignment
 
@@ -1432,10 +1437,8 @@ $nonCodexRoles = @"
 $nonCodexHandoff = ((New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $nonCodexHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexRoles } -InitGit
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
-# Still blocked, but the reason is the missing ADAPTER, not the role assignment.
-# Reassigning the Reviewer is legitimate; it routes to a manual window turn.
-Check "review-check blocks when the bound Reviewer has no callable adapter" (($r.Code -eq 1) -and ($r.Out -match "No callable Reviewer adapter"))
-Check "review-check names the manual route instead of rejecting the role swap" ($r.Out -match "role assignment itself is valid")
+Check "the mirror swap (Reviewer = Claude Code) is accepted, not refused for lack of an adapter" (-not ($r.Out -match "No callable Reviewer adapter"))
+Check "the mirror swap resolves a Claude Code review runner, not the Codex CLI" ($r.Out -match "Claude Code")
 
 # Independent-review invariant: actual Reviewer must not equal actual Implementer.
 $badHandoff = New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"
@@ -1535,7 +1538,7 @@ try { $commitsBefore = (& git rev-list --all --count 2>$null) } finally { Pop-Lo
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run", "-Yes", "-TimeoutSeconds", "2")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "review-run times out and fails closed (exit 4)" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "NO final verdict"))
-Check "review-run timeout writes no final verdict file" (-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md")))
+Check "review-run timeout writes no final verdict file" (-not (Test-Path (Join-Path $fx "REVIEW_LAST.md")))
 Check "review-run timeout does not modify AI_HANDOFF.md" ($before -eq $after)
 Push-Location $fx
 try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
@@ -1551,7 +1554,7 @@ $fakeEcho = Join-Path $FixtureRoot "fake-codex-echo.cmd"
 if "%~2"=="--help" goto done
 findstr "^" > FAKE_STDIN.txt
 echo %* > FAKE_ARGV.txt
-echo VERDICT: APPROVED stdin-delivery-ok> CODEX_REVIEW_LAST.md
+echo VERDICT: APPROVED stdin-delivery-ok> REVIEW_LAST.md
 :done
 '@ | Set-Content -Path $fakeEcho -Encoding ascii
 $env:CODEX_CLI = $fakeEcho
@@ -1575,7 +1578,7 @@ Check "review-run executes explicitly named safe local read-only checks or block
 Check "review-run verification boundary forbids dangerous or mutating actions" (($stdinContent -match "Never install dependencies") -and ($stdinContent -match "use the network") -and ($stdinContent -match "deploy") -and ($stdinContent -match "database") -and ($stdinContent -match "secrets or production configuration") -and ($stdinContent -match "modify any file") -and ($stdinContent -match "working tree or git index"))
 # Codex exited 0 AND wrote a verdict -> review-run succeeds (exit 0) and captures it. This
 # also proves the process ExitCode is read correctly (0, not a null that looks non-zero).
-Check "review-run succeeds (exit 0) and captures the verdict on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md")))
+Check "review-run succeeds (exit 0) and captures the verdict on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "REVIEW_LAST.md")))
 
 # review-run must FAIL CLOSED if Codex exits 0 but writes NO final verdict (no false
 # success). A fake that emits a JSONL line but never writes the verdict file must block.
@@ -1600,7 +1603,7 @@ $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-run", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "review-run fails closed (exit 6) when Codex exits 0 but captures no verdict" (($r.Code -eq 6) -and ($r.Out -match "no review verdict was captured"))
-Check "review-run no-verdict path leaves no verdict file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md"))) -and ($before -eq $after))
+Check "review-run no-verdict path leaves no verdict file and no handoff change" ((-not (Test-Path (Join-Path $fx "REVIEW_LAST.md"))) -and ($before -eq $after))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
@@ -1622,7 +1625,7 @@ $h = Get-Content -Raw -Path $handoffPath
 $reviewedAfter = (Get-FileHash -Algorithm SHA256 -Path $reviewedPath).Hash
 Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
 Check "review-apply APPROVED sets REVIEW_DONE / Waiting For: User" (($r.Code -eq 0) -and ($h -match "State:\s+REVIEW_DONE") -and ($h -match "Waiting For:\s+User"))
-Check "review-apply APPROVED records the verdict and source pointer" (($h -match "Verdict:\s+APPROVED") -and ($h -match "CODEX_REVIEW_LAST.md"))
+Check "review-apply APPROVED records the verdict and source pointer" (($h -match "Verdict:\s+APPROVED") -and ($h -match "REVIEW_LAST.md"))
 Check "review-apply changes no file other than AI_HANDOFF.md (reviewed file untouched)" ($reviewedBefore -eq $reviewedAfter)
 Check "review-apply creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
 
@@ -1633,7 +1636,7 @@ $utf8ReviewTask = (-join @([char]0x05DE, [char]0x05E9, [char]0x05D9, [char]0x05D
 $utf8ReviewCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $utf8ReviewTask`nREASON: UTF-8 task matches"
 $fx = New-ReviewApplyFixture -NoCapture -CurrentTask $utf8ReviewTask
 [System.IO.File]::WriteAllText(
-    (Join-Path $fx "CODEX_REVIEW_LAST.md"),
+    (Join-Path $fx "REVIEW_LAST.md"),
     $utf8ReviewCapture,
     [System.Text.UTF8Encoding]::new($false)
 )
@@ -1741,8 +1744,8 @@ $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSI
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
 Check "master-check requires Waiting For: Master exactly (rejects the tool-name form)" (($r.Code -eq 1) -and ($r.Out -match "must be State: NEEDS_ANALYSIS and Waiting For: Master"))
 
-# Bound Master is not Codex. v3.4.1 uses an APPROVED swap to a known tool; an
-# unrecognized tool is now rejected at the role checkpoint and never reaches this guard.
+# v3.5.0: the Master role held by Claude Code. Like the Reviewer case above, this used
+# to assert a block; it now asserts that the role is callable whichever tool holds it.
 $nonCodexMaster = @"
 # Role Assignment
 
@@ -1756,8 +1759,8 @@ $nonCodexMaster = @"
 "@
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $nonCodexMaster }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
-Check "master-check blocks when the bound Master has no callable adapter" (($r.Code -eq 1) -and ($r.Out -match "No callable Master adapter"))
-Check "master-check keeps the reassigned role valid and routes it manually" ($r.Out -match "role assignment itself is valid")
+Check "a Claude Code Master is accepted, not refused for lack of an adapter" (-not ($r.Out -match "No callable Master adapter"))
+Check "a Claude Code Master resolves a Claude Code runner, not the Codex CLI" ($r.Out -match "Claude Code")
 
 # master-run fails closed with Environment/Preflight when the Codex CLI is unavailable, and
 # runs no Codex invocation, no git, and no handoff change.
@@ -1790,7 +1793,7 @@ $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes", "-TimeoutSeconds", "2")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "master-run times out and fails closed (exit 4)" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "NO final recommendation"))
-Check "master-run timeout writes no final capture file" (-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md")))
+Check "master-run timeout writes no final capture file" (-not (Test-Path (Join-Path $fx "MASTER_LAST.md")))
 Check "master-run timeout does not modify AI_HANDOFF.md" ($before -eq $after)
 
 # master-run delivers the multi-word Master prompt through stdin (not split argv), and a clean
@@ -1801,7 +1804,7 @@ $fakeEcho = Join-Path $FixtureRoot "fake-codex-master-echo.cmd"
 if "%~2"=="--help" goto done
 findstr "^" > FAKE_STDIN.txt
 echo %* > FAKE_ARGV.txt
-echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> CODEX_MASTER_LAST.md
+echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> MASTER_LAST.md
 :done
 '@ | Set-Content -Path $fakeEcho -Encoding ascii
 $env:CODEX_CLI = $fakeEcho
@@ -1816,7 +1819,7 @@ $stdinContent = if (Test-Path $stdinFile) { Get-Content -Raw -Path $stdinFile } 
 $argvContent  = if (Test-Path $argvFile)  { Get-Content -Raw -Path $argvFile }  else { "" }
 Check "master-run delivers the Master prompt via stdin intact" ($stdinContent -match "as the Master decision router")
 Check "master-run does not pass the prompt as argv tokens" (($argvContent -notmatch "as the Master decision router") -and ($argvContent -match "-\s*$"))
-Check "master-run succeeds (exit 0) and captures the recommendation on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md")))
+Check "master-run succeeds (exit 0) and captures the recommendation on a clean Codex exit" (($r.Code -eq 0) -and (Test-Path (Join-Path $fx "MASTER_LAST.md")))
 Check "master-run capture-only: does not modify AI_HANDOFF.md on success" ($before -eq $after)
 
 # master-run must FAIL CLOSED if Codex exits 0 but writes NO capture file (no false success).
@@ -1835,7 +1838,7 @@ $before = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("master-run", "-Yes")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Check "master-run fails closed (exit 6) when Codex exits 0 but captures no recommendation" (($r.Code -eq 6) -and ($r.Out -match "no recommendation was captured"))
-Check "master-run no-capture path leaves no capture file and no handoff change" ((-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md"))) -and ($before -eq $after))
+Check "master-run no-capture path leaves no capture file and no handoff change" ((-not (Test-Path (Join-Path $fx "MASTER_LAST.md"))) -and ($before -eq $after))
 
 Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 
@@ -1915,7 +1918,7 @@ $utf8MasterTask = (-join @([char]0x05DE, [char]0x05E9, [char]0x05D9, [char]0x05D
 $utf8MasterCapture = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Claude Code`nREVIEWER: Codex`nTASK: $utf8MasterTask`nREASON: UTF-8 task is ready"
 $fx = New-MasterApplyFixture -NoCapture -CurrentTask $utf8MasterTask
 [System.IO.File]::WriteAllText(
-    (Join-Path $fx "CODEX_MASTER_LAST.md"),
+    (Join-Path $fx "MASTER_LAST.md"),
     $utf8MasterCapture,
     [System.Text.UTF8Encoding]::new($false)
 )
@@ -1999,12 +2002,12 @@ $fakeMasterReady = Join-Path $FixtureRoot "fake-codex-loop-master-ready.cmd"
 @'
 @echo off
 if "%~2"=="--help" exit /b 0
-echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> CODEX_MASTER_LAST.md
-echo WAITING_FOR: Implementer>> CODEX_MASTER_LAST.md
-echo IMPLEMENTER: Claude Code>> CODEX_MASTER_LAST.md
-echo REVIEWER: Codex>> CODEX_MASTER_LAST.md
-echo TASK: v2.1.0 - Loop Master Test>> CODEX_MASTER_LAST.md
-echo REASON: safe simple implementation task>> CODEX_MASTER_LAST.md
+echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> MASTER_LAST.md
+echo WAITING_FOR: Implementer>> MASTER_LAST.md
+echo IMPLEMENTER: Claude Code>> MASTER_LAST.md
+echo REVIEWER: Codex>> MASTER_LAST.md
+echo TASK: v2.1.0 - Loop Master Test>> MASTER_LAST.md
+echo REASON: safe simple implementation task>> MASTER_LAST.md
 exit /b 0
 '@ | Set-Content -Path $fakeMasterReady -Encoding ascii
 
@@ -2019,7 +2022,7 @@ $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
 Check "loop without -IncludeMaster still stops at the Master turn (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "callable only via an explicit command, not inside loop"))
-Check "loop without -IncludeMaster captures no recommendation and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "CODEX_MASTER_LAST.md"))) -and ($before -eq $after))
+Check "loop without -IncludeMaster captures no recommendation and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "MASTER_LAST.md"))) -and ($before -eq $after))
 Check "loop without -IncludeMaster creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
 
 # Opt-in Master: loop -IncludeMaster runs master-run + master-apply, applies the route,
@@ -2052,7 +2055,7 @@ Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue
 Write-Host "[14] Opt-in Reviewer loop integration (loop -IncludeReviewer)"
 
 # The fake Codex CLIs below answer `exec --help` (exit 0) and, on the real run, write ONLY
-# CODEX_REVIEW_LAST.md (a local, gitignored, clean-tree-exempt artifact) so the in-loop
+# REVIEW_LAST.md (a local, gitignored, clean-tree-exempt artifact) so the in-loop
 # review-apply's Changed Files == git status guard still matches the single untracked
 # scripts/handoff.ps1. The TASK line matches the fixture's Current Task verbatim.
 $loopTask = "v1.4.0 - Loop Reviewer Test"
@@ -2061,10 +2064,10 @@ $fakeApprove = Join-Path $FixtureRoot "fake-codex-loop-approve.cmd"
 @'
 @echo off
 if "%~2"=="--help" exit /b 0
-echo VERDICT: APPROVED> CODEX_REVIEW_LAST.md
-echo REVIEWER: Codex>> CODEX_REVIEW_LAST.md
-echo TASK: v1.4.0 - Loop Reviewer Test>> CODEX_REVIEW_LAST.md
-echo REASON: scope matches the approved task>> CODEX_REVIEW_LAST.md
+echo VERDICT: APPROVED> REVIEW_LAST.md
+echo REVIEWER: Codex>> REVIEW_LAST.md
+echo TASK: v1.4.0 - Loop Reviewer Test>> REVIEW_LAST.md
+echo REASON: scope matches the approved task>> REVIEW_LAST.md
 exit /b 0
 '@ | Set-Content -Path $fakeApprove -Encoding ascii
 
@@ -2072,10 +2075,10 @@ $fakeBlock = Join-Path $FixtureRoot "fake-codex-loop-block.cmd"
 @'
 @echo off
 if "%~2"=="--help" exit /b 0
-echo VERDICT: BLOCKED> CODEX_REVIEW_LAST.md
-echo REVIEWER: Codex>> CODEX_REVIEW_LAST.md
-echo TASK: v1.4.0 - Loop Reviewer Test>> CODEX_REVIEW_LAST.md
-echo REASON: needs a fix before approval>> CODEX_REVIEW_LAST.md
+echo VERDICT: BLOCKED> REVIEW_LAST.md
+echo REVIEWER: Codex>> REVIEW_LAST.md
+echo TASK: v1.4.0 - Loop Reviewer Test>> REVIEW_LAST.md
+echo REASON: needs a fix before approval>> REVIEW_LAST.md
 exit /b 0
 '@ | Set-Content -Path $fakeBlock -Encoding ascii
 
@@ -2083,7 +2086,7 @@ $fakeMalformed = Join-Path $FixtureRoot "fake-codex-loop-malformed.cmd"
 @'
 @echo off
 if "%~2"=="--help" exit /b 0
-echo this is not a verdict block> CODEX_REVIEW_LAST.md
+echo this is not a verdict block> REVIEW_LAST.md
 exit /b 0
 '@ | Set-Content -Path $fakeMalformed -Encoding ascii
 
@@ -2098,7 +2101,7 @@ $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
 $after = (Get-FileHash -Algorithm SHA256 -Path $handoffPath).Hash
 Push-Location $fx; try { $commitsAfter = (& git rev-list --all --count 2>$null) } finally { Pop-Location }
 Check "loop without -IncludeReviewer still stops at the Reviewer turn (exit 0)" (($r.Code -eq 0) -and ($r.Out -match "callable only via an explicit command, not inside loop"))
-Check "loop without -IncludeReviewer captures no verdict and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "CODEX_REVIEW_LAST.md"))) -and ($before -eq $after))
+Check "loop without -IncludeReviewer captures no verdict and does not transition the handoff" ((-not (Test-Path (Join-Path $fx "REVIEW_LAST.md"))) -and ($before -eq $after))
 Check "loop without -IncludeReviewer creates no git commit" ("$commitsAfter".Trim() -eq "$commitsBefore".Trim())
 
 # Opt-in APPROVED: loop -IncludeReviewer runs review-run + review-apply, applies APPROVED, and
@@ -2389,9 +2392,9 @@ try {
     $argvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
     Check "bounded Claude runner enables safe mode before delivering prompts" (($argvText -match "arg3=--safe-mode") -and ($argvText -match "arg4=--append-system-prompt"))
     Check "bounded Claude runner preserves multi-word system and user prompts as single argv values (v2.10.0)" (($argvText -match "arg5=You are a non-interactive, headless automation agent") -and ($argvText -match "arg6=-p") -and ($argvText -match "arg7=You are running as the Implementer"))
-    $claudeLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
-    $claudeCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
-    $claudeJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"
+    $claudeLast = Join-Path $fx "IMPLEMENTER_LAST.md"
+    $claudeCommand = Join-Path $fx "IMPLEMENTER_COMMAND.md"
+    $claudeJsonl = Join-Path $fx "IMPLEMENTER.jsonl"
     $captureText = if (Test-Path $claudeLast) { Get-Content -Raw -Path $claudeLast } else { "" }
     $commandText = if (Test-Path $claudeCommand) { Get-Content -Raw -Path $claudeCommand } else { "" }
     [string[]]$jsonLines = if (Test-Path $claudeJsonl) { [regex]::Split((Get-Content -Raw -Path $claudeJsonl).Trim(), "`r?`n") | Where-Object { $_ -ne "" } } else { @() }
@@ -2411,7 +2414,7 @@ try {
     $r3 = Invoke-Handoff -WorkDir $mappedFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
     $mappedArgvText = if (Test-Path $fastArgv) { Get-Content -Raw -Path $fastArgv } else { "" }
     Check "Claude runner passes --model only for a concrete resolved mapping" (($r3.Code -eq 7) -and ($mappedArgvText -match "model=1") -and ($mappedArgvText -match "modelvalue=1"))
-    $mappedCapture = Get-Content -Raw -LiteralPath (Join-Path $mappedFx "CLAUDE_IMPLEMENTER_LAST.md")
+    $mappedCapture = Get-Content -Raw -LiteralPath (Join-Path $mappedFx "IMPLEMENTER_LAST.md")
     Check "Claude capture records adapter-resolved profile and concrete model" (($mappedCapture -match "Requested policy/profile: economy") -and ($mappedCapture -match "Requested concrete model: test-economy-model") -and ($mappedCapture -match "Model source: MODEL_ROUTING.json"))
 
     $highHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.4.0 - Escalation Guard Test") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: high_reasoning"
@@ -2460,9 +2463,9 @@ try {
     Check "bounded Claude runner times out and exits 4" (($r.Code -eq 4) -and ($r.Out -match "TIMED OUT") -and ($r.Out -match "process tree was terminated"))
     Check "timeout does not transition AI_HANDOFF.md to a false review state" (($before -eq $after) -and ($after -match "State:\s+READY_FOR_IMPLEMENTATION") -and ($after -notmatch "State:\s+READY_FOR_REVIEW"))
     Check "timeout kills the hanging fake Claude before completion" ($markerText -notmatch "finished")
-    $timeoutLast = Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md"
-    $timeoutCommand = Join-Path $fx "CLAUDE_IMPLEMENTER_COMMAND.md"
-    $timeoutJsonl = Join-Path $fx "CLAUDE_IMPLEMENTER.jsonl"
+    $timeoutLast = Join-Path $fx "IMPLEMENTER_LAST.md"
+    $timeoutCommand = Join-Path $fx "IMPLEMENTER_COMMAND.md"
+    $timeoutJsonl = Join-Path $fx "IMPLEMENTER.jsonl"
     $timeoutText = if (Test-Path $timeoutLast) { Get-Content -Raw -Path $timeoutLast } else { "" }
     [string[]]$timeoutLines = if (Test-Path $timeoutJsonl) { [regex]::Split((Get-Content -Raw -Path $timeoutJsonl).Trim(), "`r?`n") | Where-Object { $_ -ne "" } } else { @() }
     $timeoutRecord = if ($timeoutLines.Count -gt 0) { $timeoutLines[$timeoutLines.Count - 1] | ConvertFrom-Json } else { $null }
@@ -2579,7 +2582,7 @@ try {
     $r = Invoke-Handoff -WorkDir $fx -Arguments @("loop", "-Yes", "-MaxTurns", "2", "-TimeoutSeconds", "5")
     $after = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
     Check "loop auto-runs NEEDS_INVESTIGATION and reaches READY_FOR_REVIEW" (($r.Code -eq 0) -and ($r.Out -match "automated Claude Code Implementer turn") -and ($after -match "State:\s+READY_FOR_REVIEW"))
-    Check "automated investigation prompt explicitly forbids source edits" ((Get-Content -Raw -Path (Join-Path $fx "CLAUDE_IMPLEMENTER_LAST.md")) -match "READ-ONLY investigation turn")
+    Check "automated investigation prompt explicitly forbids source edits" ((Get-Content -Raw -Path (Join-Path $fx "IMPLEMENTER_LAST.md")) -match "READ-ONLY investigation turn")
 
     # A handoff transition cannot hide a source edit: the post-turn boundary must
     # still fail closed and identify the unexpected file.
@@ -2658,6 +2661,191 @@ Write-Host "[system-prompt] v2.9.0 --append-system-prompt"
 Check "Invoke-ClaudeTurn passes --append-system-prompt to the Claude runner (v2.9.0)" ($handoffSource -match "'--append-system-prompt'")
 Check "System prompt carries the non-interactive / never-greet / read-files-exactly guards (v2.9.0)" (($handoffSource -match "non-interactive, headless") -and ($handoffSource -match "Never greet") -and ($handoffSource -match "Read the requested local files exactly"))
 Check "Command transparency redacts the system prompt (v2.9.0)" ($handoffSource -match "append-system-prompt <system-prompt:redacted>")
+
+
+# === v3.5.0 Symmetric role adapters ===
+#
+# One block per acceptance criterion in the approved plan. The claim these defend is
+# narrow and worth stating plainly: the permission a turn runs under is decided by the
+# ROLE, and swapping which tool holds a role changes who does the work and nothing else.
+Write-Host "[v3.5.0] Symmetric role adapters"
+
+$symRoles = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+"@
+
+# --- Adapter coverage: all six combinations callable ---
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("adapters")
+$symMatrix = $r.Out
+$symPairs = @(
+    @("Master", "Codex"), @("Master", "Claude Code"),
+    @("Implementer", "Codex"), @("Implementer", "Claude Code"),
+    @("Reviewer", "Codex"), @("Reviewer", "Claude Code")
+)
+$symAllCallable = $true
+$symMissing = ""
+foreach ($pair in $symPairs) {
+    # Match the matrix row: role, tool, then "yes" in the Callable column.
+    $rowPattern = "(?m)^\s+" + [regex]::Escape($pair[0]) + "\s+" + [regex]::Escape($pair[1]) + "\s+yes\s"
+    if ($symMatrix -notmatch $rowPattern) { $symAllCallable = $false; $symMissing = "$($pair[0])/$($pair[1])"; break }
+}
+Check "adapters reports every one of the six role/tool combinations as callable" $symAllCallable $symMissing
+Check "adapters states that permission belongs to the role, not the tool" ($symMatrix -match "Permission is a property of the ROLE")
+
+# --- Read-only roles: both tools run Master and Reviewer without write permission ---
+Check "the Master role is read-only for both tools" (($symMatrix -match "(?m)^\s+Master\s+Codex\s+yes\s+read-only") -and ($symMatrix -match "(?m)^\s+Master\s+Claude Code\s+yes\s+read-only"))
+Check "the Reviewer role is read-only for both tools" (($symMatrix -match "(?m)^\s+Reviewer\s+Codex\s+yes\s+read-only") -and ($symMatrix -match "(?m)^\s+Reviewer\s+Claude Code\s+yes\s+read-only"))
+Check "the Implementer role is the only write-enabled role, for both tools" (($symMatrix -match "(?m)^\s+Implementer\s+Codex\s+yes\s+write") -and ($symMatrix -match "(?m)^\s+Implementer\s+Claude Code\s+yes\s+write"))
+
+# A read-only Claude turn must have no instrument for writing: the file-writing tools are
+# refused at the CLI, not merely discouraged in the prompt.
+Check "the read-only Claude role turn disables every file-writing tool" ($handoffSource -match "'Bash,Edit,Write,NotebookEdit'")
+Check "the read-only Claude role turn never enables acceptEdits" ($handoffSource -notmatch "(?s)Invoke-ClaudeReadOnlyCapture.{0,4000}acceptEdits")
+Check "a read-only role turn that changes the tree fails and discards its capture" (($handoffSource -match 'read-only \$TurnRole turn changed files') -and ($handoffSource -match "a Reviewer must never edit what it reviews"))
+
+# --- Write-enabled Implementer: the Codex grant is bounded exactly as specified ---
+#
+# Which role receives which sandbox is the whole safety claim of this release, so it is
+# asserted structurally rather than left to a reader of a 6000-line script. A reviewer
+# read the Implementer's sandbox variable as if it were script-wide and reported that the
+# Master and Reviewer had been granted write access. They had not - both pass a literal
+# 'read-only' - but the ambiguity was real, and these checks make the answer mechanical.
+$codexSandboxLines = @($handoffSource -split "`r?`n" | Where-Object { $_.Contains("'--sandbox'") })
+Check "exactly three codex invocations exist: Master, Reviewer, Implementer" ($codexSandboxLines.Count -eq 3)
+Check "exactly two codex invocations are hard-coded read-only (Master and Reviewer)" (@($codexSandboxLines | Where-Object { $_.Contains("'--sandbox', 'read-only'") }).Count -eq 2)
+Check "exactly one codex invocation takes a variable sandbox, and it is the Implementer's" (@($codexSandboxLines | Where-Object { $_.Contains("'--sandbox', `$implementerSandbox") }).Count -eq 1)
+Check "the Codex Implementer turn requests workspace-write, not full access" (($handoffSource.Contains("`$implementerSandbox = ""workspace-write""")) -and (@($codexSandboxLines | Where-Object { $_.Contains("danger-full-access") }).Count -eq 0) -and ($handoffSource -notmatch "(?s)function Invoke-CodexImplementerTurn.{0,8000}'danger-full-access'"))
+Check "the Codex Implementer turn never passes an approval or bypass flag" (($handoffSource -notmatch "(?s)function Invoke-CodexImplementerTurn.{0,8000}--ask-for-approval") -and ($handoffSource -notmatch "(?s)function Invoke-CodexImplementerTurn.{0,8000}dangerously-bypass"))
+# A Codex investigation turn must still be able to WRITE AI_HANDOFF.md. Fencing it with
+# a read-only sandbox deadlocked the state - advertised as callable, unable to finish.
+Check "a Codex investigation turn keeps workspace-write so it can record its findings" ($handoffSource.Contains("`$implementerSandbox = ""workspace-write"""))
+Check "no Implementer turn is fenced into a read-only sandbox it cannot transition from" (-not $handoffSource.Contains("`$implementerSandbox = if ("))
+Check "source-read-only is enforced after the investigation turn, for both tools alike" (($handoffSource -match "SOURCE-READ-ONLY investigation turn") -and ($handoffSource -match "The working tree is checked after this turn and any source change fails it"))
+Check "the deadlock is recorded so the same sandbox reasoning is not repeated" ($handoffSource -match "That was a deadlock, caught in review")
+Check "the Codex Implementer is told its declared scope is checked after the turn" ($handoffSource -match "an undeclared file fails the turn")
+
+# --- Exact scope still binds, whichever tool implements ---
+# The scope check lives in the shared caller, so both tools reach it through one path.
+Check "the Implementer turn is dispatched by role, so both tools reach the same scope check" (($handoffSource -match "function Invoke-ImplementerTurn") -and ($handoffSource -match "\`$claudeExit = Invoke-ImplementerTurn"))
+
+# --- Invariant unchanged: Reviewer != Implementer, in both directions ---
+$sameToolRoles = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Codex |
+| Reviewer | Codex |
+| Implementer | Codex |
+"@
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $sameToolRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "Reviewer == Implementer still blocks when both are Codex" ($r.Code -ne 0)
+
+$sameToolRolesClaude = $sameToolRoles -replace "Codex", "Claude Code"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $sameToolRolesClaude } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "Reviewer == Implementer still blocks when both are Claude Code" ($r.Code -ne 0)
+
+# --- The mirror swap reaches its turn instead of stopping for a manual paste ---
+$symHandoff = ((New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer") -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $symHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $symRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "the mirror swap does not stop at the manual-paste category" ($r.Out -notmatch "Operator Manual Action - paste the prompt")
+Check "the mirror swap plan names Claude Code as the Reviewer, not Codex" ($r.Out -match "Claude Code Reviewer plan")
+
+# The Task Actors must be swapped alongside the binding, or the role checkpoint blocks
+# first - correctly, since a task recorded under one binding must not run under another.
+$symMasterHandoff = ((New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master") -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = $symMasterHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $symRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "a swapped Master plan names Claude Code, not Codex" ($r.Out -match "Claude Code Master analysis plan")
+
+# --- What does NOT change for an untouched install ---
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-check")
+Check "the default binding still resolves a Codex Reviewer running read-only" (($r.Out -match "Codex Reviewer plan") -and ($r.Out -match "--sandbox read-only"))
+$fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("master-check")
+Check "the default binding still resolves a Codex Master running read-only" (($r.Out -match "Codex Master analysis plan") -and ($r.Out -match "--sandbox read-only"))
+
+# --- Legacy vendor-named captures are still consumed ---
+# An install that upgraded mid-task carries CODEX_REVIEW_LAST.md and no REVIEW_LAST.md.
+# review-apply must read it rather than report that no verdict was captured.
+$legacyTask = "v3.5.0 - Legacy Capture Compatibility"
+$legacyCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $legacyTask`nREASON: legacy capture still applies"
+$fx = New-ReviewApplyFixture -Capture $legacyCapture -CurrentTask $legacyTask
+Rename-Item -LiteralPath (Join-Path $fx "REVIEW_LAST.md") -NewName "CODEX_REVIEW_LAST.md"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+Check "review-apply consumes a legacy vendor-named capture when no role-named file exists" (($r.Code -eq 0) -and ($h -match "Verdict:\s+APPROVED"))
+
+# --- A capture produced by the wrong tool is never applied ---
+# This guard used to read "must be Codex". Stated as "must be the bound Reviewer" it also
+# catches the case the old form waved through: a Codex capture under a Claude binding.
+$wrongTask = "v3.5.0 - Wrong Reviewer Capture"
+$wrongCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: $wrongTask`nREASON: produced by the wrong tool"
+$fx = New-ReviewApplyFixture -Capture $wrongCapture -CurrentTask $wrongTask
+Set-Content -Path (Join-Path $fx ".ai/roles/ROLE_ASSIGNMENT.md") -Value $symRoles -Encoding utf8
+$symWrong = ((Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")) -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $symWrong -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+Check "a verdict signed by a tool other than the bound Reviewer is refused" ($r.Code -ne 0)
+
+# --- The upgrade path adds the new local captures to .gitignore ---
+# A pre-v3.5.0 project already contains the ignore block, so a block-presence check would
+# skip the new names and the next review-run would fail its own exact-scope guard.
+$upgradeTarget = Join-Path $FixtureRoot ("upgrade-ignore-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $upgradeTarget -Force | Out-Null
+Set-Content -Path (Join-Path $upgradeTarget ".gitignore") -Value "/AI_HANDOFF.md`n/CODEX_REVIEW_LAST.md" -Encoding utf8
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $upgradeTarget *> $null
+$upgradedIgnore = Get-Content -Raw -Path (Join-Path $upgradeTarget ".gitignore")
+Check "upgrading an existing install adds the new role-named captures to .gitignore" (($upgradedIgnore -match "/REVIEW_LAST\.md") -and ($upgradedIgnore -match "/MASTER_LAST\.md") -and ($upgradedIgnore -match "/IMPLEMENTER_LAST\.md"))
+Check "upgrading .gitignore preserves the entries that were already there" ($upgradedIgnore -match "/CODEX_REVIEW_LAST\.md")
+
+# --- The read-only boundary is measured by CONTENT, not by filename set ---
+#
+# Found by the Codex Reviewer while reviewing v3.5.0 itself. The first implementation of
+# this guard compared the set of changed file NAMES before and after a read-only turn.
+# A Reviewer runs on a dirty tree by definition, so a turn that edited a file which was
+# ALREADY dirty left that set identical and passed - the reviewer could have rewritten
+# the very code it was reviewing. These pin the content-level comparison that replaced it.
+Check "the read-only boundary hashes file content, not just file names" (($handoffSource -match 'function Get-ReadOnlyBoundarySnapshot') -and ($handoffSource -match 'Get-FileHash -Algorithm SHA256 -LiteralPath'))
+Check "the boundary explains why a filename comparison is insufficient" ($handoffSource -match 'identical and walks straight through')
+Check "the boundary covers local coordination files, so a read-only turn cannot rewrite the handoff" ($handoffSource -match 'foreach \(\$local in \$LocalHandoffFiles\)')
+Check "an unreadable tree or unhashable file fails the boundary closed" ($handoffSource -match 'Refusing to accept a capture whose read-only boundary is unverified')
+Check "the boundary comparison is case-sensitive on the hash" ($handoffSource -match '\$After\[\$key\] -cne \$Before\[\$key\]')
+Check "a path that vanished during a read-only turn counts as a change" ($handoffSource -match 'if \(-not \$After.ContainsKey\(\$key\)\)')
+Check "a path that appeared during a read-only turn counts as a change" ($handoffSource -match 'if \(-not \$Before.ContainsKey\(\$key\)\)')
+Check "the boundary is checked before the protocol writes its own capture or event log" ($handoffSource -match '(?s)\$postSnapshot = Get-ReadOnlyBoundarySnapshot.{0,1500}Event log parity with the Codex path')
+
+# Behavioural proof of the comparison itself: same names, different content.
+$boundaryBefore = @{ "a.txt" = "AAA"; "b.txt" = "BBB" }
+$boundaryAfterEdited = @{ "a.txt" = "AAA"; "b.txt" = "CCC" }
+$boundaryAfterSame = @{ "a.txt" = "AAA"; "b.txt" = "BBB" }
+$boundaryProbe = {
+    param($Before, $After)
+    $changed = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $Before.Keys) {
+        if (-not $After.ContainsKey($key)) { $changed.Add($key); continue }
+        if ($After[$key] -cne $Before[$key]) { $changed.Add($key) }
+    }
+    foreach ($key in $After.Keys) { if (-not $Before.ContainsKey($key)) { $changed.Add($key) } }
+    return @($changed | Sort-Object -Unique)
+}
+Check "editing an already-tracked file with no name change is detected" ((& $boundaryProbe $boundaryBefore $boundaryAfterEdited).Count -eq 1)
+Check "an untouched tree reports no change" ((& $boundaryProbe $boundaryBefore $boundaryAfterSame).Count -eq 0)
 
 # --- Summary ---
 Write-Host ""

@@ -519,25 +519,83 @@ function Write-RoleCheckpointFailure {
     Write-Host "No role-dependent action was performed."
 }
 
-# Local Codex Reviewer POC artifacts (v1.2.0). Local, gitignored, never committed.
-$ReviewJsonlName = "CODEX_REVIEW.jsonl"
-$ReviewLastName  = "CODEX_REVIEW_LAST.md"
+# --- v3.5.0: captures are named after the ROLE, not the vendor ---
+#
+# These files used to be CODEX_REVIEW_LAST.md and CODEX_MASTER_LAST.md, which was
+# accurate only while each role had exactly one possible tool. Roles are symmetric now -
+# either tool may hold either role - so a vendor-named capture would lie as soon as the
+# roles were swapped. The name states which role produced the file.
+#
+# Legacy vendor-named captures are still READ when no role-named file is present, so an
+# install carrying captures written by an earlier version keeps working. New captures are
+# always written under the role name.
+# Local, gitignored, never committed.
+$ReviewJsonlName = "REVIEW.jsonl"
+$ReviewLastName  = "REVIEW_LAST.md"
+$LegacyReviewJsonlName = "CODEX_REVIEW.jsonl"
+$LegacyReviewLastName  = "CODEX_REVIEW_LAST.md"
 
-# Local Codex Master capture POC artifacts (v1.3.1). Local, gitignored, never committed.
-$MasterJsonlName = "CODEX_MASTER.jsonl"
-$MasterLastName  = "CODEX_MASTER_LAST.md"
+$MasterJsonlName = "MASTER.jsonl"
+$MasterLastName  = "MASTER_LAST.md"
+$LegacyMasterJsonlName = "CODEX_MASTER.jsonl"
+$LegacyMasterLastName  = "CODEX_MASTER_LAST.md"
 
-# Local Claude Implementer capture artifacts (v2.3.0/v2.4.0). Local, gitignored, never committed.
-$ClaudeImplementerJsonlName = "CLAUDE_IMPLEMENTER.jsonl"
-$ClaudeImplementerLastName  = "CLAUDE_IMPLEMENTER_LAST.md"
-$ClaudeImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
+# Local Implementer capture artifacts (v2.3.0/v2.4.0; renamed by role in v3.5.0).
+# Either tool may now hold the Implementer role, so these are named after the role.
+# Local, gitignored, never committed.
+$ClaudeImplementerJsonlName = "IMPLEMENTER.jsonl"
+$ClaudeImplementerLastName  = "IMPLEMENTER_LAST.md"
+$ClaudeImplementerCommandName = "IMPLEMENTER_COMMAND.md"
+$ImplementerJsonlName = $ClaudeImplementerJsonlName
+$ImplementerLastName  = $ClaudeImplementerLastName
+$LegacyImplementerJsonlName = "CLAUDE_IMPLEMENTER.jsonl"
+$LegacyImplementerLastName  = "CLAUDE_IMPLEMENTER_LAST.md"
+$LegacyImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
 
 # Marker written while an automated turn is in flight (v3.4.2). Local and gitignored.
 $RunMarkerName = "HANDOFF_RUN.json"
 
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName)
+# v3.5.0: the legacy vendor-named captures stay on this list. They are still readable,
+# so an install that carries them must not trip the clean-tree guard on their account.
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
+
+# --- v3.5.0: permission follows the ROLE, not the tool ---
+#
+# Until v3.5.0 the permission a turn ran under was in practice a property of the vendor:
+# Codex was always invoked read-only, because Codex only ever held Master or Reviewer,
+# and Claude Code was always invoked write-enabled, because it only ever held
+# Implementer. Nothing stated the rule; it was an accident of who sat where. That stays
+# invisible until the roles are allowed to swap, at which point it silently hands a
+# Reviewer write access purely because of which vendor filled the seat.
+#
+# The rule is stated once, here, and every adapter and every invocation reads it:
+#   Master      -> read-only. It routes work; it must never edit what it routes.
+#   Reviewer    -> read-only. It judges work; a reviewer that can edit is not independent.
+#   Implementer -> write.     It is the only role that changes the repository.
+# Whichever tool holds a role inherits the ROLE's permission, never its own.
+function Get-RolePermission {
+    param([string]$Role)
+    switch ($Role) {
+        "Master"      { return "read-only" }
+        "Reviewer"    { return "read-only" }
+        "Implementer" { return "write" }
+        default       { return "read-only" }
+    }
+}
+
+# Returns the capture path to READ for a role: the role-named file when it exists,
+# otherwise a legacy vendor-named file that does, otherwise the role-named path (so the
+# caller reports the current name when nothing has been captured at all).
+function Resolve-CapturePath {
+    param([string]$RepoRoot, [string]$Preferred, [string]$Legacy)
+    $preferredPath = Join-Path $RepoRoot $Preferred
+    if (Test-Path -LiteralPath $preferredPath) { return $preferredPath }
+    $legacyPath = Join-Path $RepoRoot $Legacy
+    if (Test-Path -LiteralPath $legacyPath) { return $legacyPath }
+    return $preferredPath
+}
 
 # --- Exact-scope Git status capture (v3.4.1) ---
 #
@@ -634,6 +692,69 @@ function Get-WorkingTreeState {
     $status = Get-GitStatusFields
     if (-not $status.Ok) { return @{ Ok = $false; Files = [System.Collections.Generic.List[string]]::new() } }
     return @{ Ok = $true; Files = (ConvertFrom-GitStatusFields -Fields $status.Fields) }
+}
+
+# --- v3.5.0: content-level read-only boundary ---
+#
+# A Reviewer legitimately runs on a DIRTY tree: the whole point of a code review is that
+# the Implementer's changes are sitting there waiting to be judged. So "did the tree
+# change" cannot be answered by comparing the set of changed FILE NAMES before and after
+# the turn - a read-only turn that edits a file which was already dirty leaves that set
+# identical and walks straight through. The reviewer could silently rewrite the very code
+# it was reviewing, which is precisely the failure the independent-review invariant
+# exists to prevent.
+#
+# So the boundary is taken at the level of CONTENT. Every file Git reports as changed,
+# plus every local coordination file, is hashed before the turn and again after it. A
+# differing hash, a vanished path, or a path that appeared are all changes.
+#
+# Fails closed: if the tree cannot be read or a file cannot be hashed, the snapshot is
+# not Ok, and the caller must refuse the capture rather than accept an unverified one.
+function Get-ReadOnlyBoundarySnapshot {
+    param([string[]]$ExcludePaths = @())
+    $result = @{ Ok = $false; Entries = @{} }
+    $tree = Get-WorkingTreeState
+    if (-not $tree.Ok) { return $result }
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in $tree.Files) { if (-not $paths.Contains($f)) { $paths.Add($f) } }
+    # The local coordination files are excluded from the changed-file list by design, so
+    # they must be added explicitly - a read-only turn must not rewrite AI_HANDOFF.md
+    # either. review-run and master-run promise capture only.
+    foreach ($local in $LocalHandoffFiles) { if (-not $paths.Contains($local)) { $paths.Add($local) } }
+
+    $repoRoot = (Get-Location).Path
+    $entries = @{}
+    foreach ($p in $paths) {
+        if ($ExcludePaths -contains $p) { continue }
+        $full = Join-Path $repoRoot $p
+        if (Test-Path -LiteralPath $full -PathType Leaf) {
+            try {
+                $entries[$p] = (Get-FileHash -Algorithm SHA256 -LiteralPath $full -ErrorAction Stop).Hash
+            } catch {
+                return $result
+            }
+        } else {
+            $entries[$p] = "<absent>"
+        }
+    }
+    $result.Ok = $true
+    $result.Entries = $entries
+    return $result
+}
+
+# Names every path whose content, presence or absence differs between two snapshots.
+function Compare-ReadOnlyBoundary {
+    param([hashtable]$Before, [hashtable]$After)
+    $changed = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $Before.Keys) {
+        if (-not $After.ContainsKey($key)) { $changed.Add($key); continue }
+        if ($After[$key] -cne $Before[$key]) { $changed.Add($key) }
+    }
+    foreach ($key in $After.Keys) {
+        if (-not $Before.ContainsKey($key)) { $changed.Add($key) }
+    }
+    return @($changed | Sort-Object -Unique)
 }
 
 function Test-ClaudeAvailable {
@@ -1198,6 +1319,360 @@ try {
     return $claudeExit
 }
 
+
+# --- v3.5.0: read-only Claude Code turn for the Master and Reviewer roles ---
+#
+# Invoke-ClaudeTurn above runs the Implementer: it is write-enabled because
+# Get-RolePermission grants the Implementer role write. This function runs the other
+# two roles, which Get-RolePermission holds to read-only, and it is the reason Claude
+# Code can now hold them at all.
+#
+# Read-only here is enforced three ways, not one:
+#   1. The write tools are DISALLOWED at the CLI. Edit, Write and NotebookEdit are
+#      passed to --disallowed-tools alongside Bash, so the turn has no instrument for
+#      changing a file. This is the guarantee; the other two are defence in depth.
+#   2. The prompt and the system prompt both state the turn is read-only.
+#   3. The working tree is compared after the turn. Anything that moved fails the turn
+#      even if the capture looks valid - the same standard the NEEDS_INVESTIGATION
+#      boundary already applies to the Implementer.
+#
+# The caller supplies the role prompt and receives the final message at LastPath, which
+# is the same contract codex exec --output-last-message satisfies for the Codex path.
+# That is what lets review-apply and master-apply stay identical for both tools: they
+# parse a captured file and never learn which vendor produced it.
+function Invoke-ClaudeReadOnlyCapture {
+    param(
+        [string]$TurnRole,
+        [string]$Prompt,
+        [string]$LastPath,
+        [string]$JsonlPath,
+        [int]$TurnTimeoutSeconds,
+        [double]$TurnBudgetUsd
+    )
+
+    $result = @{ Ok = $false; ExitCode = -1; TimedOut = $false; SourceChanged = $false; ChangedFiles = @(); Error = "" }
+
+    if ($TurnTimeoutSeconds -lt 1) {
+        $result.Error = "-TimeoutSeconds must be at least 1 (got: $TurnTimeoutSeconds)."
+        return $result
+    }
+
+    $systemPrompt = "You are a non-interactive, headless automation agent holding the $TurnRole role in the codex-claude-handoff protocol. Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. This turn is STRICTLY READ-ONLY: do not create, edit, rename or delete any file, including local handoff coordination files. The file-writing tools are disabled for this turn and the working tree is checked afterwards. Read the requested local files exactly as written and answer in the exact output format the prompt requires, with no preamble and no closing commentary."
+
+    $fullPrompt = $Prompt + "`nThis is a NON-INTERACTIVE, headless, READ-ONLY automation turn. There is no human available during this turn. Do not greet anyone, do not ask questions, and do not wait for input. Do not modify any file: your entire output is your answer. Emit the required block as the last thing in your response, with no text after it."
+
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    $sysPromptFile = [System.IO.Path]::GetTempFileName()
+    $runnerScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".ps1")
+    $budgetText = $TurnBudgetUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+
+    $runnerBody = @'
+param(
+    [string]$PromptFile,
+    [string]$SystemPromptFile,
+    [string]$BudgetUsdText,
+    [string]$ModelName
+)
+$ErrorActionPreference = "Continue"
+$prompt = (Get-Content -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
+$sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
+$argList = @(
+    '--yes',
+    '@anthropic-ai/claude-code',
+    '--safe-mode',
+    '--append-system-prompt',
+    $sysPrompt,
+    '-p',
+    $prompt,
+    '--disallowed-tools',
+    'Bash,Edit,Write,NotebookEdit',
+    '--max-budget-usd',
+    $BudgetUsdText,
+    '--no-session-persistence',
+    '--output-format',
+    'text',
+    '--setting-sources',
+    'project,local'
+)
+if (-not [string]::IsNullOrWhiteSpace($ModelName) -and $ModelName -ne '__HANDOFF_INHERIT__') {
+    $argList += '--model'
+    $argList += $ModelName
+}
+try {
+    $npxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
+    if (-not $npxCommand) { $npxCommand = Get-Command npx -ErrorAction Stop }
+    & $npxCommand.Source @argList
+    if ($null -eq $LASTEXITCODE) { exit 3 }
+    exit ([int]$LASTEXITCODE)
+} catch {
+    Write-Error $_
+    exit 3
+}
+'@
+
+    $psHost = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+    if (-not $psHost) { $psHost = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+    if (-not $psHost) {
+        $result.Error = "No PowerShell host (pwsh/powershell) is available for the bounded runner."
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        return $result
+    }
+
+    # Content-level snapshot BEFORE the turn. See Get-ReadOnlyBoundarySnapshot for why a
+    # filename comparison is not sufficient here. The two capture paths are excluded
+    # because this function writes them itself, after the boundary has been checked.
+    $boundaryExclude = @($ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName,
+                         $LegacyReviewJsonlName, $LegacyReviewLastName, $LegacyMasterJsonlName, $LegacyMasterLastName)
+    $preSnapshot = Get-ReadOnlyBoundarySnapshot -ExcludePaths $boundaryExclude
+
+    try {
+        Set-Content -Path $promptFile -Value $fullPrompt -Encoding utf8 -NoNewline -ErrorAction Stop
+        Set-Content -Path $sysPromptFile -Value $systemPrompt -Encoding utf8 -NoNewline -ErrorAction Stop
+        Set-Content -Path $runnerScript -Value $runnerBody -Encoding utf8 -ErrorAction Stop
+        $runnerModel = if ($script:ModelSelection -and $script:ModelSelection.UsesConcreteModel) { $script:ModelSelection.ClaudeModel } else { "__HANDOFF_INHERIT__" }
+        $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runnerScript, '-PromptFile', $promptFile, '-SystemPromptFile', $sysPromptFile, '-BudgetUsdText', $budgetText, '-ModelName', $runnerModel)
+        $proc = Start-Process -FilePath $psHost -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        $processJob = New-HandoffProcessJob -Process $proc
+        Write-RunMarker -ProcessId $proc.Id -Kind "Claude Code $TurnRole turn (read-only)" -Budget $TurnBudgetUsd -Timeout $TurnTimeoutSeconds
+    } catch {
+        $result.Error = "Failed to start the bounded Claude Code runner: $_"
+        Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+        return $result
+    }
+
+    try { $null = $proc.Handle } catch { }
+    if ($proc.WaitForExit($TurnTimeoutSeconds * 1000)) {
+        $result.ExitCode = $proc.ExitCode
+        Close-HandoffProcessJob -Job $processJob
+    } else {
+        $result.TimedOut = $true
+        $jobStopped = Stop-HandoffProcessJob -Job $processJob
+        if (-not $jobStopped) { Stop-ProcessTree -ProcessId $proc.Id }
+        try { $proc.WaitForExit(5000) | Out-Null } catch { }
+    }
+    Clear-RunMarker
+
+    $stdoutText = ""
+    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    $stderrText = ""
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+
+    Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $runnerScript -Force -ErrorAction SilentlyContinue
+
+    # Enforcement 3: nothing may have changed. A capture is not accepted from a turn that
+    # edited the repository, however well-formed the capture looks - a Reviewer that
+    # edits what it reviews is not a Reviewer. This runs before anything is written, so
+    # the comparison sees only what the TURN did.
+    $postSnapshot = Get-ReadOnlyBoundarySnapshot -ExcludePaths $boundaryExclude
+    if (-not $preSnapshot.Ok -or -not $postSnapshot.Ok) {
+        $result.SourceChanged = $true
+        $result.Error = "Could not verify the working tree around the read-only $TurnRole turn. Refusing to accept a capture whose read-only boundary is unverified."
+        return $result
+    }
+    $changedPaths = Compare-ReadOnlyBoundary -Before $preSnapshot.Entries -After $postSnapshot.Entries
+    if ($changedPaths.Count -gt 0) {
+        $result.SourceChanged = $true
+        $result.ChangedFiles = $changedPaths
+        $result.Error = "The read-only $TurnRole turn changed files: $([string]::Join(', ', $changedPaths))."
+        return $result
+    }
+
+    # Event log parity with the Codex path: the Codex runs keep a JSONL stream, so keep
+    # one here too. Written only after the boundary check, so the protocol's own
+    # diagnostics can never be mistaken for something the turn did.
+    try {
+        $logLine = "{`"role`":`"$TurnRole`",`"tool`":`"Claude Code`",`"permission`":`"read-only`",`"exit`":$($result.ExitCode),`"timedOut`":$($result.TimedOut.ToString().ToLowerInvariant())}"
+        Add-Content -LiteralPath $JsonlPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch { }
+
+    if ($result.TimedOut) {
+        $result.Error = "The Claude Code $TurnRole turn timed out after $TurnTimeoutSeconds seconds and its process tree was terminated."
+        return $result
+    }
+    if ($result.ExitCode -ne 0) {
+        $detail = if (-not [string]::IsNullOrWhiteSpace($stderrText)) { " Stderr: $($stderrText.Trim())" } else { "" }
+        $result.Error = "Claude Code exited $($result.ExitCode) and produced no usable capture.$detail"
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($stdoutText)) {
+        $result.Error = "Claude Code exited 0 but produced no output, so no capture was written."
+        return $result
+    }
+
+    # Claude Code has no --output-last-message; its final message IS stdout under
+    # --output-format text. Writing it to LastPath gives the Codex path's exact contract,
+    # so the apply commands parse one file shape regardless of which tool produced it.
+    try {
+        [System.IO.File]::WriteAllText($LastPath, $stdoutText, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        $result.Error = "Failed to write the captured $TurnRole output to $LastPath : $_"
+        return $result
+    }
+
+    $result.Ok = $true
+    return $result
+}
+
+
+# --- v3.5.0: Codex holding the Implementer role ---
+#
+# This is the only turn in the protocol that Get-RolePermission grants write, and the
+# grant is bounded three ways:
+#
+#   --sandbox workspace-write   confines writes to the repository working directory.
+#                               Not danger-full-access, which would also reach outside it.
+#   no approval escape hatches  --ask-for-approval and
+#                               --dangerously-bypass-approvals-and-sandbox are never
+#                               passed. There is no human in a headless turn to answer an
+#                               approval prompt, so a turn that asks for one hangs until
+#                               the timeout - and a turn that bypasses the sandbox is not
+#                               bounded at all. Both are refused for the same reason.
+#   the exact-scope check       runs after the turn, in the caller, exactly as it does for
+#                               the Claude Implementer. Writing an undeclared file fails
+#                               the turn whichever tool wrote it.
+#
+# NEEDS_INVESTIGATION uses workspace-write like any other Implementer turn, NOT
+# --sandbox read-only. The first version of this function used read-only there, reasoning
+# that a source-read-only state should be enforced by the sandbox rather than checked
+# afterwards. That was a deadlock, caught in review: an investigation turn has to record
+# its findings in AI_HANDOFF.md and transition the state, and a read-only sandbox forbids
+# writing that file. The state would have been advertised as callable and been unable to
+# finish - the same shape as the v3.4.1 defect where the Reviewer's read-only sandbox
+# denied the test fixtures the suite needed.
+#
+# "Source-read-only" was never "writes nothing"; it means the coordination files may move
+# and application, source, test and config files may not. That is a boundary a sandbox
+# cannot express, so it is enforced where it always has been for the Claude Implementer:
+# by Get-InvestigationSourceBoundary after the turn, which fails the turn if any
+# non-coordination file changed. Both tools now reach the identical check.
+function Invoke-CodexImplementerTurn {
+    if ($TimeoutSeconds -lt 1) {
+        Write-Host "Codex Implementer turn blocked."
+        Write-Host "Reason: -TimeoutSeconds must be at least 1 (got: $TimeoutSeconds)."
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        return 1
+    }
+
+    $cli = Resolve-CodexCli
+    if (-not $cli.Ok) {
+        Write-Host "Codex Implementer turn blocked."
+        Write-Host "Reason: $($cli.Error)"
+        Write-Host "Stop category: Environment/Preflight (Codex CLI unavailable) - not a user decision."
+        return 3
+    }
+    $execHelp = Test-CodexExecHelp -CodexPath $cli.Path
+    if (-not $execHelp.Ok) {
+        Write-Host "Codex Implementer turn blocked."
+        Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'. $($execHelp.Error)"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        return 3
+    }
+
+    $repoRoot = (Get-Location).Path
+    $lastPath = Join-Path $repoRoot $ClaudeImplementerLastName
+    $jsonlPath = Join-Path $repoRoot $ClaudeImplementerJsonlName
+
+    # The Implementer role is write-enabled (Get-RolePermission), and that holds for the
+    # investigation state too: the turn must be able to write AI_HANDOFF.md. What it must
+    # not touch is source, and that is checked after the turn, not fenced by the sandbox.
+    #
+    # The name says IMPLEMENTER on purpose. This file builds three different codex
+    # invocations - Master, Reviewer and Implementer - and a bare $sandbox here reads as
+    # "the sandbox this script uses" rather than "the sandbox this ROLE gets". A reviewer
+    # misread it exactly that way and reported that Master and Reviewer had been given
+    # write access. They had not: Invoke-MasterRun and Invoke-ReviewRun each pass a
+    # literal 'read-only' and neither reads this variable. The ambiguity was real even
+    # though the defect was not, so the variable is named for the only role it serves.
+    $readOnlyTurn = ($State -eq "NEEDS_INVESTIGATION")
+    $implementerSandbox = "workspace-write"
+
+    $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available during this turn. Do not greet anyone, do not ask what to work on, and do not wait for input. " +
+        "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. " +
+        "If present, read IMPLEMENTER_LAST.md, MASTER_LAST.md, REVIEW_LAST.md and HANDOFF_LOOP.log to reconstruct recent context before acting. " +
+        "Read .ai/skills/codex-claude-handoff/CAPABILITIES.md if present. " +
+        "Change ONLY the files listed under AI_HANDOFF.md Changed Files, plus AI_HANDOFF.md itself. The set of files you change is compared against that list after this turn, and an undeclared file fails the turn. " +
+        "Treat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification. " +
+        "Never install dependencies, use the network, deploy, access or mutate a database, inspect or modify secrets or production configuration, or run git add, git commit, git push or git tag. Those are the user's decisions and are made outside this turn. " +
+        "Never claim a command or test passed without observed output; if verification could not run, record it as not run with the reason."
+    if ($readOnlyTurn) {
+        $prompt += " This is a SOURCE-READ-ONLY investigation turn. Do not create, edit, rename or delete any application, source, test or configuration file. You may update ONLY AI_HANDOFF.md and local handoff coordination files. The working tree is checked after this turn and any source change fails it, even if the handoff transition itself was correct. Record repository findings in AI_HANDOFF.md and transition exactly as NEXT_TURN.md requires."
+    }
+
+    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox $implementerSandbox --ephemeral --json --output-last-message `"$ClaudeImplementerLastName`" -   (prompt via stdin)"
+    Write-Host ""
+
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -ErrorAction SilentlyContinue
+    $argList = @('exec', '--cd', $repoRoot, '--sandbox', $implementerSandbox, '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+    $timedOut = $false
+    $codexExit = -1
+    try {
+        $proc = Start-Process -FilePath $cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
+            -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        $processJob = New-HandoffProcessJob -Process $proc
+        Write-RunMarker -ProcessId $proc.Id -Kind "Codex Implementer turn ($implementerSandbox)" -Budget $BudgetUsd -Timeout $TimeoutSeconds
+    } catch {
+        Write-Host "Codex Implementer turn blocked."
+        Write-Host "Reason: Failed to start the Codex CLI: $_"
+        Write-Host "Stop category: Environment/Preflight - not a user decision."
+        Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+        return 3
+    }
+    try { $null = $proc.Handle } catch { }
+
+    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+        $codexExit = $proc.ExitCode
+        Close-HandoffProcessJob -Job $processJob
+    } else {
+        $timedOut = $true
+        $jobStopped = Stop-HandoffProcessJob -Job $processJob
+        if (-not $jobStopped) { Stop-ProcessTree -ProcessId $proc.Id }
+        try { $proc.WaitForExit(5000) | Out-Null } catch { }
+    }
+    Clear-RunMarker
+
+    $partial = ""
+    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (-not [string]::IsNullOrEmpty($partial)) {
+        Add-Content -LiteralPath $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+    }
+    $stderrText = ""
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+
+    if ($timedOut) {
+        Write-Host "Codex Implementer turn TIMED OUT after $TimeoutSeconds seconds."
+        Write-Host "The Codex process tree was terminated."
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+            Write-Host "Codex stderr (partial, before termination):"
+            ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+        }
+        Write-Host "Stop category: Environment/Preflight (Codex Implementer turn timed out) - not a user decision."
+        Write-Host "No git commands were run by handoff.ps1. Inspect AI_HANDOFF.md before continuing."
+        return 4
+    }
+    if ($codexExit -ne 0 -and -not [string]::IsNullOrWhiteSpace($stderrText)) {
+        Write-Host "Codex stderr:"
+        ($stderrText -split "`n") | ForEach-Object { Write-Host "  $($_.TrimEnd())" }
+    }
+    return $codexExit
+}
+
+# Dispatch the Implementer turn to whichever tool holds the role. Both branches return an
+# exit code with the same meaning, so every caller - cycle, loop, the no-op guard, the
+# exact-scope check - is unchanged and vendor-blind.
+function Invoke-ImplementerTurn {
+    $implementerTool = Resolve-Actor -Role "Implementer" -Binding $script:Binding
+    if (Test-SameToolIdentity -First $implementerTool -Second "Codex") {
+        return Invoke-CodexImplementerTurn
+    }
+    return Invoke-ClaudeTurn
+}
+
 function Get-AdapterProfile {
     param([string]$Role, [string]$Tool)
 
@@ -1213,47 +1688,86 @@ function Get-AdapterProfile {
         }
     }
 
-    # v3.4.1: adapter lookup keys on canonical identity, so a legacy display name
-    # such as 'Codex Window' still finds the adapter it names.
-    if ($Role -eq "Implementer" -and (Test-SameToolIdentity -First $Tool -Second "Claude Code")) {
+    # --- v3.5.0: symmetric role adapters ---
+    #
+    # All six role/tool combinations are callable: Master, Reviewer and Implementer, each
+    # held by either Codex or Claude Code. Before v3.5.0 only three were, and which three
+    # was an accident of history rather than a decision - so swapping the roles silently
+    # dropped you back to manual copy-paste in one direction and not the other.
+    #
+    # The permission each turn runs under comes from Get-RolePermission - from the ROLE -
+    # and never from which vendor holds it. Only the INVOCATION differs per tool, because
+    # only the command line is vendor-specific. The lookup keys on canonical identity, so
+    # a legacy display name such as 'Codex Window' still finds the adapter it names.
+    $adapterIdentity = Resolve-ToolIdentity -Tool $Tool
+    $isCodex  = ($adapterIdentity.Ok -and $adapterIdentity.Canonical -eq "codex")
+    $isClaude = ($adapterIdentity.Ok -and $adapterIdentity.Canonical -eq "claude-code")
+
+    if ($Role -eq "Implementer" -and ($isCodex -or $isClaude)) {
+        # The Implementer is the only role Get-RolePermission grants write, and both tools
+        # receive it the same way: confined to the repository working directory, with the
+        # declared-scope check run against git status after the turn either way.
+        if ($isClaude) {
+            $invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`" [--model `"<resolved-local-model>`"]"
+            $toolLimits = "Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed"
+        } else {
+            $invocation = "bounded runner -> codex exec --cd `"<repo>`" --sandbox workspace-write --ephemeral --json --output-last-message `"$ImplementerLastName`" -   (prompt via stdin)"
+            $toolLimits = "Codex runs --sandbox workspace-write, which confines writes to the repository working directory; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox; no danger-full-access"
+        }
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION");
-            Invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`" [--model `"<resolved-local-model>`"]";
-            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; dynamic model profile resolves through local configuration and falls back to inherit; concrete high_reasoning routing requires -AllowModelEscalation; NEEDS_INVESTIGATION is source-read-only and checked after the turn; Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; no commit/push/tag/deploy/db/secrets automation.";
+            Invocation = $invocation;
+            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; dynamic model profile resolves through local configuration and falls back to inherit; concrete high_reasoning routing requires -AllowModelEscalation; NEEDS_INVESTIGATION is source-read-only and checked after the turn; $toolLimits; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; declared scope enforced against git status after the turn; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
-            Reason = "READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated; planning and question turns remain manual.";
+            Reason = "READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated for $($adapterIdentity.Display) in the Implementer role; planning and question turns remain manual.";
             NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION or NEEDS_INVESTIGATION; use next + paste for other Implementer states."
         }
     }
 
-    # Master/Codex (since v2.0.1): callable for NEEDS_ANALYSIS via the explicit two-step
-    # master-run (read-only capture) + master-apply (apply the captured recommendation's
-    # local AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose; since v2.1.0,
-    # loop -IncludeMaster may opt this exact turn into one authorized loop session.
-    if ($Role -eq "Master" -and (Test-SameToolIdentity -First $Tool -Second "Codex")) {
+    # Master (Codex since v2.0.1, Claude Code since v3.5.0): callable for NEEDS_ANALYSIS
+    # via the explicit two-step master-run (read-only capture) + master-apply (apply the
+    # captured recommendation's local AI_HANDOFF.md transition). AutoLoopEligible is FALSE
+    # on purpose for both tools; since v2.1.0, loop -IncludeMaster may opt this exact turn
+    # into one authorized loop session.
+    if ($Role -eq "Master" -and ($isCodex -or $isClaude)) {
+        if ($isCodex) {
+            $runShape = "read-only Codex Master analysis"
+            $toolLimits = "Codex runs --sandbox read-only; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox"
+        } else {
+            $runShape = "read-only Claude Code Master analysis"
+            $toolLimits = "Claude Code runs with source edits refused in both the prompt and the system prompt, and a post-turn source-change check that fails the turn if any non-handoff file moved; --safe-mode; Bash disallowed"
+        }
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("NEEDS_ANALYSIS");
-            Invocation = "Capture: handoff.ps1 master-run (read-only Codex Master analysis, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes). PowerShell loop -IncludeMaster may run this pair in-session.";
-            SafetyLimits = "Explicit yes per command, or explicit loop -IncludeMaster for one authorized loop session; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/waiting-for pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by default and never by cycle; no git add/commit/push/tag/deploy/db/secrets.";
+            Invocation = "Capture: handoff.ps1 master-run ($runShape, explicit yes). Apply: handoff.ps1 master-apply (applies the captured recommendation's local AI_HANDOFF.md transition, explicit yes). PowerShell loop -IncludeMaster may run this pair in-session.";
+            SafetyLimits = "Explicit yes per command, or explicit loop -IncludeMaster for one authorized loop session; NEEDS_ANALYSIS only; the actual Master must match the bound Master; $toolLimits; captured TASK must match Current Task; recommendation/waiting-for pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by default and never by cycle; no git add/commit/push/tag/deploy/db/secrets.";
             StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before master-run and master-apply; loop session authorization when -IncludeMaster is used";
-            Reason = "master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end, read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeMaster; cycle never does.";
+            Reason = "master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end for $($adapterIdentity.Display), read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeMaster; cycle never does.";
             NextStep = "Run master-run to capture a recommendation, then master-apply to route the task to Implementer or User."
         }
     }
 
-    # Reviewer/Codex (since v1.3.0): callable for READY_FOR_REVIEW via the explicit two-step
-    # review-run (read-only capture) + review-apply (apply the captured verdict's local
-    # AI_HANDOFF.md transition). AutoLoopEligible is FALSE on purpose: "callable" here means
-    # "has a verified end-to-end command path", NOT "may be auto-run inside loop/cycle".
-    # Reviewer turns are not loop-eligible by default. Since v1.4.0, only
-    # `loop -IncludeReviewer` may opt this exact turn into a single loop session; cycle never does.
-    if ($Role -eq "Reviewer" -and (Test-SameToolIdentity -First $Tool -Second "Codex")) {
+    # Reviewer (Codex since v1.3.0, Claude Code since v3.5.0): callable for
+    # READY_FOR_REVIEW via the explicit two-step review-run (read-only capture) +
+    # review-apply (apply the captured verdict's local AI_HANDOFF.md transition).
+    # AutoLoopEligible is FALSE on purpose: "callable" here means "has a verified
+    # end-to-end command path", NOT "may be auto-run inside loop/cycle". Reviewer turns
+    # are not loop-eligible by default. Since v1.4.0, only loop -IncludeReviewer may opt
+    # this exact turn into a single loop session; cycle never does.
+    if ($Role -eq "Reviewer" -and ($isCodex -or $isClaude)) {
+        if ($isCodex) {
+            $runShape = "read-only Codex review"
+            $toolLimits = "Codex runs --sandbox read-only; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox; no danger-full-access"
+        } else {
+            $runShape = "read-only Claude Code review"
+            $toolLimits = "Claude Code runs with source edits refused in both the prompt and the system prompt, and a post-turn source-change check that fails the turn if any non-handoff file moved; --safe-mode; Bash disallowed"
+        }
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
-            Invocation = "Capture: handoff.ps1 review-run (read-only Codex review, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
-            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only, no --ask-for-approval / --dangerously-bypass / danger-full-access; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
+            Invocation = "Capture: handoff.ps1 review-run ($runShape, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
+            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; the actual Reviewer must match the bound Reviewer and must not equal the actual Implementer; Changed Files == git status; $toolLimits; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
             StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; commit/release stay separate User authorizations";
-            Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end, read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeReviewer; cycle never does.";
+            Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end for $($adapterIdentity.Display), read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeReviewer; cycle never does.";
             NextStep = "Run review-run to capture a verdict, then review-apply to set REVIEW_DONE (approved) or READY_FOR_IMPLEMENTATION (blocked)."
         }
     }
@@ -1263,7 +1777,7 @@ function Get-AdapterProfile {
     # as a manual window handoff. Before v3.4.1 an unresolvable tool reached here
     # too and read as a broken configuration; now an unrecognized identity is named
     # as such so the user fixes the binding instead of hunting for a missing adapter.
-    $identity = Resolve-ToolIdentity -Tool $Tool
+    $identity = $adapterIdentity
     if (-not $identity.Ok) {
         $reason = "Unrecognized tool '$Tool' bound to the $Role role. $($identity.Reason)"
         $nextStep = "Correct the $Role entry in .ai/roles/ROLE_ASSIGNMENT.md to a known tool identity."
@@ -1332,6 +1846,27 @@ function Invoke-Adapters {
         Write-Host "Enable next: $($adapter.NextStep)"
         Write-Host ""
     }
+    # --- v3.5.0: the full matrix, not just today's binding ---
+    #
+    # The rows above describe the roles as they are bound right now. That answers
+    # "what can I do", but not "what could I do if I swapped the roles" - which is
+    # exactly the question the binding exists to let you ask. Printing every
+    # combination makes the symmetry checkable instead of promised.
+    Write-Host "Role/tool matrix (every combination, independent of today's binding)"
+    Write-Host "Permission is a property of the ROLE. The tool holding it does not change it."
+    Write-Host ""
+    Write-Host ("  {0,-12} {1,-12} {2,-9} {3,-11} {4}" -f "Role", "Tool", "Callable", "Permission", "Automated states")
+    foreach ($matrixRole in @("Master", "Implementer", "Reviewer")) {
+        foreach ($matrixTool in @("Codex", "Claude Code")) {
+            $matrixAdapter = Get-AdapterProfile -Role $matrixRole -Tool $matrixTool
+            $matrixCallable = if ($matrixAdapter.Callable) { "yes" } else { "no" }
+            $matrixStates = if ($matrixAdapter.SupportedStates.Count -gt 0) { $matrixAdapter.SupportedStates -join ", " } else { "none" }
+            Write-Host ("  {0,-12} {1,-12} {2,-9} {3,-11} {4}" -f $matrixRole, $matrixTool, $matrixCallable, (Get-RolePermission -Role $matrixRole), $matrixStates)
+        }
+    }
+    Write-Host ""
+    Write-Host "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    Write-Host ""
     Write-Host "Capability:  Approved commit executor"
     Write-Host "Callable:    yes (PowerShell only)"
     Write-Host "States:      REVIEW_DONE with Waiting For: User"
@@ -3451,16 +3986,19 @@ function Get-ReviewPlan {
     # name), so match it exactly rather than also accepting the bound tool name.
     if ($State -ne "READY_FOR_REVIEW" -or $WaitingFor -ne "Reviewer") {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md must be State: READY_FOR_REVIEW and Waiting For: Reviewer for the Codex Reviewer POC.")
+        $errors.Add("AI_HANDOFF.md must be State: READY_FOR_REVIEW and Waiting For: Reviewer to run a Reviewer turn.")
     }
-    # v3.4.1: resolve identity before the capability lookup. Only Codex has a
-    # verified callable Reviewer adapter, so review-run remains Codex-only - but
-    # the reason must be the missing ADAPTER, not the role assignment. Reassigning
-    # the Reviewer is a legitimate protocol operation; it simply routes to a manual
-    # window turn until that tool has a verified adapter.
-    if (-not (Test-SameToolIdentity -First $boundReviewer -Second "Codex")) {
+    # v3.4.1: resolve identity before the capability lookup, and read the capability
+    # from the ADAPTER rather than from a hardcoded vendor name. Until v3.5.0 this asked
+    # "is the reviewer Codex", which was the same question only because Codex was the
+    # only tool with a Reviewer adapter. It is no longer the same question: asking it the
+    # old way would refuse a Claude Code Reviewer that is in fact fully callable.
+    # A tool with no adapter is still a CAPABILITY limit, not a protocol objection -
+    # reassigning the Reviewer stays legitimate and simply routes to a manual turn.
+    $reviewerAdapter = Get-AdapterProfile -Role "Reviewer" -Tool $boundReviewer
+    if (-not $reviewerAdapter.Callable) {
         $ok = $false
-        $errors.Add("No callable Reviewer adapter for '$boundReviewer'. review-run automation currently supports Codex only. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Reviewer turn manually in $boundReviewer.")
+        $errors.Add("No callable Reviewer adapter for '$boundReviewer'. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Reviewer turn manually in $boundReviewer.")
     }
     if ($taskActors.ImplementerCount -ne 1) {
         $ok = $false
@@ -3470,9 +4008,17 @@ function Get-ReviewPlan {
         $ok = $false
         $errors.Add("AI_HANDOFF.md must include exactly one Task Actors Reviewer.")
     }
-    if ($taskActors.Reviewer -ne "" -and -not (Test-SameToolIdentity -First $taskActors.Reviewer -Second "Codex")) {
+    if ($taskActors.Reviewer -ne "" -and -not (Get-AdapterProfile -Role "Reviewer" -Tool $taskActors.Reviewer).Callable) {
         $ok = $false
-        $errors.Add("No callable Reviewer adapter for the actual task Reviewer '$($taskActors.Reviewer)'. review-run automation currently supports Codex only; complete this turn manually with 'handoff.ps1 next'.")
+        $errors.Add("No callable Reviewer adapter for the actual task Reviewer '$($taskActors.Reviewer)'; complete this turn manually with 'handoff.ps1 next'.")
+    }
+    # v3.5.0: the bound Reviewer and the Reviewer the task actually records must be the
+    # same tool. That was implied while both had to be Codex; once either tool can hold
+    # the role, it has to be checked, or a swap mid-task would run one tool under the
+    # other tool's authority.
+    if ($taskActors.Reviewer -ne "" -and -not (Test-SameToolIdentity -First $taskActors.Reviewer -Second $boundReviewer)) {
+        $ok = $false
+        $errors.Add("The actual task Reviewer '$($taskActors.Reviewer)' is not the bound Reviewer '$boundReviewer'. Re-open the task with 'handoff.ps1 start' after changing the binding; never run a turn under another tool's authority.")
     }
     # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
     # are the same tool and must not pass this gate as two different reviewers.
@@ -3520,10 +4066,18 @@ function Get-ReviewPlan {
         $errors.Add("AI_HANDOFF.md Changed Files does not match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
     }
 
-    $cli = if ($RequireCli) {
-        Resolve-CodexCli
-    } else {
+    # v3.5.0: resolve the runner the BOUND REVIEWER needs, not the Codex CLI by reflex.
+    # A Claude Code Reviewer needs npx and the Claude Code package; a Codex Reviewer needs
+    # the Codex CLI. Probing for the wrong one would block a perfectly runnable turn.
+    $reviewerIsCodex = (Test-SameToolIdentity -First $boundReviewer -Second "Codex")
+    $cli = if (-not $RequireCli) {
         @{ Ok = $true; Path = ""; Source = "not required for review-apply"; Error = "" }
+    } elseif ($reviewerIsCodex) {
+        Resolve-CodexCli
+    } elseif (Test-ClaudeAvailable) {
+        @{ Ok = $true; Path = "npx @anthropic-ai/claude-code"; Source = "npx (Claude Code)"; Error = "" }
+    } else {
+        @{ Ok = $false; Path = ""; Source = ""; Error = "Claude Code is not runnable here: 'npx --yes @anthropic-ai/claude-code --version' did not succeed. Install Node.js and npx, or bind the Reviewer to a tool that is available." }
     }
 
     return @{
@@ -3535,6 +4089,7 @@ function Get-ReviewPlan {
         TaskActors = $taskActors
         BoundReviewer = $boundReviewer
         BoundImplementer = $boundImplementer
+        ReviewerIsCodex = $reviewerIsCodex
         Cli = $cli
     }
 }
@@ -3543,7 +4098,7 @@ function Show-ReviewPlan {
     param([hashtable]$Plan)
     $repoRoot = (Get-Location).Path
     Write-Host ""
-    Write-Host "Codex Reviewer POC plan (read-only; capture only)"
+    Write-Host "$($Plan.BoundReviewer) Reviewer plan (read-only; capture only)"
     Write-Host "State:               $State"
     Write-Host "Waiting For:         $WaitingFor"
     Write-Host "Current Task:        $CurrentTask"
@@ -3555,7 +4110,7 @@ function Show-ReviewPlan {
     Write-Host "Files to review (from AI_HANDOFF.md Changed Files; local coordination files excluded):"
     if ($Plan.ReviewFiles.Count -eq 0) { Write-Host "  (none)" } else { foreach ($f in $Plan.ReviewFiles) { Write-Host "  $f" } }
     Write-Host ""
-    Write-Host "Codex CLI resolution:"
+    Write-Host "$($Plan.BoundReviewer) runner resolution:"
     if ($Plan.Cli.Ok) {
         Write-Host "  Resolved: $($Plan.Cli.Path)"
         Write-Host "  Source:   $($Plan.Cli.Source)"
@@ -3564,12 +4119,21 @@ function Show-ReviewPlan {
     }
     Write-Host ""
     Write-Host "Read-only invocation shape (review-run, after explicit confirmation):"
-    Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (review prompt via stdin)"
+    if ($Plan.ReviewerIsCodex) {
+        Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (review prompt via stdin)"
+    } else {
+        Write-Host "  npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<review prompt>`" --output-format text   (final message captured to $ReviewLastName)"
+    }
     Write-Host "Captured artifacts (local, gitignored, never committed):"
-    Write-Host "  $ReviewJsonlName  (JSONL events)"
-    Write-Host "  $ReviewLastName  (Codex final message)"
+    Write-Host "  $ReviewJsonlName  (event log)"
+    Write-Host "  $ReviewLastName  (Reviewer final message)"
     Write-Host ""
-    Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    if ($Plan.ReviewerIsCodex) {
+        Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    } else {
+        Write-Host "Safety: file-writing tools disabled (Bash, Edit, Write, NotebookEdit) and the working tree is"
+        Write-Host "        compared after the turn - any change fails the review and discards the capture;"
+    }
     Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change (capture only)."
     Write-Host ""
 }
@@ -3689,15 +4253,20 @@ function Invoke-ReviewRun {
         Write-Host ""
         exit 3
     }
-    $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
-    if (-not $execHelp.Ok) {
-        Write-Host "review-run: blocked."
-        Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
-        Write-Host "Resolved: $($plan.Cli.Path)"
-        Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Write-Host "No Codex review invocation was run."
-        Write-Host ""
-        exit 3
+    # v3.5.0: this preflight verifies the CODEX exec path specifically, so it runs only
+    # when Codex is the tool holding the Reviewer role. A Claude Code Reviewer was already
+    # probed by Test-ClaudeAvailable during planning.
+    if ($plan.ReviewerIsCodex) {
+        $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
+        if (-not $execHelp.Ok) {
+            Write-Host "review-run: blocked."
+            Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
+            Write-Host "Resolved: $($plan.Cli.Path)"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
+            Write-Host "No Codex review invocation was run."
+            Write-Host ""
+            exit 3
+        }
     }
 
     $repoRoot = (Get-Location).Path
@@ -3761,7 +4330,7 @@ function Invoke-ReviewRun {
             "Never modify any file or mutate the working tree or git index. " +
             "End your reply with a verdict block of EXACTLY four lines, each on its own line, nothing after them, and no surrounding punctuation. " +
             "Line 1 must be exactly 'VERDICT: APPROVED' or exactly 'VERDICT: BLOCKED' (uppercase). " +
-            "Line 2 must be exactly 'REVIEWER: Codex'. " +
+            "Line 2 must be exactly 'REVIEWER: $($plan.BoundReviewer)'. " +
             "Line 3 must be 'TASK: ' followed by the Current Task value copied verbatim from the Status section of AI_HANDOFF.md. " +
             "Line 4 must be 'REASON: ' followed by a single concise one-line reason. " +
             "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
@@ -3784,66 +4353,114 @@ function Invoke-ReviewRun {
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
         "Finish quickly. End your reply with a verdict block of EXACTLY four lines, each on its own line, nothing after them, and no surrounding punctuation. " +
         "Line 1 must be exactly 'VERDICT: APPROVED' or exactly 'VERDICT: BLOCKED' (uppercase). " +
-        "Line 2 must be exactly 'REVIEWER: Codex'. " +
+        "Line 2 must be exactly 'REVIEWER: $($plan.BoundReviewer)'. " +
         "Line 3 must be 'TASK: ' followed by the Current Task value copied verbatim from the Status section of AI_HANDOFF.md. " +
         "Line 4 must be 'REASON: ' followed by a single concise one-line reason. " +
         "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
     }
 
+    # --- v3.5.0: run whichever tool holds the Reviewer role ---
+    #
+    # Both branches must leave the same three things behind, because everything after
+    # this point - the timeout report, the no-verdict report, the capture validation and
+    # review-apply itself - is shared and must not learn which vendor ran:
+    #   $lastPath   the final message, or absent if there is no complete verdict
+    #   $timedOut   whether the turn was killed on the timeout
+    #   $codexExit  the process exit code (-1 if it never produced one)
+    # Read-only is not a promise either branch makes about itself: Codex is confined by
+    # --sandbox read-only, Claude Code by disallowed write tools plus a working-tree
+    # comparison after the turn. Both are checked, neither is trusted.
+    $timedOut = $false
+    $codexExit = -1
+    $stderrText = ""
+
     Write-Host ""
-    Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
-    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (prompt via stdin)"
+    if ($plan.ReviewerIsCodex) {
+        Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
+        Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (prompt via stdin)"
+    } else {
+        Write-Host "Running $($plan.BoundReviewer) read-only review (timeout: ${TimeoutSeconds}s)..."
+        Write-Host "Invocation: bounded runner -> npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<review prompt>`" --output-format text   (final message captured to $ReviewLastName)"
+    }
     Write-Host ""
 
     # Clear any stale capture artifacts so old/partial output is never mistaken for this run.
     Remove-Item $jsonlPath, $lastPath -Force -ErrorAction SilentlyContinue
 
-    # Run Codex as a tracked child process with a hard timeout. The prompt is written to a
-    # temp file and fed to StandardInput (codex exec -), so a multi-word prompt is never
-    # split into argv tokens. Capture stdout/stderr to temp files so partial output and
-    # diagnostics survive a kill. Start-Process -PassThru gives the real PID so a hung
-    # Codex (and its children) can be terminated - a bare job cannot.
-    $tmpOut = [System.IO.Path]::GetTempFileName()
-    $tmpErr = [System.IO.Path]::GetTempFileName()
-    $promptFile = [System.IO.Path]::GetTempFileName()
-    Set-Content -Path $promptFile -Value $reviewPrompt -Encoding utf8 -ErrorAction SilentlyContinue
-    $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
-    $timedOut = $false
-    $codexExit = -1
-    try {
-        $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
-            -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
-    } catch {
-        Write-Host "review-run: blocked."
-        Write-Host "Reason: Failed to start the Codex CLI: $_"
-        Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+    if ($plan.ReviewerIsCodex) {
+        # Run Codex as a tracked child process with a hard timeout. The prompt is written to a
+        # temp file and fed to StandardInput (codex exec -), so a multi-word prompt is never
+        # split into argv tokens. Capture stdout/stderr to temp files so partial output and
+        # diagnostics survive a kill. Start-Process -PassThru gives the real PID so a hung
+        # Codex (and its children) can be terminated - a bare job cannot.
+        $tmpOut = [System.IO.Path]::GetTempFileName()
+        $tmpErr = [System.IO.Path]::GetTempFileName()
+        $promptFile = [System.IO.Path]::GetTempFileName()
+        Set-Content -Path $promptFile -Value $reviewPrompt -Encoding utf8 -ErrorAction SilentlyContinue
+        $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+        try {
+            $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
+                -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        } catch {
+            Write-Host "review-run: blocked."
+            Write-Host "Reason: Failed to start the Codex CLI: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
+            Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+            Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+            exit 3
+        }
+        # Cache the process handle now so $proc.ExitCode is reliably available after exit. A
+        # Start-Process -PassThru object that never had its handle accessed returns a null
+        # ExitCode, which would make a successful run look like a non-zero failure.
+        try { $null = $proc.Handle } catch { }
+
+        if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+            $codexExit = $proc.ExitCode
+        } else {
+            $timedOut = $true
+            # Terminate the whole Codex process tree; a child can outlive a bare Kill().
+            Stop-ProcessTree -ProcessId $proc.Id
+            try { $proc.WaitForExit(5000) | Out-Null } catch { }
+        }
+
+        # Preserve partial stdout (JSONL) and capture stderr for diagnostics, regardless of outcome.
+        $partial = ""
+        if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+        if (-not [string]::IsNullOrEmpty($partial)) {
+            Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
         Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
-        exit 3
-    }
-    # Cache the process handle now so $proc.ExitCode is reliably available after exit. A
-    # Start-Process -PassThru object that never had its handle accessed returns a null
-    # ExitCode, which would make a successful run look like a non-zero failure.
-    try { $null = $proc.Handle } catch { }
-
-    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
-        $codexExit = $proc.ExitCode
     } else {
-        $timedOut = $true
-        # Terminate the whole Codex process tree; a child can outlive a bare Kill().
-        Stop-ProcessTree -ProcessId $proc.Id
-        try { $proc.WaitForExit(5000) | Out-Null } catch { }
-    }
+        # Claude Code holds the Reviewer role. Invoke-ClaudeReadOnlyCapture writes the final
+        # message to $lastPath itself, which is the contract codex exec satisfies with
+        # --output-last-message, so the shared validation below is unchanged.
+        $claudeReview = Invoke-ClaudeReadOnlyCapture -TurnRole "Reviewer" -Prompt $reviewPrompt `
+            -LastPath $lastPath -JsonlPath $jsonlPath -TurnTimeoutSeconds $TimeoutSeconds -TurnBudgetUsd $BudgetUsd
+        $timedOut = $claudeReview.TimedOut
+        $codexExit = $claudeReview.ExitCode
 
-    # Preserve partial stdout (JSONL) and capture stderr for diagnostics, regardless of outcome.
-    $partial = ""
-    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
-    if (-not [string]::IsNullOrEmpty($partial)) {
-        Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+        # A read-only turn that edited the repository is a protocol violation, not a
+        # review. Fail closed and delete any capture it produced: a verdict from a
+        # reviewer that touched the work is worth less than no verdict at all.
+        if ($claudeReview.SourceChanged) {
+            if (Test-Path $lastPath) { Remove-Item $lastPath -Force -ErrorAction SilentlyContinue }
+            Write-Host ""
+            Write-Host "review-run: blocked - the read-only Reviewer turn modified the working tree."
+            Write-Host "Reason: $($claudeReview.Error)"
+            Write-Host "Stop category: Protocol Repair - a Reviewer must never edit what it reviews."
+            Write-Host "Any captured verdict from this run was discarded. No git changes were made and AI_HANDOFF.md was not modified."
+            Write-Host ""
+            exit 5
+        }
+        if (-not $claudeReview.Ok -and -not $timedOut -and $codexExit -eq 0) {
+            # Exited cleanly but produced nothing usable; report it as the no-verdict case
+            # the shared path already handles rather than inventing a second failure mode.
+            $stderrText = $claudeReview.Error
+        } elseif (-not [string]::IsNullOrWhiteSpace($claudeReview.Error)) {
+            $stderrText = $claudeReview.Error
+        }
     }
-    $stderrText = ""
-    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
-    Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
 
     Write-Host ""
     if ($timedOut) {
@@ -4015,7 +4632,10 @@ function Set-HandoffSectionBody {
 # needed) plus parse the captured verdict against the current task.
 function Get-ReviewApplyPlan {
     $base = Get-ReviewPlan -RequireCli:$false
-    $verdict = Get-VerdictFromCapture -Path (Join-Path (Get-Location) $ReviewLastName) -ExpectedTask $CurrentTask
+    # v3.5.0: read the role-named capture, falling back to the legacy vendor-named file
+    # so an install carrying a verdict written by an earlier version still applies.
+    $verdictPath = Resolve-CapturePath -RepoRoot (Get-Location).Path -Preferred $ReviewLastName -Legacy $LegacyReviewLastName
+    $verdict = Get-VerdictFromCapture -Path $verdictPath -ExpectedTask $CurrentTask
     return @{ Base = $base; Verdict = $verdict }
 }
 
@@ -4182,22 +4802,34 @@ function Get-MasterPlan {
     # Eligibility is the role name (Master), matched exactly rather than the bound tool name.
     if ($State -ne "NEEDS_ANALYSIS" -or $WaitingFor -ne "Master") {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master for the Codex Master capture POC.")
+        $errors.Add("AI_HANDOFF.md must be State: NEEDS_ANALYSIS and Waiting For: Master to run a Master turn.")
     }
-    # v3.4.1: identity first, capability second. Reassigning Master is a valid
-    # protocol operation; only the callable adapter is Codex-specific.
-    if (-not (Test-SameToolIdentity -First $boundMaster -Second "Codex")) {
+    # v3.4.1: identity first, capability second. Reassigning Master is a valid protocol
+    # operation. v3.5.0: read the capability from the ADAPTER instead of asking whether
+    # the tool is Codex - both tools have a Master adapter now, and the old question
+    # would refuse a Claude Code Master that is fully callable.
+    $masterAdapter = Get-AdapterProfile -Role "Master" -Tool $boundMaster
+    if (-not $masterAdapter.Callable) {
         $ok = $false
-        $errors.Add("No callable Master adapter for '$boundMaster'. master-run automation currently supports Codex only. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Master turn manually in $boundMaster.")
+        $errors.Add("No callable Master adapter for '$boundMaster'. The role assignment itself is valid - run 'handoff.ps1 next' and complete this Master turn manually in $boundMaster.")
     }
 
-    $cli = Resolve-CodexCli
+    # v3.5.0: resolve the runner the bound Master actually needs.
+    $masterIsCodex = (Test-SameToolIdentity -First $boundMaster -Second "Codex")
+    $cli = if ($masterIsCodex) {
+        Resolve-CodexCli
+    } elseif (Test-ClaudeAvailable) {
+        @{ Ok = $true; Path = "npx @anthropic-ai/claude-code"; Source = "npx (Claude Code)"; Error = "" }
+    } else {
+        @{ Ok = $false; Path = ""; Source = ""; Error = "Claude Code is not runnable here: 'npx --yes @anthropic-ai/claude-code --version' did not succeed. Install Node.js and npx, or bind the Master to a tool that is available." }
+    }
 
     return @{
         Ok = $ok
         Errors = $errors
         BoundMaster = $boundMaster
         TaskActors = $taskActors
+        MasterIsCodex = $masterIsCodex
         Cli = $cli
     }
 }
@@ -4206,7 +4838,7 @@ function Show-MasterPlan {
     param([hashtable]$Plan)
     $repoRoot = (Get-Location).Path
     Write-Host ""
-    Write-Host "Codex Master analysis plan (read-only capture; apply via master-apply)"
+    Write-Host "$($Plan.BoundMaster) Master analysis plan (read-only capture; apply via master-apply)"
     Write-Host "State:               $State"
     Write-Host "Waiting For:         $WaitingFor"
     Write-Host "Current Task:        $CurrentTask"
@@ -4214,7 +4846,7 @@ function Show-MasterPlan {
     Write-Host "Actual Implementer:  $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { 'TBD (Master may recommend)' })"
     Write-Host "Actual Reviewer:     $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { 'TBD (Master may recommend)' })"
     Write-Host ""
-    Write-Host "Codex CLI resolution:"
+    Write-Host "$($Plan.BoundMaster) runner resolution:"
     if ($Plan.Cli.Ok) {
         Write-Host "  Resolved: $($Plan.Cli.Path)"
         Write-Host "  Source:   $($Plan.Cli.Source)"
@@ -4223,12 +4855,21 @@ function Show-MasterPlan {
     }
     Write-Host ""
     Write-Host "Read-only invocation shape (master-run, after explicit confirmation):"
-    Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (master prompt via stdin)"
+    if ($Plan.MasterIsCodex) {
+        Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (master prompt via stdin)"
+    } else {
+        Write-Host "  npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<master prompt>`" --output-format text   (final message captured to $MasterLastName)"
+    }
     Write-Host "Captured artifacts (local, gitignored, never committed):"
-    Write-Host "  $MasterJsonlName  (JSONL events)"
-    Write-Host "  $MasterLastName  (Codex final message)"
+    Write-Host "  $MasterJsonlName  (event log)"
+    Write-Host "  $MasterLastName  (Master final message)"
     Write-Host ""
-    Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    if ($Plan.MasterIsCodex) {
+        Write-Host "Safety: read-only sandbox; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox;"
+    } else {
+        Write-Host "Safety: file-writing tools disabled (Bash, Edit, Write, NotebookEdit) and the working tree is"
+        Write-Host "        compared after the turn - any change fails the turn and discards the capture;"
+    }
     Write-Host "        no git add/commit/push/tag; no deploy/db/secrets; no AI_HANDOFF.md state change during capture."
     Write-Host "Apply step: handoff.ps1 master-apply consumes $MasterLastName and edits only local AI_HANDOFF.md."
     Write-Host ""
@@ -4286,15 +4927,18 @@ function Invoke-MasterRun {
         Write-Host ""
         exit 3
     }
-    $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
-    if (-not $execHelp.Ok) {
-        Write-Host "master-run: blocked."
-        Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
-        Write-Host "Resolved: $($plan.Cli.Path)"
-        Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Write-Host "No Codex Master invocation was run."
-        Write-Host ""
-        exit 3
+    # v3.5.0: the Codex exec probe applies only when Codex holds the Master role.
+    if ($plan.MasterIsCodex) {
+        $execHelp = Test-CodexExecHelp -CodexPath $plan.Cli.Path
+        if (-not $execHelp.Ok) {
+            Write-Host "master-run: blocked."
+            Write-Host "Reason: The resolved Codex CLI did not accept 'exec --help'; cannot verify the read-only exec path. $($execHelp.Error)"
+            Write-Host "Resolved: $($plan.Cli.Path)"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
+            Write-Host "No Codex Master invocation was run."
+            Write-Host ""
+            exit 3
+        }
     }
 
     $repoRoot = (Get-Location).Path
@@ -4337,51 +4981,83 @@ function Invoke-MasterRun {
 
     Write-Host ""
     Write-Host "Running Codex read-only Master analysis (timeout: ${TimeoutSeconds}s)..."
-    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (prompt via stdin)"
+    if ($plan.MasterIsCodex) {
+        Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (prompt via stdin)"
+    } else {
+        Write-Host "Invocation: bounded runner -> npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<master prompt>`" --output-format text   (final message captured to $MasterLastName)"
+    }
     Write-Host ""
+
+    # --- v3.5.0: run whichever tool holds the Master role ---
+    #
+    # Same contract as review-run: both branches leave $lastPath, $timedOut and
+    # $codexExit behind, and everything after this point is shared and vendor-blind.
+    $timedOut = $false
+    $codexExit = -1
+    $stderrText = ""
 
     # Clear any stale capture artifacts so old/partial output is never mistaken for this run.
     Remove-Item $jsonlPath, $lastPath -Force -ErrorAction SilentlyContinue
 
-    # Run Codex as a tracked child process with a hard timeout (same pattern as review-run):
-    # prompt on stdin, stdout/stderr to temp files, real PID for a process-tree kill.
-    $tmpOut = [System.IO.Path]::GetTempFileName()
-    $tmpErr = [System.IO.Path]::GetTempFileName()
-    $promptFile = [System.IO.Path]::GetTempFileName()
-    Set-Content -Path $promptFile -Value $masterPrompt -Encoding utf8 -ErrorAction SilentlyContinue
-    $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
-    $timedOut = $false
-    $codexExit = -1
-    try {
-        $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
-            -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
-    } catch {
-        Write-Host "master-run: blocked."
-        Write-Host "Reason: Failed to start the Codex CLI: $_"
-        Write-Host "Stop category: Environment/Preflight - not a user decision."
-        Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+    if ($plan.MasterIsCodex) {
+        # Run Codex as a tracked child process with a hard timeout (same pattern as review-run):
+        # prompt on stdin, stdout/stderr to temp files, real PID for a process-tree kill.
+        $tmpOut = [System.IO.Path]::GetTempFileName()
+        $tmpErr = [System.IO.Path]::GetTempFileName()
+        $promptFile = [System.IO.Path]::GetTempFileName()
+        Set-Content -Path $promptFile -Value $masterPrompt -Encoding utf8 -ErrorAction SilentlyContinue
+        $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+        try {
+            $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
+                -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        } catch {
+            Write-Host "master-run: blocked."
+            Write-Host "Reason: Failed to start the Codex CLI: $_"
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
+            Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+            Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
+            exit 3
+        }
+        # Cache the handle so $proc.ExitCode is reliable after exit (a never-touched handle reads null).
+        try { $null = $proc.Handle } catch { }
+
+        if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+            $codexExit = $proc.ExitCode
+        } else {
+            $timedOut = $true
+            Stop-ProcessTree -ProcessId $proc.Id
+            try { $proc.WaitForExit(5000) | Out-Null } catch { }
+        }
+
+        $partial = ""
+        if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+        if (-not [string]::IsNullOrEmpty($partial)) {
+            Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
         Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
-        exit 3
-    }
-    # Cache the handle so $proc.ExitCode is reliable after exit (a never-touched handle reads null).
-    try { $null = $proc.Handle } catch { }
-
-    if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
-        $codexExit = $proc.ExitCode
     } else {
-        $timedOut = $true
-        Stop-ProcessTree -ProcessId $proc.Id
-        try { $proc.WaitForExit(5000) | Out-Null } catch { }
-    }
+        # Claude Code holds the Master role. The Master routes work; it must not perform
+        # it, so it runs under the same read-only enforcement as the Reviewer.
+        $claudeMaster = Invoke-ClaudeReadOnlyCapture -TurnRole "Master" -Prompt $masterPrompt `
+            -LastPath $lastPath -JsonlPath $jsonlPath -TurnTimeoutSeconds $TimeoutSeconds -TurnBudgetUsd $BudgetUsd
+        $timedOut = $claudeMaster.TimedOut
+        $codexExit = $claudeMaster.ExitCode
 
-    $partial = ""
-    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
-    if (-not [string]::IsNullOrEmpty($partial)) {
-        Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
+        if ($claudeMaster.SourceChanged) {
+            if (Test-Path $lastPath) { Remove-Item $lastPath -Force -ErrorAction SilentlyContinue }
+            Write-Host ""
+            Write-Host "master-run: blocked - the read-only Master turn modified the working tree."
+            Write-Host "Reason: $($claudeMaster.Error)"
+            Write-Host "Stop category: Protocol Repair - a Master routes work and must never perform it."
+            Write-Host "Any captured recommendation from this run was discarded. No git changes were made and AI_HANDOFF.md was not modified."
+            Write-Host ""
+            exit 5
+        }
+        if (-not [string]::IsNullOrWhiteSpace($claudeMaster.Error)) {
+            $stderrText = $claudeMaster.Error
+        }
     }
-    $stderrText = ""
-    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
-    Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
 
     Write-Host ""
     if ($timedOut) {
@@ -4590,7 +5266,9 @@ function Get-MasterApplyPlan {
         $ok = $false
         $errors.Add("No callable Master adapter for '$boundMaster'. master-apply only applies recommendations captured by the Codex Master adapter.")
     }
-    $recommendation = Get-MasterRecommendationFromCapture -Path (Join-Path (Get-Location) $MasterLastName) -ExpectedTask $CurrentTask
+    # v3.5.0: role-named capture first, legacy vendor-named file as the fallback.
+    $recommendationPath = Resolve-CapturePath -RepoRoot (Get-Location).Path -Preferred $MasterLastName -Legacy $LegacyMasterLastName
+    $recommendation = Get-MasterRecommendationFromCapture -Path $recommendationPath -ExpectedTask $CurrentTask
     if ($recommendation.Ok -and $recommendation.Recommendation -ne "BLOCKED") {
         # v3.4.1: compare captures to the binding canonically. A capture naming
         # 'Codex Window' against a binding of 'Codex' is the same tool and must not
@@ -5133,11 +5811,11 @@ function Invoke-Cycle {
     }
 
     Write-Host ""
-    Write-Host "Running Claude Code assisted turn..."
+    Write-Host "Running $implementerTool assisted turn..."
     Write-Host ""
 
     $preTurnState = $State
-    $claudeExit = Invoke-ClaudeTurn
+    $claudeExit = Invoke-ImplementerTurn
     $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preTurnState
     if (-not $investigationBoundary.Ok) {
         Write-InvestigationSourceBoundaryFailure -CommandLabel $CommandLabel -Boundary $investigationBoundary
@@ -5462,9 +6140,13 @@ function Invoke-Loop {
         # master-apply sequence in-session. master-run is read-only capture; master-apply
         # edits only AI_HANDOFF.md and runs no git. Both fail closed through their existing
         # guards, including stale TASK, role-binding mismatch, invalid actors, and bad state.
+        # v3.5.0: gate on the ADAPTER being callable, not on the tool being Codex.
+        # master-run/master-apply now complete this turn for either tool, and both run it
+        # read-only, so restricting the opt-in to one vendor would withhold the automation
+        # from a turn that is equally bounded.
         if (-not $loopEligible -and $IncludeMaster -and
             ($script:State -eq "NEEDS_ANALYSIS") -and ($role -eq "Master") -and
-            (Test-SameToolIdentity -First $tool -Second "Codex")) {
+            (Get-AdapterProfile -Role "Master" -Tool $tool).Callable) {
 
             # A Master turn counts against MaxTurns like any other automated protocol turn.
             if ($turnsRun -ge $MaxTurns) {
@@ -5507,9 +6189,11 @@ function Invoke-Loop {
         # Files == git status; strict captured-verdict schema) and fail closed (they exit the
         # process), so a malformed/stale/missing verdict or any guard violation stops the loop
         # with no handoff transition. They edit only AI_HANDOFF.md and run no git.
+        # v3.5.0: same change as the Master gate above - the opt-in follows the adapter,
+        # not the vendor. Every guard review-run and review-apply enforce is unchanged.
         if (-not $loopEligible -and $IncludeReviewer -and
             ($script:State -eq "READY_FOR_REVIEW") -and ($role -eq "Reviewer") -and
-            (Test-SameToolIdentity -First $tool -Second "Codex")) {
+            (Get-AdapterProfile -Role "Reviewer" -Tool $tool).Callable) {
 
             # A Reviewer turn counts against MaxTurns like any other automated turn.
             if ($turnsRun -ge $MaxTurns) {
@@ -5650,10 +6334,21 @@ function Invoke-Loop {
             exit 1
         }
 
-        # Preflight: Claude Code availability
-        if (-not (Test-ClaudeAvailable)) {
+        # Preflight: the tool that holds the Implementer role must be runnable.
+        # v3.5.0: probe the BOUND tool, not Claude Code by reflex. Probing the wrong one
+        # would stop a loop whose Implementer is perfectly available.
+        $loopImplementerTool = Resolve-Actor -Role "Implementer" -Binding $script:Binding
+        if (Test-SameToolIdentity -First $loopImplementerTool -Second "Codex") {
+            $loopCli = Resolve-CodexCli
+            if (-not $loopCli.Ok) {
+                Write-Host "Codex is not available: $($loopCli.Error)"
+                Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+                Write-LoopLog "turn=$turnsRun stop reason=codex-unavailable exit=3"
+                exit 3
+            }
+        } elseif (-not (Test-ClaudeAvailable)) {
             Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
-        Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+            Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
             Write-LoopLog "turn=$turnsRun stop reason=claude-unavailable exit=3"
             exit 3
         }
@@ -5661,13 +6356,13 @@ function Invoke-Loop {
         # Run one automated Implementer turn
         $turnNo = $turnsRun + 1
         Write-Host ""
-        Write-Host "loop: turn $turnNo of $MaxTurns - automated Claude Code Implementer turn (per-turn budget `$$BudgetUsd)..."
-        Write-LoopLog "turn=$turnNo action=automated-claude-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=Claude Code(Implementer) budget=$BudgetUsd"
+        Write-Host "loop: turn $turnNo of $MaxTurns - automated $loopImplementerTool Implementer turn (per-turn budget `$$BudgetUsd)..."
+        Write-LoopLog "turn=$turnNo action=automated-implementer-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=$loopImplementerTool(Implementer) budget=$BudgetUsd"
         $authorized += $BudgetUsd
         $turnsRun    = $turnNo
 
         $preImplementerState = $script:State
-        $claudeExit = Invoke-ClaudeTurn
+        $claudeExit = Invoke-ImplementerTurn
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
 
         $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preImplementerState
