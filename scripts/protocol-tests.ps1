@@ -1277,6 +1277,17 @@ Check "an undeclared non-ASCII-adjacent file still fails closed" (($r.Code -eq 1
 $fx = New-ScopeFixture -Paths @("nested/deeper/$hebDoc.md") -Declared @("nested\deeper\$hebDoc.md")
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("commit-check", "-Message", "backslash spelling")
 Check "a backslash-spelled path is treated as a mismatch, not normalized" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
+# v3.4.3: paths compare case-SENSITIVELY. On a case-sensitive filesystem README.md and
+# readme.md are different files, and this comparison decides what gets committed.
+$fxCase = New-ScopeFixture -Paths @("CaseTarget.md") -Declared @("casetarget.md")
+$r = Invoke-Handoff -WorkDir $fxCase -Arguments @("commit-check", "-Message", "case mismatch")
+Check "a path differing only in letter case is a mismatch" (($r.Code -eq 1) -and ($r.Out -match "does not exactly match git status"))
+Check "the mismatch message names letter case as the cause" ($r.Out -match "differ only in letter case")
+
+$fxCaseOk = New-ScopeFixture -Paths @("CaseTarget.md")
+$r = Invoke-Handoff -WorkDir $fxCaseOk -Arguments @("commit-check", "-Message", "exact case")
+Check "an exactly-matching path still passes" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready"))
+Check "an exact match never claims a case difference" ($r.Out -notmatch "differ only in letter case")
 
 # Paths containing a literal quote or backslash are not creatable on NTFS, so the
 # case is exercised where the filesystem permits it and reported as skipped otherwise.

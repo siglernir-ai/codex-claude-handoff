@@ -2406,11 +2406,34 @@ function Test-SameFileSet {
     # Build sets defensively: an empty collection binds as $null to an [object[]]
     # parameter, and HashSet's (IEnumerable, comparer) constructor throws
     # "Value cannot be null" on a null source. foreach over $null is a no-op.
-    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    # v3.4.3: Ordinal, not OrdinalIgnoreCase. On a case-sensitive filesystem README.md
+    # and readme.md are two different files, and this comparison decides what gets
+    # committed and released. Treating them as one was a correctness hole in the most
+    # important check the protocol has. It never bit on Windows; it would on the Linux
+    # and macOS volumes the Bash entry point exists to support.
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($e in $Expected) { [void]$expectedSet.Add([string]$e) }
-    $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($a in $Actual) { [void]$actualSet.Add([string]$a) }
     return $expectedSet.SetEquals($actualSet)
+}
+
+# When two file sets differ only by letter case, "does not match" printed over two lists
+# that look identical is a message nobody can act on. Detect that case so the caller can
+# name it.
+function Test-FileSetDiffersOnlyByCase {
+    param([object[]]$Expected, [object[]]$Actual)
+    $exactExpected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($e in $Expected) { [void]$exactExpected.Add([string]$e) }
+    $exactActual = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($a in $Actual) { [void]$exactActual.Add([string]$a) }
+    if ($exactExpected.SetEquals($exactActual)) { return $false }
+
+    $looseExpected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($e in $Expected) { [void]$looseExpected.Add([string]$e) }
+    $looseActual = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($a in $Actual) { [void]$looseActual.Add([string]$a) }
+    return $looseExpected.SetEquals($looseActual)
 }
 
 # A dirty tree is expected after a Reviewer BLOCKED verdict: the Implementer must
@@ -2689,7 +2712,7 @@ function Get-ReleasePlan {
         }
     } elseif ($gitState.Ok -and -not (Test-SameFileSet -Expected $releaseFiles -Actual $gitState.Files)) {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./" + $(if (Test-FileSetDiffersOnlyByCase -Expected $releaseFiles -Actual $gitState.Files) { " The two lists differ only in letter case. Paths are compared exactly, because on a case-sensitive filesystem they are different files." } else { "" }))
     }
     $package = $null
     if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
@@ -2761,7 +2784,7 @@ function Get-CommitPlan {
     }
     if ($gitState.Ok -and -not (Test-SameFileSet -Expected $commitFiles -Actual $gitState.Files)) {
         $ok = $false
-        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./")
+        $errors.Add("AI_HANDOFF.md Changed Files does not exactly match git status after excluding local coordination files. Paths must be spelled exactly as Git reports them: repository-relative, forward slashes, no quoting and no leading ./" + $(if (Test-FileSetDiffersOnlyByCase -Expected $commitFiles -Actual $gitState.Files) { " The two lists differ only in letter case. Paths are compared exactly, because on a case-sensitive filesystem they are different files." } else { "" }))
     }
 
     return @{

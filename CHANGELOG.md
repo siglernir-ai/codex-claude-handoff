@@ -3,6 +3,26 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.4.3 - Adoption and Efficiency
+
+- Exact-scope paths now compare case-SENSITIVELY. `Test-SameFileSet` used
+  `OrdinalIgnoreCase`, so on a case-sensitive filesystem two different files compared
+  equal in the check that decides what gets committed and released. When two sets differ
+  only by letter case the mismatch message now says so, because "does not match" printed
+  over two lists that look identical is not actionable.
+- Activating model routing is one guarded command:
+  `handoff.ps1 models -Activate -Standard <model> [-CheapReadonly <model>] ...`. It writes
+  only the profiles named, preserves the rest and the file's `_readme`, and re-reads the
+  result before replacing the live configuration so an unparseable file can never become
+  active. It refuses with no mapping and refuses to edit an unparseable file. The shipped
+  configuration still maps every profile to `inherit`: installing changes no behavior and
+  no vendor model name ships with the protocol.
+- The Bash exact-scope parser is now executed, not just asserted about.
+  `scripts/protocol-tests.sh` builds throwaway repositories and runs `handoff.sh
+  commit-check` against spaced, non-ASCII, nested and renamed paths, checks that an
+  undeclared file still blocks, and checks that a failing `git status` blocks rather than
+  approving a partial set. The PowerShell suite runs the Bash suite when an interpreter is
+  present and reports SKIPPED - never passed - when it is not.
 ## 3.4.2 - First-run Clarity
 
 - Inert model routing is now visible. `models` and `doctor` report INERT when every
