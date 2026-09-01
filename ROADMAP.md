@@ -46,7 +46,7 @@ secrets, and product decisions.
   model evidence.
 - [x] Require explicit approval before a concrete high-reasoning cost escalation.
 
-### v3.5.1 - Bounded Dialogue Automation
+### v3.5.2 - Bounded Dialogue Automation
 
 **Goal:** Turn the existing two-way question states into an optional, observable
 dialogue session without weakening human approval or independent review.

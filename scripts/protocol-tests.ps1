@@ -1067,6 +1067,27 @@ try {
 
 Check "the INERT guidance names the environment route, not only the file" ($handoffSrc -match "HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment")
 
+# v3.5.2: doctor and models must give the SAME activation guidance. v3.5.1 fixed the
+# detector and the models message but left doctor naming the file as the only route -
+# and that file is the one that ships to every installer.
+Check "doctor's INERT guidance also names the environment route" ($handoffSrc -match "Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment")
+Check "doctor's INERT guidance says the environment route touches no tracked file" ($handoffSrc -match "no tracked file is touched")
+Check "doctor no longer claims INERT is a property of MODEL_ROUTING.json alone" ($handoffSrc -notmatch "Model routing is INERT: every profile in MODEL_ROUTING\.json resolves to inherit")
+
+# Presence is not sameness. The v3.5.2 claim is that both commands give the SAME
+# guidance in the SAME order, and a string-presence check cannot see order - which is
+# exactly how a half-applied fix passed 426 tests and was caught in review instead.
+# Both blocks must name the environment route BEFORE the file route.
+Check "both INERT blocks exist and each names the environment route first" (
+    (@($handoffSrc -split "`r?`n" | Where-Object { $_ -match "Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment" }).Count -eq 2)
+)
+Check "neither INERT block puts the tracked file before the environment" (
+    ($handoffSrc -notmatch "To activate, either map profiles to concrete local models in")
+)
+Check "both INERT blocks describe the state without naming the file as its cause" (
+    (@($handoffSrc -split "`r?`n" | Where-Object { $_ -match "INERT" -and $_ -match "no profile resolves to a concrete model" }).Count -eq 2)
+)
+
 # v3.4.3: activation is a guarded command, not hand-edited JSON. It must write only the
 # profiles named, keep the rest, stay valid, and refuse to do anything with no mapping.
 $routing = '{"schemaVersion":1,"_readme":["keep me"],"profiles":{"standard":{"claudeModel":"inherit"},"cheap_readonly":{"claudeModel":"inherit"},"economy":{"claudeModel":"inherit"}}}'

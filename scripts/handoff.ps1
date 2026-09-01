@@ -2289,14 +2289,17 @@ function Invoke-Models {
     }
     if (Test-ModelRoutingInert) {
         Write-Host ""
-        Write-Host "Routing:            INERT - every profile in MODEL_ROUTING.json resolves to inherit."
+        # v3.5.2: the environment route is named FIRST here and in doctor alike. The
+        # order is the recommendation: MODEL_ROUTING.json is the file that ships to every
+        # installer, and editing it in a checkout of the protocol itself changes the
+        # shipped default for everyone. The environment route changes nothing tracked.
+        Write-Host "Routing:            INERT - no profile resolves to a concrete model."
         Write-Host "                    The Master still selects a capability profile per task, but the"
         Write-Host "                    selection currently changes nothing: every turn runs on whatever"
         Write-Host "                    model Claude Code is already using."
-        Write-Host "                    To activate, either map profiles to concrete local models in"
-        Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json, or set"
-        Write-Host "                    HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment - which"
-        Write-Host "                    activates routing without editing a tracked file."
+        Write-Host "                    Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment"
+        Write-Host "                    (no tracked file is touched), or by mapping profiles in"
+        Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
     }
 
     Write-Host ""
@@ -2554,8 +2557,15 @@ function Invoke-Doctor {
     if ($doctorModelSelection.Ok) {
         Write-DoctorLine "OK" "Model routing: profile=$($doctorModelSelection.EffectiveProfile); Claude model=$($doctorModelSelection.ClaudeModel); source=$($doctorModelSelection.Source)"
     if (Test-ModelRoutingInert) {
-        Write-DoctorLine "INFO" "Model routing is INERT: every profile in MODEL_ROUTING.json resolves to inherit, so profile selection currently changes no model."
-        Write-Host "      Map profiles to concrete local models in .ai/skills/codex-claude-handoff/MODEL_ROUTING.json to activate per-task routing."
+        # v3.5.2: doctor and models must give the SAME activation guidance. v3.5.1 taught
+        # Test-ModelRoutingInert about environment overrides but updated only the models
+        # message, so doctor still named the file as the sole route - and the file is the
+        # one that ships to every installer, which is exactly the route most operators
+        # should not take.
+        Write-DoctorLine "INFO" "Model routing is INERT: no profile resolves to a concrete model, so profile selection currently changes no model."
+        Write-Host "      Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment"
+        Write-Host "      (no tracked file is touched), or by mapping profiles in"
+        Write-Host "      .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
     }
     } else {
         Write-DoctorLine "FAIL" "Model routing configuration is invalid."

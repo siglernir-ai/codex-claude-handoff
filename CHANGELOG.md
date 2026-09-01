@@ -3,6 +3,18 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.5.2 - One Answer About Routing, From Every Command
+
+- `doctor` and `models` now give the same activation guidance. v3.5.1 taught the INERT
+  detector about environment overrides and updated the `models` message, but left
+  `doctor` naming `MODEL_ROUTING.json` as the only way to activate routing - and that
+  file is the one that ships to every installer, so it is the route most operators
+  should NOT take. Both commands now name the environment route first and say plainly
+  that it touches no tracked file.
+- `doctor`'s INERT line no longer describes the state as a property of
+  `MODEL_ROUTING.json`; it reports what is actually true, that no profile resolves to a
+  concrete model by any route.
+
 ## 3.5.1 - Routing Status Tells the Truth
 
 - `models` and `doctor` no longer report routing as INERT while simultaneously resolving
