@@ -38,7 +38,7 @@ orchestrator exists.
 | Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; `NEEDS_INVESTIGATION` receives read-only prompts and a post-turn source-change boundary; Claude customizations/plugins/hooks disabled; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
-## Symmetric Role Adapters (v3.5.0)
+## Symmetric Role Adapters (v3.5.1)
 
 **Permission is a property of the ROLE, not of the tool that holds it.**
 
@@ -48,7 +48,7 @@ orchestrator exists.
 | Reviewer | read-only | It judges work; a reviewer that can edit is not independent. |
 | Implementer | write | It is the only role that changes the repository. |
 
-Before v3.5.0 this rule existed only by accident. Codex was always invoked read-only
+Before v3.5.1 this rule existed only by accident. Codex was always invoked read-only
 because Codex only ever held Master or Reviewer; Claude Code was always invoked
 write-enabled because it only ever held Implementer. Nothing stated the rule, and it
 would have granted a Reviewer write access the moment the roles were swapped. It is now

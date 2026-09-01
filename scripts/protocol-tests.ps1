@@ -1016,6 +1016,57 @@ Check "the INERT message names the file to edit" ($r.Out -match "MODEL_ROUTING\.
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"some-local-model"},"economy":{"claudeModel":"inherit"}}}' }
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("models")
 Check "models does NOT report INERT once any profile maps to a concrete model" ($r.Out -notmatch "INERT")
+
+# --- v3.5.1: INERT must account for environment overrides ---
+#
+# The documented override order is -Model, HANDOFF_CLAUDE_MODEL_<PROFILE>,
+# MODEL_ROUTING.json, inherit - but the INERT check read only the file. An operator who
+# activated routing through the environment (the way to activate it WITHOUT editing a
+# file that ships to every installer) got a report that contradicted itself in adjacent
+# lines: the resolved model was named as sonnet from the environment, and the banner
+# underneath still said every turn runs on whatever model Claude Code already uses.
+$inertFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+    ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit"},"cheap_readonly":{"claudeModel":"inherit"}}}'
+}
+$r = Invoke-Handoff -WorkDir $inertFx -Arguments @("models")
+Check "an all-inherit file with no environment override still reports INERT" ($r.Out -match "INERT")
+
+$prevStd = $env:HANDOFF_CLAUDE_MODEL_STANDARD
+$env:HANDOFF_CLAUDE_MODEL_STANDARD = "test-env-standard-model"
+try {
+    $r = Invoke-Handoff -WorkDir $inertFx -Arguments @("models")
+    Check "an environment override activates routing even though the file is all-inherit" ($r.Out -match "test-env-standard-model")
+    Check "and the INERT banner is NOT printed alongside a resolved concrete model" ($r.Out -notmatch "INERT")
+    Check "the report names the environment as the resolution source" ($r.Out -match "environment HANDOFF_CLAUDE_MODEL_STANDARD")
+} finally {
+    if ($null -eq $prevStd) { Remove-Item Env:\HANDOFF_CLAUDE_MODEL_STANDARD -ErrorAction SilentlyContinue } else { $env:HANDOFF_CLAUDE_MODEL_STANDARD = $prevStd }
+}
+
+$prevCheap = $env:HANDOFF_CLAUDE_MODEL_CHEAP_READONLY
+$env:HANDOFF_CLAUDE_MODEL_CHEAP_READONLY = "test-env-cheap-model"
+try {
+    # An override on a profile OTHER than the effective one still means routing can change
+    # a model, so INERT is still the wrong word for it.
+    $r = Invoke-Handoff -WorkDir $inertFx -Arguments @("models")
+    Check "an override on any profile clears INERT, not only the effective one" ($r.Out -notmatch "INERT")
+} finally {
+    if ($null -eq $prevCheap) { Remove-Item Env:\HANDOFF_CLAUDE_MODEL_CHEAP_READONLY -ErrorAction SilentlyContinue } else { $env:HANDOFF_CLAUDE_MODEL_CHEAP_READONLY = $prevCheap }
+}
+
+$prevStd2 = $env:HANDOFF_CLAUDE_MODEL_STANDARD
+$env:HANDOFF_CLAUDE_MODEL_STANDARD = "inherit"
+try {
+    # An override that says "inherit" changes nothing, so it must not clear INERT either.
+    $r = Invoke-Handoff -WorkDir $inertFx -Arguments @("models")
+    Check "an override whose value is inherit does not falsely clear INERT" ($r.Out -match "INERT")
+} finally {
+    if ($null -eq $prevStd2) { Remove-Item Env:\HANDOFF_CLAUDE_MODEL_STANDARD -ErrorAction SilentlyContinue } else { $env:HANDOFF_CLAUDE_MODEL_STANDARD = $prevStd2 }
+}
+
+Check "the INERT guidance names the environment route, not only the file" ($handoffSrc -match "HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment")
+
 # v3.4.3: activation is a guarded command, not hand-edited JSON. It must write only the
 # profiles named, keep the rest, stay valid, and refuse to do anything with no mapping.
 $routing = '{"schemaVersion":1,"_readme":["keep me"],"profiles":{"standard":{"claudeModel":"inherit"},"cheap_readonly":{"claudeModel":"inherit"},"economy":{"claudeModel":"inherit"}}}'

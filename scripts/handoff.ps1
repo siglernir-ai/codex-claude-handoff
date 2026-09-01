@@ -2293,8 +2293,10 @@ function Invoke-Models {
         Write-Host "                    The Master still selects a capability profile per task, but the"
         Write-Host "                    selection currently changes nothing: every turn runs on whatever"
         Write-Host "                    model Claude Code is already using."
-        Write-Host "                    To activate, map profiles to concrete local models in"
-        Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
+        Write-Host "                    To activate, either map profiles to concrete local models in"
+        Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json, or set"
+        Write-Host "                    HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment - which"
+        Write-Host "                    activates routing without editing a tracked file."
     }
 
     Write-Host ""
@@ -2308,7 +2310,29 @@ function Invoke-Models {
 # changes default behavior, and freezing vendor model names is exactly what the
 # capability-profile design avoids. The defect was never the default; it was that no
 # output said the routing was doing nothing. This reports that state without changing it.
+# INERT means "profile selection cannot change which model runs". v3.5.1: that question
+# is not answerable from MODEL_ROUTING.json alone.
+#
+# The resolver's documented override order is: -Model, then
+# HANDOFF_CLAUDE_MODEL_<PROFILE>, then MODEL_ROUTING.json, then inherit. An operator who
+# activates routing through the environment - the way to activate it WITHOUT editing a
+# file that ships to every installer - got a report that contradicted itself in adjacent
+# lines: "Claude model: sonnet / source: environment HANDOFF_CLAUDE_MODEL_STANDARD",
+# immediately followed by "INERT ... every turn runs on whatever model Claude Code is
+# already using". Both cannot be true, and the banner was the false one.
+#
+# So the check now asks the real question: is EVERY route to a concrete model closed?
+# The file must be all-inherit AND no profile may carry an environment override.
 function Test-ModelRoutingInert {
+    # An environment override activates routing on its own, whatever the file says.
+    foreach ($profileName in @("inherit", "economy", "cheap_readonly", "standard", "high_reasoning")) {
+        $envName = "HANDOFF_CLAUDE_MODEL_" + $profileName.ToUpperInvariant()
+        $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
+        if (-not [string]::IsNullOrWhiteSpace($envValue) -and $envValue.Trim() -ne "inherit") {
+            return $false
+        }
+    }
+
     $configPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
     if (-not (Test-Path -LiteralPath $configPath)) { return $false }
     try {

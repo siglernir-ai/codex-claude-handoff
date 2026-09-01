@@ -3,6 +3,21 @@
 All notable changes to the codex-claude-handoff protocol are documented here.
 Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
 
+## 3.5.1 - Routing Status Tells the Truth
+
+- `models` and `doctor` no longer report routing as INERT while simultaneously resolving
+  a concrete model. The documented override order is `-Model`, then
+  `HANDOFF_CLAUDE_MODEL_<PROFILE>`, then `MODEL_ROUTING.json`, then inherit - but the
+  INERT check read only the file. Activating routing through the environment, which is
+  the way to activate it *without* editing a file that ships to every installer,
+  produced a report that contradicted itself in adjacent lines: "Claude model: sonnet /
+  source: environment HANDOFF_CLAUDE_MODEL_STANDARD", followed by "INERT ... every turn
+  runs on whatever model Claude Code is already using". INERT now means what it says -
+  every route to a concrete model is closed - and an override whose value is literally
+  `inherit` correctly does not clear it.
+- The INERT guidance names the environment route alongside the file, so the option that
+  does not require editing a shipped default is discoverable.
+
 ## 3.5.0 - Symmetric Role Adapters
 
 - **Permission now follows the role, not the tool.** Until this release the permission a
