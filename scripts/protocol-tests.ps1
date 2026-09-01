@@ -2847,6 +2847,64 @@ $boundaryProbe = {
 Check "editing an already-tracked file with no name change is detected" ((& $boundaryProbe $boundaryBefore $boundaryAfterEdited).Count -eq 1)
 Check "an untouched tree reports no change" ((& $boundaryProbe $boundaryBefore $boundaryAfterSame).Count -eq 0)
 
+# --- v3.5.0: the release dry run must report what will actually happen ---
+#
+# Two reporting defects, neither of them a safety hole and both of them the kind that
+# teaches an operator to stop trusting the output:
+#   1. release-check printed "ready for explicit authorization" and then exited 1,
+#      because the ready path fell off the end of the function and inherited whatever
+#      status the last internal probe left behind. Anything gating on the exit code read
+#      a successful dry run as a failure.
+#   2. The command list always showed `git add` and `git commit`, including on the
+#      already-committed path where Invoke-Release deliberately skips both. The dry run
+#      is the one thing an operator reads before authorising an irreversible action, and
+#      it was naming a commit that would never be created.
+Write-Host "[v3.5.0] Release dry-run reporting fidelity"
+
+function New-ReadyReleaseFixture {
+    param([string]$Version, [switch]$CommitTheWork)
+    $handoff = New-Handoff -State "REVIEW_DONE" -WaitingFor "User"
+    $handoff = $handoff -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- RELEASE_TARGET.md"
+    # dist/ must be ignored exactly as it is in a real install, or the built package
+    # itself shows up as undeclared work and the exact-scope guard blocks the release.
+    $dir = New-Fixture -Files @{ "AI_HANDOFF.md" = $handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".gitignore" = "/dist/`n/AI_HANDOFF.md`n" } -InitGit
+    Initialize-FixtureGitBaseline -Dir $dir
+    Set-Content -Path (Join-Path $dir "RELEASE_TARGET.md") -Value "# release fixture" -Encoding utf8
+    if ($CommitTheWork) {
+        # Reproduce the state left behind by commit-approved: the reviewed change is
+        # already in HEAD and the working tree is clean.
+        Initialize-FixtureGitBaseline -Dir $dir
+    }
+    # A package the gate will accept: a real file and its real SHA-256.
+    New-Item -ItemType Directory -Path (Join-Path $dir "dist") -Force | Out-Null
+    $zip = Join-Path $dir "dist/codex-claude-handoff-$Version.zip"
+    Set-Content -Path $zip -Value "fixture package payload" -Encoding ascii
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+    Set-Content -Path (Join-Path $dir "dist/codex-claude-handoff-$Version.zip.sha256") -Value "$hash  codex-claude-handoff-$Version.zip" -Encoding ascii
+    return $dir
+}
+
+# Uncommitted reviewed work: the release still has a commit to build, so the dry run
+# must say so.
+$fx = New-ReadyReleaseFixture -Version "v9.9.8"
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v9.9.8", "-Message", "fixture release")
+Check "a ready release-check exits 0, not 1" (($r.Code -eq 0) -and ($r.Out -match "ready for explicit authorization"))
+Check "an uncommitted release still lists git add and git commit" (($r.Out -match "git add --") -and ($r.Out -match "git commit -m"))
+Check "an uncommitted release lists push and tag" (($r.Out -match "git push origin HEAD") -and ($r.Out -match "git tag -a v9\.9\.8"))
+
+# Already-committed reviewed work: Invoke-Release skips add and commit, so the dry run
+# must not name them.
+$fx = New-ReadyReleaseFixture -Version "v9.9.7" -CommitTheWork
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("release-check", "-Version", "v9.9.7", "-Message", "fixture release")
+Check "an already-committed release-check also exits 0" ($r.Code -eq 0)
+Check "an already-committed release does NOT list git add or git commit" (($r.Out -notmatch "git add --") -and ($r.Out -notmatch "git commit -m"))
+Check "the already-committed plan says why the commit step is absent" ($r.Out -match "HEAD already carries the approved Changed Files")
+Check "an already-committed release still lists push and tag" (($r.Out -match "git push origin HEAD") -and ($r.Out -match "git tag -a v9\.9\.7"))
+
+# The printed plan and the executor must not drift apart again.
+Check "the executor's skip condition and the plan's are the same flag" ((@($handoffSource -split "`r?`n" | Where-Object { $_.Contains('$Plan.ReleaseFromHead') }).Count -ge 1) -and (@($handoffSource -split "`r?`n" | Where-Object { $_.Contains('$plan.ReleaseFromHead') }).Count -ge 1))
+
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

@@ -52,6 +52,15 @@ Versions follow the `VERSION` file in `.ai/skills/codex-claude-handoff/`.
   every local coordination file is hashed before and after the turn; a differing hash, a
   vanished path or a new path all fail the turn. Found by the Codex Reviewer while
   reviewing this release.
+- The release dry run now reports what will actually happen. `release-check` printed
+  "ready for explicit authorization" and then exited 1, because the ready path fell off
+  the end of the function and inherited the exit status of the last internal probe -
+  anything gating on the exit code read a successful dry run as a failure. It exits 0
+  explicitly now. Separately, the printed command list always named `git add` and
+  `git commit`, including on the already-committed path where the executor deliberately
+  skips both; the dry run is the one thing an operator reads before authorising an
+  irreversible action, so it now prints the commands that will really run.
+
 - **Upgrade fix:** `install.ps1` added the `.gitignore` block only when it was missing
   entirely, so a project installed before this release would never have received the new
   local capture names. Those files would then be untracked-but-not-ignored, and the very

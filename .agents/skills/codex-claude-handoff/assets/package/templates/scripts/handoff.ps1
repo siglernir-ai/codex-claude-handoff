@@ -3446,9 +3446,20 @@ function Show-ReleasePlan {
     }
     Write-Host ""
 
+    # v3.5.0: print the commands that will ACTUALLY run.
+    #
+    # This block always listed git add and git commit, even on the already-committed
+    # path where Invoke-Release deliberately skips both. A dry run whose command list
+    # does not match what the executor does is worse than no dry run: it is the one
+    # place the operator looks before authorising an irreversible action, and it was
+    # telling them a commit would be created when none would be.
     Write-Host "Exact mutating commands if authorized:"
-    Write-Host "  git add -- <files listed above>"
-    Write-Host "  git commit -m `"$CommitMessage`""
+    if ($Plan.ReleaseFromHead) {
+        Write-Host "  (no git add / git commit - HEAD already carries the approved Changed Files)"
+    } else {
+        Write-Host "  git add -- <files listed above>"
+        Write-Host "  git commit -m `"$CommitMessage`""
+    }
     Write-Host "  git push origin HEAD"
     Write-Host "  git tag -a $RequestedVersion -m $RequestedVersion"
     Write-Host "  git push origin $RequestedVersion"
@@ -3469,6 +3480,13 @@ function Invoke-ReleaseCheck {
     Write-Host "To execute, run:"
     Write-Host "  handoff.ps1 release -Version $Version -Message `"<message>`" -Authorize `"I_AUTHORIZE_RELEASE_$Version`""
     Write-Host ""
+    # v3.5.0: exit 0 explicitly on the ready path.
+    #
+    # Without this the command fell off the end and the process inherited whatever exit
+    # status the last internal probe happened to leave behind - which was 1. A dry run
+    # that prints "ready" and then reports failure is a trap for any script that gates on
+    # the exit code, and it teaches an operator to ignore exit codes here.
+    exit 0
 }
 
 function Invoke-Release {
