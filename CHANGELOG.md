@@ -1,3 +1,37 @@
+## 3.5.3 - The Version The Agent Reads
+
+- **Every v3.5.2 install announced itself as 3.3.2.** The two `SKILL.md` files that ship
+  to installers - `templates/.agents/...` and `templates/.claude/...` - carried
+  `version: "3.3.2"` in their frontmatter while `VERSION` advanced through 3.4.x and
+  3.5.x. That frontmatter is what an agent loads when it picks up the skill, so asking
+  Codex or Claude Code which version was installed returned a number three releases
+  stale. `VERSION`, `doctor` and `handoff.ps1` all reported 3.5.2 correctly; the one
+  surface a user can read without running a command did not.
+- **A test for exactly this already existed and did not catch it.** v3.4.1 added "the
+  public Skill version matches the canonical VERSION file" precisely so a stale literal
+  could not hide a mismatch. It reads the repository's *own* Skill entry point, which is
+  bumped every release and therefore always passed. The shipped copies under
+  `templates/` were never covered. The check now asserts both shipped `SKILL.md` files
+  against the shipped `VERSION`, which is the pair the installer actually delivers.
+  Measuring the convenient copy instead of the shipped copy was not a test of the
+  property it named.
+- **`ROLE_ASSIGNMENT.md` still described the pre-3.5.0 world.** Its Tooling Note claimed
+  `cycle` and `loop` automate only `READY_FOR_IMPLEMENTATION`, only for an Implementer
+  bound to Claude Code, and that a Codex Implementer blocks and must be run manually.
+  v3.5.0 made all six role/tool combinations callable and v3.5.0 also automates
+  `NEEDS_INVESTIGATION`; the note was refreshed by the installer on every upgrade and
+  kept restating the old limits. It now points at `handoff.ps1 adapters` as the
+  authority rather than restating the registry in prose that ages.
+- **The shipped Skill package was stale against its own templates.** The packaged
+  `gitignore-snippet.txt` still lacked the seven role-named capture files that v3.5.0
+  introduced, so an install through the Skill package left `REVIEW_LAST.md`,
+  `MASTER_LAST.md`, `IMPLEMENTER_LAST.md` and their event logs untracked-but-unignored.
+  Installing from the repository templates was unaffected, which is why it went unseen.
+  Rebuilding the package as part of this release corrects it; nothing asserts that the
+  built package matches `templates/`, and that check is still missing.
+- Found by running the protocol against a real project and asking the Master a
+  one-sentence question: which version is installed.
+
 # Changelog
 
 All notable changes to the codex-claude-handoff protocol are documented here.

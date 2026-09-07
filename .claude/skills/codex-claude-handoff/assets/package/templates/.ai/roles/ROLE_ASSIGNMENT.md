@@ -56,10 +56,11 @@ The User is always the approval point and is never one of these roles.
   which tool holds each role; the adapter registry says whether that role/tool/turn
   is callable.
 - `scripts/handoff.ps1 adapters` prints the current resolved adapter status.
-- In the default local registry, `cycle` (alias `run-next`) and `loop` can automate
-  only `READY_FOR_IMPLEMENTATION` for an Implementer bound to Claude Code. If the
-  Implementer is bound to a tool without a verified local adapter (for example
-  Codex), these commands block and the Implementer turn must be run manually.
+- Since v3.5.0 the adapter registry covers every role/tool combination. `cycle`
+  (alias `run-next`) and `loop` automate `READY_FOR_IMPLEMENTATION` and
+  `NEEDS_INVESTIGATION` for an Implementer bound to either Claude Code or Codex.
+  This note is not the authority: run `handoff.ps1 adapters` for the resolved
+  status, because the registry is what the commands actually read.
 - `cycle` and `loop` enforce the invariant above in their preflight: if the Reviewer
   and the Implementer resolve to the same tool, they block before any automation
   turn runs.

@@ -824,6 +824,20 @@ $skillSetupShText = Get-Content -Raw -Path $skillSetupSh
 $canonicalVersion = (Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/VERSION")).Trim()
 Check "public Skill declares Apache-2.0 and public-beta metadata" (($skillText -match "license:\s*Apache-2.0") -and ($skillText -match "status:\s*public-beta") -and ($skillText -match ('version:\s*"' + [regex]::Escape($canonicalVersion) + '"')))
 Check "the public Skill version matches the canonical VERSION file" ($skillText -match ('version:\s*"' + [regex]::Escape($canonicalVersion) + '"'))
+
+# v3.5.3: the v3.4.1 check above reads the repository's OWN Skill entry point, which
+# is bumped every release and therefore always passed. The two SKILL.md files that
+# actually ship to installers live under templates/ and were never covered, so their
+# frontmatter froze at 3.3.2 while VERSION advanced three releases. Every v3.5.2
+# install announced itself as 3.3.2 to the agent that loaded it - the one place a
+# user sees the version without running a command. A test that measures the
+# convenient copy instead of the shipped copy is not a test of the property.
+$templateVersion = (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/VERSION")).Trim()
+Check "the shipped VERSION template matches the canonical VERSION file" ($templateVersion -eq $canonicalVersion)
+foreach ($templateSkillRelative in @("templates/.agents/skills/codex-claude-handoff/SKILL.md", "templates/.claude/skills/codex-claude-handoff/SKILL.md")) {
+    $templateSkillText = Get-Content -Raw -Path (Join-Path $RepoRoot $templateSkillRelative)
+    Check "$templateSkillRelative declares the shipped VERSION" ($templateSkillText -match ('version:\s*"' + [regex]::Escape($templateVersion) + '"'))
+}
 Check "public Skill positions an accountable engineering pair" (($skillText -match "One drives\. One challenges\. Neither ships alone\.") -and ($skillText -match "accountable engineering"))
 Check "public Skill distinguishes one live task from summaries and parallel answers" (($skillText -match "same live Git task") -and ($skillText -match "pass a summary") -and ($skillText -match "run the same prompt in parallel"))
 Check "public Skill distinguishes bounded correction from unrestricted dialogue" (($skillText -match "bounded by turn, time, and") -and ($skillText -match "General question dialogue still advances through explicit turns"))
