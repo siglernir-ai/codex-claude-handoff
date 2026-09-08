@@ -1,3 +1,21 @@
+## 3.6.1 - Both Shells, One Answer
+
+- **v3.6.0 exempted the role file in PowerShell and not in Bash.** `handoff.ps1` stopped
+  counting `.ai/roles/ROLE_ASSIGNMENT.md` as a project change so a role swap would not
+  block the turn it enables. `handoff.sh commit-check` keeps its own hardcoded
+  `LOCAL_IGNORED` list and never got the entry, so Bash blocked a commit PowerShell
+  allowed, on the same repository, over the same file. The repository already states the
+  rule this broke - "both gates must agree on what a changed file is; two parsers meant
+  two answers" - and a fix that touched one parser reintroduced exactly that. A test now
+  asserts the Bash list carries the entry.
+- **`handoff.sh commit-check` warns about tracked credential files.** It is the one Bash
+  command that inspects what is about to be committed, and clearing a protocol stop with
+  a bulk `git add -A` is precisely how a live token reaches history. PowerShell gained
+  this warning in v3.6.0 through `doctor` and the dirty-tree stop; Bash had nothing at
+  the moment it mattered most. Name-based only - Bash does not read file contents here -
+  covering `.mcp.json`, `.codex/config.toml` and `.env`.
+- `handoff.sh` reported itself as v1.3.1 until v3.6.0 and now tracks the release version.
+
 ## 3.6.0 - Guards That Were Only Pretending
 
 - **The clean-tree gate was quietly the most dangerous instruction in the protocol.**

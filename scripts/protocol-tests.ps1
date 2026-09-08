@@ -653,6 +653,14 @@ $handoffSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps
 Check "the role file joins the list the read-only boundary hashes" ($handoffSource -match 'LocalHandoffFiles \+ @\("\.ai/roles/ROLE_ASSIGNMENT\.md"\)')
 Check "the read-only boundary still hashes every local handoff file" ($handoffSource -match 'foreach \(\$local in \$LocalHandoffFiles\)')
 
+# v3.6.0: both gates must agree on what a changed file is. handoff.ps1 exempts the role
+# file from the clean-tree gate; handoff.sh keeps its own hardcoded LOCAL_IGNORED list
+# for commit-check. Adding the file to one and not the other meant Bash blocked a commit
+# PowerShell allowed, on the same repository. Two parsers, two answers.
+$shSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
+Check "the Bash exclusion list exempts the role file too" ($shSource -match 'LOCAL_IGNORED="[^"]*\.ai/roles/ROLE_ASSIGNMENT\.md')
+Check "Bash commit-check warns about tracked credential files" (($shSource -match '_warn_credential_paths\(\)') -and ($shSource -match 'cmd_commit_check\(\) \{[^}]*_warn_credential_paths'))
+
 # === 4C. Dynamic model resolver ===
 Write-Host "[4C] Dynamic model resolver"
 $modelRouting = @'

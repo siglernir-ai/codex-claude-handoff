@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.6.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.6.1)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -388,10 +388,28 @@ Update AI_HANDOFF.md only if the protocol requires investigation, planning, impl
     fi
 }
 
+_warn_credential_paths() {
+    local risky=() f
+    for f in .mcp.json .codex/config.toml .env; do
+        git ls-files --error-unmatch "$f" >/dev/null 2>&1 && risky+=("$f")
+    done
+    [ ${#risky[@]} -eq 0 ] && return 0
+    echo "WARNING: these tracked files normally hold API keys or access tokens:"
+    for f in "${risky[@]}"; do echo "  $f"; done
+    echo "Git keeps every version, so editing one later does not remove the value."
+    echo "Add them to .gitignore and run: git rm --cached <path>"
+    echo ""
+}
+
 cmd_commit_check() {
     echo ""
+    # v3.6.0: warn before the operator commits an agent credential file. This is the
+    # only Bash command that inspects what is about to be committed, and a bulk
+    # "git add -A" to clear a protocol stop is exactly how a live token reaches
+    # history. Name-based only: Bash does not read file contents here.
+    _warn_credential_paths
     if [ "$STATE" = "REVIEW_DONE" ] && [ "$WAITING_FOR" = "User" ]; then
-        local LOCAL_IGNORED="AI_HANDOFF.md NEXT_TURN.md USER_REQUEST.md HANDOFF_LOOP.log AI_SEQUENCE.md HANDOFF_RUN.json REVIEW.jsonl REVIEW_LAST.md MASTER.jsonl MASTER_LAST.md IMPLEMENTER.jsonl IMPLEMENTER_LAST.md IMPLEMENTER_COMMAND.md CODEX_REVIEW.jsonl CODEX_REVIEW_LAST.md CODEX_MASTER.jsonl CODEX_MASTER_LAST.md CLAUDE_IMPLEMENTER.jsonl CLAUDE_IMPLEMENTER_LAST.md CLAUDE_IMPLEMENTER_COMMAND.md"
+        local LOCAL_IGNORED="AI_HANDOFF.md NEXT_TURN.md USER_REQUEST.md HANDOFF_LOOP.log AI_SEQUENCE.md HANDOFF_RUN.json REVIEW.jsonl REVIEW_LAST.md MASTER.jsonl MASTER_LAST.md IMPLEMENTER.jsonl IMPLEMENTER_LAST.md IMPLEMENTER_COMMAND.md CODEX_REVIEW.jsonl CODEX_REVIEW_LAST.md CODEX_MASTER.jsonl CODEX_MASTER_LAST.md CLAUDE_IMPLEMENTER.jsonl CLAUDE_IMPLEMENTER_LAST.md CLAUDE_IMPLEMENTER_COMMAND.md .ai/roles/ROLE_ASSIGNMENT.md"
         local commit_files=() actual_files=()
         local line entry in_cf=false
 
