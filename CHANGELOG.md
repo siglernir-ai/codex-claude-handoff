@@ -1,3 +1,75 @@
+## 3.6.0 - Guards That Were Only Pretending
+
+- **The clean-tree gate was quietly the most dangerous instruction in the protocol.**
+  `cycle` and `loop` refuse to run on a dirty tree, print every blocking file, and say
+  "Commit, stash, revert, or remove these files." Facing a list of eighty files, the
+  operator's path of least resistance is `git add -A` - and an agent MCP configuration
+  holds an API token in plain text, because neither `.mcp.json` nor `.codex/config.toml`
+  can read a value from `.env`. This protocol stops before commit, push, tag, release,
+  deploy, database and secret actions. Burying a live credential in Git history was the
+  one sensitive action it was actively nudging people toward.
+- **The installer now ignores both agent credential files.** `/.mcp.json` and
+  `/.codex/config.toml` join the managed `.gitignore` block, so an upgrade adds them to
+  an existing install through the same line-by-line reconciliation added in v3.5.0. The
+  protocol requires both agents in one repository; their credential files are in play by
+  its own design, which makes them its business to protect.
+- **`doctor` reports tracked files that look like they carry credentials**, by known
+  filename and by high-confidence token pattern - Supabase, OpenAI, GitHub, Google,
+  Slack, private keys. Tracked, specifically: an untracked `.env` is a local file, while
+  a tracked one is already one commit from permanent history. It warns rather than
+  fails, because an existing project may have had such a file for years and doctor
+  breaking on discovery helps nobody. Template names - `.env.example` and friends - are
+  exempt, so the check does not cry wolf on the file that exists to be committed.
+- **The dirty-tree stop now names the risk instead of implying the fix.** When a
+  blocking file matches, the stop adds an explicit warning not to clear it with a bulk
+  `git add -A`. Same gate, same rules; it just no longer stays silent at the exact
+  moment its own instruction is most likely to be followed carelessly.
+- **`review-apply` accepted a verdict from a tool that did not hold the Reviewer role.**
+  v3.5.0 announced that the captured-verdict guard had been changed from "REVIEWER must
+  be Codex" to "REVIEWER must be the bound Reviewer", and called the new form strictly
+  stronger. The `review-apply` path was never changed; it still compared against the
+  literal string `Codex`. Under a swapped binding it was wrong in both directions at
+  once - it accepted a capture signed by Codex while Claude Code held the Reviewer role,
+  and it would have refused the legitimate capture the bound Reviewer produced. Applying
+  a verdict from a tool that does not hold the Reviewer role defeats the single
+  invariant this protocol exists to enforce: that no agent is the sole reviewer of its
+  own work. It now compares against the bound Reviewer and fails closed when the binding
+  cannot be resolved.
+- **The test that was supposed to prove the v3.5.0 claim asserted only a non-zero exit
+  code.** It passed for four releases because the fixture's edited role file left the
+  tree dirty and an unrelated guard failed first. An exit code is not a reason. It now
+  asserts the refusal message, and a companion test covers the other half the hardcoded
+  form would have broken: the bound Reviewer's own capture must be accepted under a
+  swapped binding. Surfaced only because exempting the role file from the clean-tree
+  gate removed the accident that was standing in for the guard.
+
+- **The Bash companion still described the pre-3.5.0 world.** `handoff.sh` resolved
+  adapters by asking which vendor filled the seat - `role = Implementer AND tool =
+  Claude Code`, `role = Master AND tool = Codex`, `role = Reviewer AND tool = Codex`.
+  Under a swapped binding all three fell through to "no verified local callable
+  adapter", telling the operator their configuration was unsupported when the
+  PowerShell path supports it. The conditions now key on the role alone, which is what
+  "permission follows the role" means, and `handoff.sh adapters` prints the same
+  six-row matrix as `handoff.ps1` so the symmetry is checkable from either shell. Its
+  header still said v1.3.1.
+- The credential detector's own test no longer ships a literal token-shaped string; the
+  probe value is assembled at runtime. A public repository that trips its own detector,
+  or GitHub push protection, would be its own worst advertisement.
+
+- **A role swap no longer blocks the turn it exists to enable.** Swapping roles edits
+  `.ai/roles/ROLE_ASSIGNMENT.md`, which is tracked on purpose - it records who holds
+  which role and belongs in project history. But the edit dirtied the working tree, the
+  clean-tree gate then refused the automated turn the swap was performed to make
+  possible, and the only way through was a commit the user had to approve separately,
+  for a change they had already approved. The protocol's own configuration change was
+  blocking the protocol. The file now sits in the same list as the local coordination
+  files, which exempts it from the gate and simultaneously adds it to the read-only
+  boundary snapshot - so a Master or Reviewer turn still cannot rewrite the binding it
+  is meant to obey. The commit gate is untouched; there is simply nothing left that
+  requires a commit first. Reported by a user whose swap-back to Codex stalled on it.
+- Found by leaking a Supabase account token into a project's local history while
+  clearing this very stop, during a live pilot of the protocol.
+
 ## 3.5.3 - The Version The Agent Reads
 
 - **Every v3.5.2 install announced itself as 3.3.2.** The two `SKILL.md` files that ship

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v1.3.1)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.6.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -178,35 +178,35 @@ _adapter_profile() {
     ADAPTER_REASON="$tool has no verified local callable adapter for the $role role."
     ADAPTER_NEXT="Add and verify a real local adapter before marking this role callable."
 
-    if [ "$role" = "Implementer" ] && [ "$tool" = "Claude Code" ]; then
+    if [ "$role" = "Implementer" ]; then
         ADAPTER_CALLABLE="yes"
         ADAPTER_AUTOLOOP="yes"
-        ADAPTER_STATES="READY_FOR_IMPLEMENTATION"
+        ADAPTER_STATES="READY_FOR_IMPLEMENTATION, NEEDS_INVESTIGATION"
         ADAPTER_INVOCATION="PowerShell only: handoff.ps1 cycle or handoff.ps1 loop invokes npx --yes @anthropic-ai/claude-code with Bash disallowed, a budget cap, and no session persistence."
         ADAPTER_SAFETY="Explicit yes confirmation in PowerShell; Reviewer != Implementer; clean tree except local handoff files; Bash disallowed; budget cap; no commit/push/tag/deploy/db/secrets automation."
         ADAPTER_AUTH="yes, before cycle or loop session"
-        ADAPTER_REASON="Only READY_FOR_IMPLEMENTATION is automated; investigation, planning, and questions remain manual."
+        ADAPTER_REASON="READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated; planning and question turns remain manual."
         ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION; use bash scripts/handoff.sh next + paste for other turns."
-    elif [ "$role" = "Master" ] && [ "$tool" = "Codex" ]; then
+    elif [ "$role" = "Master" ]; then
         # Callable in PowerShell only (since v2.0.1) via master-run + master-apply, and never
         # auto-run by loop/cycle. Bash itself never invokes Codex or applies a recommendation.
         ADAPTER_CALLABLE="yes (PowerShell only: master-run + master-apply)"
         ADAPTER_AUTOLOOP="no"
         ADAPTER_STATES="NEEDS_ANALYSIS"
         ADAPTER_INVOCATION="PowerShell only: pwsh scripts/handoff.ps1 master-run (capture) then pwsh scripts/handoff.ps1 master-apply (apply the captured recommendation's local AI_HANDOFF.md transition)."
-        ADAPTER_SAFETY="Explicit yes per command; NEEDS_ANALYSIS only; bound Master is Codex; captured TASK must match Current Task; recommendation/Waiting For pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle; no commit/push/tag/deploy/db/secrets."
+        ADAPTER_SAFETY="Explicit yes per command; NEEDS_ANALYSIS only; bound Master holds the Master role; captured TASK must match Current Task; recommendation/Waiting For pair must be valid; non-BLOCKED routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; master-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle; no commit/push/tag/deploy/db/secrets."
         ADAPTER_STOP="Operator Manual Action"
         ADAPTER_AUTH="yes, explicit yes before master-run and master-apply"
         ADAPTER_REASON="master-run + master-apply complete the Master's NEEDS_ANALYSIS routing turn end-to-end (PowerShell only); callable via these explicit commands only - never inside loop or cycle."
         ADAPTER_NEXT="Use pwsh scripts/handoff.ps1 master-run then master-apply; Bash cannot invoke Codex or apply the recommendation."
-    elif [ "$role" = "Reviewer" ] && [ "$tool" = "Codex" ]; then
+    elif [ "$role" = "Reviewer" ]; then
         # Callable in PowerShell only (since v1.3.0) via review-run + review-apply, and never
         # auto-run by loop/cycle (Auto-loop stays no). Bash itself never invokes Codex.
         ADAPTER_CALLABLE="yes (PowerShell only: review-run + review-apply)"
         ADAPTER_AUTOLOOP="no"
         ADAPTER_STATES="READY_FOR_REVIEW"
         ADAPTER_INVOCATION="PowerShell only: pwsh scripts/handoff.ps1 review-run (capture) then pwsh scripts/handoff.ps1 review-apply (apply the captured verdict's local AI_HANDOFF.md transition)."
-        ADAPTER_SAFETY="Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only; review-apply edits only AI_HANDOFF.md; not auto-run by default; only PowerShell loop -IncludeReviewer may opt in; Bash/cycle never do; no commit/push/tag/deploy/db/secrets; no release action."
+        ADAPTER_SAFETY="Explicit yes per command; READY_FOR_REVIEW only; bound and actual Reviewer match and Reviewer != Implementer; Changed Files == git status; Codex read-only; review-apply edits only AI_HANDOFF.md; not auto-run by default; only PowerShell loop -IncludeReviewer may opt in; Bash/cycle never do; no commit/push/tag/deploy/db/secrets; no release action."
         ADAPTER_STOP="Operator Manual Action"
         ADAPTER_AUTH="yes, explicit yes before review-run and review-apply"
         ADAPTER_REASON="review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end (PowerShell only); callable via these explicit commands only - never inside loop or cycle."
@@ -256,6 +256,20 @@ cmd_adapters() {
         echo "Enable next: $ADAPTER_NEXT"
         echo ""
     done
+    echo "Role/tool matrix (every combination, independent of today's binding)"
+    echo "Permission is a property of the ROLE. The tool holding it does not change it."
+    echo ""
+    echo "  Role         Tool         Callable  Permission  Automated states"
+    echo "  Master       Codex        yes       read-only   NEEDS_ANALYSIS"
+    echo "  Master       Claude Code  yes       read-only   NEEDS_ANALYSIS"
+    echo "  Implementer  Codex        yes       write       READY_FOR_IMPLEMENTATION, NEEDS_INVESTIGATION"
+    echo "  Implementer  Claude Code  yes       write       READY_FOR_IMPLEMENTATION, NEEDS_INVESTIGATION"
+    echo "  Reviewer     Codex        yes       read-only   READY_FOR_REVIEW"
+    echo "  Reviewer     Claude Code  yes       read-only   READY_FOR_REVIEW"
+    echo ""
+    echo "Every turn above runs from PowerShell; Bash reports status and never invokes a tool."
+    echo "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    echo ""
     echo "Capability:  Authorized release executor"
     echo "Callable:    no in Bash (PowerShell only)"
     echo "States:      REVIEW_DONE with Waiting For: User"

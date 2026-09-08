@@ -22,3 +22,10 @@
 /IMPLEMENTER_CLI_BRIEF.md
 /.ai/handoff-history/
 /HANDOFF_RUN.json
+
+# Agent MCP configuration - holds API keys and access tokens in plain text.
+# This protocol requires Codex and Claude Code in the same repository, so their
+# credential files are in play by design. Both formats store the key inline;
+# neither can read it from .env. Committed once, a token stays in history.
+/.mcp.json
+/.codex/config.toml

@@ -560,6 +560,21 @@ $RunMarkerName = "HANDOFF_RUN.json"
 # v3.5.0: the legacy vendor-named captures stay on this list. They are still readable,
 # so an install that carries them must not trip the clean-tree guard on their account.
 $LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
+# v3.6.0: the protocol's own configuration change was blocking the protocol.
+#
+# A role swap edits .ai/roles/ROLE_ASSIGNMENT.md, and that file is tracked by design -
+# it records who holds which role and belongs in the project's history. But the moment
+# it changed, the clean-tree gate refused the very automated turn the swap existed to
+# enable, and the only way out was a commit. So a swap the user had already approved
+# demanded a second, unrelated approval before anything could run.
+#
+# Adding it here does two things at once. The gate stops counting it as a project
+# change, and Get-ReadOnlyBoundarySnapshot starts hashing it, so a read-only turn still
+# cannot rewrite the binding it is supposed to obey. Nothing rests on the file being
+# committed: every turn already rereads the binding and fails closed on drift or on
+# Reviewer == Implementer. The file stays tracked; committing it is the user's call
+# again instead of a precondition for running a turn.
+$LocalHandoffFiles = $LocalHandoffFiles + @(".ai/roles/ROLE_ASSIGNMENT.md")
 
 # --- v3.5.0: permission follows the ROLE, not the tool ---
 #
@@ -692,6 +707,85 @@ function Get-WorkingTreeState {
     $status = Get-GitStatusFields
     if (-not $status.Ok) { return @{ Ok = $false; Files = [System.Collections.Generic.List[string]]::new() } }
     return @{ Ok = $true; Files = (ConvertFrom-GitStatusFields -Fields $status.Fields) }
+}
+
+# v3.6.0: the clean-tree gate is where credentials leak.
+#
+# cycle and loop refuse to run on a dirty tree, print every blocking file, and say
+# "Commit, stash, revert, or remove these files". Facing a long list, the operator's
+# path of least resistance is `git add -A` - and that is exactly how an agent MCP
+# config, which holds an API token in plain text, lands in history. This protocol
+# stops before commit, push, tag, release, deploy, database and secret actions;
+# burying a live credential in Git was the one sensitive action it nudged toward.
+#
+# Two cheap signals: a filename known to hold agent credentials, and a
+# high-confidence token pattern inside a small configuration file. Content scanning
+# is limited to configuration formats and a size cap so this stays fast on large
+# repositories, and skips the obvious template names to avoid crying wolf on
+# .env.example. This function only reads and reports - doctor is read-only by
+# contract, and the block sites print a warning without changing what they allow.
+function Get-CredentialRiskPaths {
+    param([string[]]$Paths = @())
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+    if (-not $Paths -or $Paths.Count -eq 0) { return $findings }
+
+    $exemptLeaf = 'example|sample|template|placeholder|defaults'
+    $namePatterns = @(
+        @{ Rx = '(^|/)\.mcp\.json$';          Why = 'Claude Code MCP configuration' },
+        @{ Rx = '(^|/)\.codex/config\.toml$'; Why = 'Codex MCP configuration' },
+        @{ Rx = '(^|/)\.env$';                Why = 'environment file' },
+        @{ Rx = '(^|/)\.env\.[^/]+$';         Why = 'environment file' }
+    )
+    $contentPatterns = @(
+        @{ Rx = 'sbp_[a-z0-9]{20,}';                  Why = 'Supabase access token' },
+        @{ Rx = 'sk-[A-Za-z0-9_\-]{20,}';             Why = 'OpenAI-style secret key' },
+        @{ Rx = 'gh[pousr]_[A-Za-z0-9]{20,}';         Why = 'GitHub token' },
+        @{ Rx = 'github_pat_[A-Za-z0-9_]{20,}';       Why = 'GitHub fine-grained token' },
+        @{ Rx = 'AIza[0-9A-Za-z_\-]{30,}';            Why = 'Google API key' },
+        @{ Rx = 'xox[baprs]-[A-Za-z0-9\-]{10,}';      Why = 'Slack token' },
+        @{ Rx = 'BEGIN [A-Z ]*PRIVATE KEY';           Why = 'private key' }
+    )
+    $scannableExt = @('.json', '.toml', '.yaml', '.yml', '.ini', '.conf', '.cfg')
+    $maxBytes = 262144
+    $maxScanned = 400
+    $scanned = 0
+    $repoRoot = (Get-Location).Path
+
+    foreach ($rel in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+        $norm = $rel.Replace([char]92, [char]47).Trim()
+        $leaf = Split-Path -Leaf $norm
+        $reason = $null
+
+        if ($leaf -notmatch $exemptLeaf) {
+            foreach ($n in $namePatterns) {
+                if ($norm -match $n.Rx) { $reason = $n.Why; break }
+            }
+        }
+
+        if (-not $reason -and $scanned -lt $maxScanned -and $leaf -notmatch $exemptLeaf) {
+            $ext = [System.IO.Path]::GetExtension($norm)
+            if (($scannableExt -contains $ext) -or ($leaf -like '.env*')) {
+                $full = Join-Path $repoRoot $norm
+                if (Test-Path -LiteralPath $full -PathType Leaf) {
+                    try {
+                        $item = Get-Item -LiteralPath $full -ErrorAction Stop
+                        if ($item.Length -le $maxBytes) {
+                            $scanned++
+                            $text = Get-Content -Raw -LiteralPath $full -ErrorAction Stop
+                            foreach ($c in $contentPatterns) {
+                                if ($text -cmatch $c.Rx) { $reason = $c.Why; break }
+                            }
+                        }
+                    } catch { }
+                }
+            }
+        }
+
+        if ($reason) { $findings.Add([pscustomobject]@{ Path = $norm; Reason = $reason }) }
+    }
+    return $findings
 }
 
 # --- v3.5.0: content-level read-only boundary ---
@@ -2580,6 +2674,25 @@ function Invoke-Doctor {
     } else {
         Write-DoctorLine "WARN" "Git working tree has non-local changes after coordination exclusions:"
         foreach ($f in $tree.Files) { Write-Host "      $f" }
+    }
+
+    # v3.6.0: tracked, because a tracked credential file is already one commit from
+    # history, and doctor is the read-only place to say so before that happens.
+    $trackedPaths = @()
+    if ($gitOk) {
+        try {
+            $lsFiles = & git ls-files 2>$null
+            if ($LASTEXITCODE -eq 0) { $trackedPaths = @($lsFiles) }
+        } catch { }
+    }
+    $credentialRisks = @(Get-CredentialRiskPaths -Paths $trackedPaths)
+    if ($credentialRisks.Count -gt 0) {
+        Write-DoctorLine "WARN" "Tracked files look like they carry credentials:"
+        foreach ($risk in $credentialRisks) { Write-Host "      $($risk.Path)  ($($risk.Reason))" }
+        Write-Host "      Git keeps every version, so editing the file later does not remove the value."
+        Write-Host "      Add each to .gitignore, run 'git rm --cached <path>', and rotate anything already committed."
+    } else {
+        Write-DoctorLine "OK" "No tracked file matches a known credential name or token pattern."
     }
 
     $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
@@ -4604,9 +4717,10 @@ function Invoke-ReviewRun {
 
 # Strict verdict parser. Returns @{ Ok; Verdict; Reviewer; Task; Reason; Error }.
 # Fails closed unless the capture contains exactly one well-formed verdict block whose
-# REVIEWER is Codex and whose TASK matches the current Current Task (anti-stale guard).
+# REVIEWER is the bound Reviewer and whose TASK matches the current Current Task
+# (anti-stale guard).
 function Get-VerdictFromCapture {
-    param([string]$Path, [string]$ExpectedTask)
+    param([string]$Path, [string]$ExpectedTask, [string]$BoundReviewer)
     $result = @{ Ok = $false; Verdict = ""; Reviewer = ""; Task = ""; Reason = ""; Error = "" }
     if (-not (Test-Path -LiteralPath $Path)) {
         $result.Error = "No captured verdict file ($ReviewLastName) found. Run 'handoff.ps1 review-run' first to capture a Codex review verdict."
@@ -4638,8 +4752,27 @@ function Get-VerdictFromCapture {
         $result.Error = "VERDICT must be exactly APPROVED or BLOCKED (found: '$verdict')."
         return $result
     }
-    if (-not (Test-SameToolIdentity -First $reviewer -Second "Codex")) {
-        $result.Error = "REVIEWER in the captured verdict must resolve to Codex (found: '$reviewer'). Only captures produced by the Codex Reviewer adapter can be applied."
+    # v3.6.0: compare against the BOUND Reviewer, not the literal string "Codex".
+    #
+    # v3.5.0 announced that this guard had been changed from "must be Codex" to "must be
+    # the bound Reviewer", and called the new form strictly stronger. This code path was
+    # never actually changed. Under a swapped binding it was wrong in both directions at
+    # once: it ACCEPTED a verdict signed by Codex while Claude Code held the Reviewer
+    # role, and it would have REFUSED the legitimate capture the bound Reviewer produced.
+    # Applying a verdict from a tool that does not hold the Reviewer role defeats the one
+    # invariant this protocol exists to enforce - that no agent is the sole reviewer of
+    # its own work.
+    #
+    # The test that was supposed to prove the v3.5.0 claim asserted only a non-zero exit
+    # code. It passed because the fixture's edited role file left the tree dirty and an
+    # unrelated guard failed first. An exit code is not a reason; the check below is
+    # asserted by reason now.
+    if ([string]::IsNullOrWhiteSpace($BoundReviewer)) {
+        $result.Error = "The bound Reviewer could not be resolved from .ai/roles/ROLE_ASSIGNMENT.md, so a captured verdict cannot be attributed to a role. Repair the role binding before applying a verdict."
+        return $result
+    }
+    if (-not (Test-SameToolIdentity -First $reviewer -Second $BoundReviewer)) {
+        $result.Error = "REVIEWER in the captured verdict must be the bound Reviewer '$BoundReviewer' (found: '$reviewer'). A verdict produced by a tool that does not hold the Reviewer role is refused."
         return $result
     }
     if ($task -ne $ExpectedTask) {
@@ -4687,7 +4820,7 @@ function Get-ReviewApplyPlan {
     # v3.5.0: read the role-named capture, falling back to the legacy vendor-named file
     # so an install carrying a verdict written by an earlier version still applies.
     $verdictPath = Resolve-CapturePath -RepoRoot (Get-Location).Path -Preferred $ReviewLastName -Legacy $LegacyReviewLastName
-    $verdict = Get-VerdictFromCapture -Path $verdictPath -ExpectedTask $CurrentTask
+    $verdict = Get-VerdictFromCapture -Path $verdictPath -ExpectedTask $CurrentTask -BoundReviewer $base.BoundReviewer
     return @{ Base = $base; Verdict = $verdict }
 }
 
@@ -5789,6 +5922,15 @@ function Invoke-Cycle {
         foreach ($f in $tree.Files) { Write-Host "  $f" }
         Write-Host ""
         Write-Host "Stop category: Environment/Preflight - not a user decision."
+        $blockRisks = @(Get-CredentialRiskPaths -Paths $tree.Files)
+        if ($blockRisks.Count -gt 0) {
+            Write-Host ""
+            Write-Host "WARNING: some files above look like they carry credentials:"
+            foreach ($risk in $blockRisks) { Write-Host "  $($risk.Path)  ($($risk.Reason))" }
+            Write-Host "Do not clear this stop with a bulk 'git add -A'. Commit only what you intend"
+            Write-Host "and add credential files to .gitignore; a committed token stays in history."
+            Write-Host ""
+        }
         Write-Host "Commit, stash, revert, or remove these files before running $CommandLabel."
         Write-Host ""
         exit 1
@@ -6084,6 +6226,15 @@ function Invoke-Loop {
         foreach ($f in $tree.Files) { Write-Host "  $f" }
         Write-Host ""
         Write-Host "Stop category: Environment/Preflight - not a user decision."
+        $blockRisks = @(Get-CredentialRiskPaths -Paths $tree.Files)
+        if ($blockRisks.Count -gt 0) {
+            Write-Host ""
+            Write-Host "WARNING: some files above look like they carry credentials:"
+            foreach ($risk in $blockRisks) { Write-Host "  $($risk.Path)  ($($risk.Reason))" }
+            Write-Host "Do not clear this stop with a bulk 'git add -A'. Commit only what you intend"
+            Write-Host "and add credential files to .gitignore; a committed token stays in history."
+            Write-Host ""
+        }
         Write-Host "Commit, stash, revert, or remove these files before running loop."
         Write-Host ""
         exit 1
@@ -6353,6 +6504,15 @@ function Invoke-Loop {
             Write-Host "Working tree is not clean (or git is unavailable)."
             foreach ($f in $tree.Files) { Write-Host "  $f" }
             Write-Host "Stop category: Environment/Preflight - not a user decision."
+            $blockRisks = @(Get-CredentialRiskPaths -Paths $tree.Files)
+            if ($blockRisks.Count -gt 0) {
+                Write-Host ""
+                Write-Host "WARNING: some files above look like they carry credentials:"
+                foreach ($risk in $blockRisks) { Write-Host "  $($risk.Path)  ($($risk.Reason))" }
+                Write-Host "Do not clear this stop with a bulk 'git add -A'. Commit only what you intend"
+                Write-Host "and add credential files to .gitignore; a committed token stays in history."
+                Write-Host ""
+            }
             Write-Host "Commit, stash, revert, or remove these files before continuing the loop."
             Write-LoopLog "turn=$turnsRun stop reason=dirty-tree exit=1"
             Write-Host ""

@@ -593,6 +593,66 @@ $invalidVersionFx = New-Fixture -Files $invalidVersionFiles -InitGit
 $r = Invoke-Handoff -WorkDir $invalidVersionFx -Arguments @("doctor")
 Check "doctor fails with exit 10 when VERSION metadata is malformed" (($r.Code -eq 10) -and ($r.Out -match "Protocol VERSION is invalid") -and ($r.Out -match "Doctor result: FAIL"))
 
+# === 4B-2. Credential exposure detector (v3.6.0) ===
+Write-Host "[4B-2] Credential exposure detector"
+
+# The clean-tree gate is what pushed an operator toward `git add -A`, and an agent MCP
+# config holds its token in plain text. These assert the detector fires on a tracked
+# credential file, stays quiet on the template beside it, and does not depend on the
+# secret being a real one.
+# The probe value is assembled at runtime so this repository never contains a
+# literal token-shaped string. A public repo that trips its own detector - or
+# GitHub push protection - would be its own worst advertisement.
+$probeToken = "Bearer " + "sbp" + "_" + "0123456789abcdef0123456789"
+$credFiles = @{}
+foreach ($key in $doctorFiles.Keys) { $credFiles[$key] = $doctorFiles[$key] }
+$credFiles[".mcp.json"] = '{"mcpServers":{"supabase":{"headers":{"Authorization":"' + $probeToken + '"}}}}'
+$credFiles[".mcp.example.json"] = '{"mcpServers":{"supabase":{"headers":{"Authorization":"' + $probeToken + '"}}}}'
+$credFx = New-Fixture -Files $credFiles -InitGit
+Initialize-FixtureGitBaseline -Dir $credFx
+$r = Invoke-Handoff -WorkDir $credFx -Arguments @("doctor")
+Check "doctor warns when a tracked file carries credentials" (($r.Out -match "Tracked files look like they carry credentials") -and ($r.Out -match "\.mcp\.json"))
+Check "doctor names the credential file by why it matched" ($r.Out -match "Claude Code MCP configuration")
+Check "doctor does not flag the .example template beside it" ($r.Out -notmatch "\.mcp\.example\.json")
+Check "the credential warning does not fail doctor" ($r.Out -match "Doctor result: PASS")
+
+# Untracked is not the same risk: the file is not one commit from history, and warning
+# about it would fire on every developer's local .env.
+$untrackedCredFx = New-Fixture -Files $doctorFiles -InitGit
+Initialize-FixtureGitBaseline -Dir $untrackedCredFx
+Set-Content -Path (Join-Path $untrackedCredFx ".mcp.json") -Value ('{"Authorization":"' + $probeToken + '"}') -Encoding utf8
+$r = Invoke-Handoff -WorkDir $untrackedCredFx -Arguments @("doctor")
+Check "doctor does not flag an untracked credential file" ($r.Out -match "No tracked file matches a known credential name")
+
+# The installer must ignore both agent credential files, or the detector is only ever
+# reporting a hole the protocol itself left open.
+$snippetText = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/gitignore-snippet.txt")
+Check "the gitignore snippet ignores the Claude MCP config" ($snippetText -match "(?m)^/\.mcp\.json$")
+Check "the gitignore snippet ignores the Codex MCP config" ($snippetText -match "(?m)^/\.codex/config\.toml$")
+
+# === 4B-3. A role swap must not block its own automation (v3.6.0) ===
+Write-Host "[4B-3] Role swap does not block the turn it enables"
+
+# Swapping roles edits a tracked file. Before v3.6.0 that dirtied the tree, the gate
+# refused the automated turn the swap existed to enable, and clearing it required a
+# commit the user had to approve separately - for a change they had already approved.
+$swapFiles = @{}
+foreach ($key in $doctorFiles.Keys) { $swapFiles[$key] = $doctorFiles[$key] }
+$swapFiles["AI_HANDOFF.md"] = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "swap probe")
+$swapFx = New-Fixture -Files $swapFiles -InitGit
+Initialize-FixtureGitBaseline -Dir $swapFx
+$swapRolePath = Join-Path $swapFx ".ai/roles/ROLE_ASSIGNMENT.md"
+Set-Content -Path $swapRolePath -Value ($DefaultRoles -replace 'Master \| Codex', 'Master | Claude Code') -Encoding utf8
+$r = Invoke-Handoff -WorkDir $swapFx -Arguments @("doctor")
+Check "a swapped role file does not make the tree look dirty" ($r.Out -match "Git working tree clean after local coordination exclusions")
+Check "the role file is not reported as a project change" ($r.Out -notmatch "ROLE_ASSIGNMENT\.md")
+
+# Exempting it from the gate must not exempt it from the read-only boundary: a Master
+# or Reviewer turn still has no business rewriting the binding it is meant to obey.
+$handoffSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the role file joins the list the read-only boundary hashes" ($handoffSource -match 'LocalHandoffFiles \+ @\("\.ai/roles/ROLE_ASSIGNMENT\.md"\)')
+Check "the read-only boundary still hashes every local handoff file" ($handoffSource -match 'foreach \(\$local in \$LocalHandoffFiles\)')
+
 # === 4C. Dynamic model resolver ===
 Write-Host "[4C] Dynamic model resolver"
 $modelRouting = @'
@@ -2887,7 +2947,25 @@ Set-Content -Path (Join-Path $fx ".ai/roles/ROLE_ASSIGNMENT.md") -Value $symRole
 $symWrong = ((Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")) -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
 Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $symWrong -Encoding utf8
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
-Check "a verdict signed by a tool other than the bound Reviewer is refused" ($r.Code -ne 0)
+# v3.6.0: assert the REASON, not just a non-zero exit. This check passed for four
+# releases while the guard it names did nothing: the fixture's edited role file left the
+# tree dirty, an unrelated guard failed first, and the exit code looked right. A capture
+# signed by Codex was in fact being ACCEPTED under a Claude Code Reviewer binding.
+Check "a verdict signed by a tool other than the bound Reviewer is refused" (($r.Code -ne 0) -and ($r.Out -match "must be the bound Reviewer"))
+Check "the refusal names the bound Reviewer and the signer" (($r.Out -match "Claude Code") -and ($r.Out -match "Codex"))
+
+# The inverse half of the same guard: under the swapped binding the capture the bound
+# Reviewer actually produced must be accepted. The old hardcoded form would have
+# refused it, which would have made a swapped Reviewer unable to review at all.
+$rightTask = "v3.6.0 - Bound Reviewer Capture"
+$rightCapture = "VERDICT: APPROVED`nREVIEWER: Claude Code`nTASK: $rightTask`nREASON: produced by the bound Reviewer"
+$fx = New-ReviewApplyFixture -Capture $rightCapture -CurrentTask $rightTask
+Set-Content -Path (Join-Path $fx ".ai/roles/ROLE_ASSIGNMENT.md") -Value $symRoles -Encoding utf8
+$symRight = ((Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")) -replace "- Reviewer: Codex", "- Reviewer: Claude Code") -replace "- Implementer: Claude Code`r?`n", "- Implementer: Codex`n"
+Set-Content -Path (Join-Path $fx "AI_HANDOFF.md") -Value $symRight -Encoding utf8
+$r = Invoke-Handoff -WorkDir $fx -Arguments @("review-apply", "-Yes")
+$h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
+Check "a verdict signed by the bound Reviewer is applied under a swapped binding" (($r.Code -eq 0) -and ($h -match "Verdict:\s+APPROVED"))
 
 # --- The upgrade path adds the new local captures to .gitignore ---
 # A pre-v3.5.0 project already contains the ignore block, so a block-presence check would

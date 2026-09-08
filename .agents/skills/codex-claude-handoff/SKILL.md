@@ -17,7 +17,7 @@ description: >-
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.5.3"
+  version: "3.6.0"
 ---
 
 # Codex-Claude Handoff
