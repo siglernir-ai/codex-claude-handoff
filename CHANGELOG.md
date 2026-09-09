@@ -1,3 +1,39 @@
+## 3.7.0 - A Place To Put What Was Decided
+
+- **The protocol had nowhere to record a decision, so it recorded none.** `AI_HANDOFF.md`
+  holds one live task and `start` archives and replaces it; the Master is told, correctly,
+  not to write advisory answers into task state. With no second destination the cheapest
+  knowledge survived and the most expensive evaporated: a brainstorming session that
+  settled a product's audience, platform, media retention and approval flow left no trace
+  in any file, and the next session - a different tool, a fresh window - searched the
+  project and found only the technical task. `DECISIONS.md` now ships with the protocol.
+  It accumulates, `start` never resets it, and it is tracked by Git, because product
+  decisions belong in the project's history and must be readable by a tool that was not
+  in the room. The Master's entry prompt and `MASTER.md` both carry the duty to append to
+  it when the user confirms something, **including in an advisory turn that never opens a
+  task** - which is the case the file exists for.
+- **An upgrade no longer deletes what the project added to `ROLE_ASSIGNMENT.md`.** The
+  merge rebuilt the file from the template and substituted only the three role rows, so a
+  Role Swap History table - which `ROLE_ASSIGNMENT.md` itself instructs the user to keep
+  ("record what changed, when, and that the user approved it") - was destroyed on every
+  `-Force` upgrade, silently. Three swap histories were reconstructed by hand in one day
+  before anyone noticed. Sections the template does not have are carried across and
+  re-inserted after the section they followed, in both installers.
+- **`work` asks the adapter registry before sending you to copy and paste.** For a turn
+  the registry can run end-to-end - `NEEDS_INVESTIGATION` for a Claude Code Implementer,
+  automated since v3.5.0 - the one command whose whole job is to name the single next
+  action was still printing "open the tool and use the standard handoff prompt". It now
+  names `cycle` for auto-loop-eligible turns and still offers the manual path. The
+  explicit-command adapters are deliberately not promoted over the paste: those drive the
+  Codex CLI, which not every install has.
+- **A test asserts the built Skill package matches `templates/` byte for byte.** v3.5.2
+  shipped a package whose `gitignore-snippet.txt` predated v3.5.0 because the build step
+  was not re-run before the release, and nothing compared the two. A release that forgets
+  to build ships the previous release's content under the new version number.
+- Every fix above is mirrored in the Bash installer and the Bash suite, which grew from
+  28 checks to 32. The v3.6.1 lesson - that a fix touching one shell reintroduces the
+  disagreement the repository already forbids - was applied while writing these, not after.
+
 ## 3.6.1 - Both Shells, One Answer
 
 - **v3.6.0 exempted the role file in PowerShell and not in Bash.** `handoff.ps1` stopped

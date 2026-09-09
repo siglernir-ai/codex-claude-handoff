@@ -215,8 +215,15 @@ cat > "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" <<'EOF'
 | Master | Claude Code |
 | Reviewer | Claude Code |
 | Implementer | Codex |
+
+## Role Swap History
+
+| 2026-09-09 | custom row must survive |
+
 EOF
 printf '%s\n' 'STALE MANAGED SCRIPT' > "$install_target/scripts/handoff.ps1"
+printf '%s
+' '## 2026-09-09 - a durable decision' > "$install_target/DECISIONS.md"
 
 if [ -z "$HASH_TOOL" ]; then
     check "--force state preservation can be verified" 1 "no portable hash tool found"
@@ -242,6 +249,23 @@ else
     ! grep -q "STALE ROLE DOCUMENT" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" && \
         grep -q "The swap is atomic" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md"
     check "--force refreshes role instructions around the preserved binding" $?
+
+    # v3.7.0: the protocol asks the user to record swaps in this file, and --force
+    # rebuilt it from the template, deleting the record. Both installers preserve
+    # unknown sections now; this asserts the Bash one keeps content AND position, and
+    # that it does not duplicate the file while doing it.
+    [ "$(grep -c "^| Master |" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md")" = "1" ]
+    check "--force does not duplicate the role file" $?
+
+    grep -q "custom row must survive" "$install_target/.ai/roles/ROLE_ASSIGNMENT.md"
+    check "--force preserves a section the project added to the role file" $?
+
+    tr -d '' < "$install_target/.ai/roles/ROLE_ASSIGNMENT.md" | tr '
+' ' ' |         grep -q "## Current Binding.*## Role Swap History.*## Role Meanings"
+    check "--force keeps the preserved section in its original position" $?
+
+    [ -f "$install_target/DECISIONS.md" ] && grep -q "a durable decision" "$install_target/DECISIONS.md"
+    check "--force preserves an accumulated decision log" $?
 
     cmp -s "$install_target/scripts/handoff.ps1" "$REPO_ROOT/templates/scripts/handoff.ps1"
     check "--force refreshes stale managed scripts" $?

@@ -137,7 +137,8 @@ while IFS= read -r -d '' src; do
     if ! should_install "$rel"; then
         continue
     fi
-    if $FORCE && { [ "$rel" = "AI_HANDOFF.md" ] || [ "$rel" = "AI_SEQUENCE.md" ]; } && [ -f "$TARGET_PATH/$rel" ]; then
+    # v3.7.0: DECISIONS.md accumulates across tasks; an upgrade must not overwrite it.
+    if $FORCE && { [ "$rel" = "AI_HANDOFF.md" ] || [ "$rel" = "AI_SEQUENCE.md" ] || [ "$rel" = "DECISIONS.md" ]; } && [ -f "$TARGET_PATH/$rel" ]; then
         echo "Preserved local coordination state: $rel"
         continue
     fi
@@ -154,6 +155,77 @@ while IFS= read -r -d '' src; do
             }
             { print }
         ' "$src" > "$role_tmp"
+        # v3.7.0: carry across sections the project added of its own.
+        #
+        # The awk above rebuilds the file from the template and substitutes only the
+        # three role rows, so a Role Swap History table - which the protocol itself
+        # asks the user to keep here - was deleted on every --force upgrade, silently.
+        # Plain shell rather than nested awk: the sections carry real newlines, and a
+        # newline inside an embedded awk string is exactly how the first attempt broke.
+        # PowerShell does the same in Add-PreservedRoleSections; both must agree.
+        if [ -f "$TARGET_PATH/$rel" ]; then
+            _CR=$'\r'   # carriage return, for CRLF files
+            _tmpl_headings="$role_tmp.headings.$$"
+            grep -E '^##[[:space:]]+' "$src" | tr -d "$_CR" | sed -E 's/^##[[:space:]]+//; s/[[:space:]]+$//' > "$_tmpl_headings"
+            _extra_dir="$role_tmp.extra.$$"
+            mkdir -p "$_extra_dir"
+            _cur=""; _anchor=""; _n=0
+            while IFS= read -r _line || [ -n "$_line" ]; do
+                _line="${_line%"$_CR"}"
+                case "$_line" in
+                    "## "*)
+                        _h="${_line#\#\# }"
+                        if grep -Fxq "$_h" "$_tmpl_headings"; then
+                            _anchor="$_h"; _cur=""
+                        else
+                            _n=$((_n + 1)); _cur="$_extra_dir/$_n"
+                            printf '%s
+' "$_anchor" > "$_cur.anchor"
+                            printf '%s
+' "$_line" > "$_cur.body"
+                        fi
+                        ;;
+                    *)
+                        [ -n "$_cur" ] && printf '%s
+' "$_line" >> "$_cur.body"
+                        ;;
+                esac
+            done < "$TARGET_PATH/$rel"
+
+            if [ "$_n" -gt 0 ]; then
+                _merged="$role_tmp.merged.$$"
+                : > "$_merged"
+                _seen=""
+                while IFS= read -r _line || [ -n "$_line" ]; do
+                    _line="${_line%"$_CR"}"
+                    case "$_line" in
+                        "## "*)
+                            if [ -n "$_seen" ]; then
+                                for _i in $(seq 1 "$_n"); do
+                                    [ -f "$_extra_dir/$_i.anchor" ] || continue
+                                    if [ "$(cat "$_extra_dir/$_i.anchor")" = "$_seen" ]; then
+                                        cat "$_extra_dir/$_i.body" >> "$_merged"
+                                        echo "" >> "$_merged"
+                                        rm -f "$_extra_dir/$_i.anchor"
+                                    fi
+                                done
+                            fi
+                            _seen="${_line#\#\# }"
+                            ;;
+                    esac
+                    printf '%s
+' "$_line" >> "$_merged"
+                done < "$role_tmp"
+                for _i in $(seq 1 "$_n"); do
+                    [ -f "$_extra_dir/$_i.anchor" ] || continue
+                    cat "$_extra_dir/$_i.body" >> "$_merged"
+                    echo "" >> "$_merged"
+                done
+                mv -f -- "$_merged" "$role_tmp"
+            fi
+            rm -rf -- "$_extra_dir" "$_tmpl_headings"
+        fi
+
         mv -f -- "$role_tmp" "$TARGET_PATH/$rel"
         echo "Preserved current role binding while refreshing role instructions."
     else

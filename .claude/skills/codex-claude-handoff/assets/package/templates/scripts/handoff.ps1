@@ -2245,10 +2245,42 @@ function Invoke-Work {
         } elseif ($actor -eq "User") {
             Write-Host "Next action: $($entry.Action)"
         } else {
-            Write-Host "Next action: open $actor and use the standard handoff prompt."
-            Write-Host ""
-            Write-Host "Run:"
-            Write-Host "  .\scripts\handoff.ps1 next -Clip"
+            # v3.7.0: ask the adapter registry before recommending the manual path.
+            #
+            # This branch printed "open <tool> and use the standard handoff prompt" for
+            # every non-User actor, without ever consulting ADAPTERS.md. So a state the
+            # registry can run end-to-end - NEEDS_INVESTIGATION for a Claude Code
+            # Implementer, which `cycle` had automated since v3.5.0 - was still sent
+            # through copy-and-paste, by the one command whose whole job is to name the
+            # single next action. The registry is the authority on what is callable;
+            # `work` now reads it instead of assuming.
+            $workAdapter = Resolve-TurnAdapter -ForState $State -Role $role -Tool $actor
+            if ($workAdapter.AutoLoopEligible) {
+                Write-Host "Next action: run the $role turn from here; no copying needed."
+                Write-Host ""
+                Write-Host "Run:"
+                Write-Host "  .\scripts\handoff.ps1 cycle"
+                Write-Host ""
+                Write-Host "It asks for confirmation, runs $actor read-only or write-enabled as the role"
+                Write-Host "requires, and stops after one turn. To paste the prompt manually instead:"
+                Write-Host "  .\scripts\handoff.ps1 next -Clip"
+            } else {
+                # An explicit-command adapter (Master or Reviewer) is deliberately NOT
+                # promoted over the paste. Those commands drive the Codex CLI, which not
+                # every install has, and pasting the prompt into the tool's own window is
+                # the documented primary path. Only the auto-loop case above was wrong:
+                # there the turn genuinely runs from here and `work` was still sending
+                # the operator to copy and paste.
+                Write-Host "Next action: open $actor and use the standard handoff prompt."
+                Write-Host ""
+                Write-Host "Run:"
+                Write-Host "  .\scripts\handoff.ps1 next -Clip"
+                if ($workAdapter.Callable -and $workAdapter.NextStep) {
+                    Write-Host ""
+                    Write-Host "This role also has explicit commands for this state:"
+                    Write-Host "  $($workAdapter.NextStep)"
+                }
+            }
         }
     } else {
         Write-Host "Next action: inspect AI_HANDOFF.md manually; the state is not recognized by this protocol version."
@@ -2998,7 +3030,7 @@ function Invoke-Start {
         }
     }
     $masterTool = Resolve-Actor -Role "Master" -Binding $Binding
-    $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
+    $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md - but append any decision the user confirms during that conversation to DECISIONS.md, which accumulates across tasks and is never reset by start.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 
     Write-Host ""
     Write-Host "=== Master Entry Prompt (open: $masterTool) ==="

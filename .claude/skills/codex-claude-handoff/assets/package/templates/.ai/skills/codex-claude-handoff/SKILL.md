@@ -93,6 +93,7 @@ When this protocol is active, expect these files in the project root:
 - `AGENTS.md` - project context plus the Master + Reviewer protocol (read by the tool that follows the AGENTS.md convention)
 - `CLAUDE.md` - the operational entry file for Claude Code (resolves its role)
 - `AI_HANDOFF.md` - current state, which role acts next, changed files, verification, risks, and next step
+- `DECISIONS.md` - durable record of decisions the user confirmed (since v3.7.0). Accumulates across tasks, never reset by `start`, and tracked by Git. `AI_HANDOFF.md` is the source of truth for the live task; this file is the source of truth for what the product is.
 - `AI_SEQUENCE.md` - local multi-task ordering artifact (since v0.18.1): ordered task list, per-task status, release checkpoints. Local, gitignored, never committed; see `PROTOCOL_METHOD.md`
 - `.ai/skills/codex-claude-handoff/ADAPTERS.md` - adapter registry for callable/manual automation status (since v0.19.0)
 - `.ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md` - Claude execution policy and continuity evidence (since v2.3.0)

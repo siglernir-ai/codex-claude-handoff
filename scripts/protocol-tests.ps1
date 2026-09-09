@@ -661,6 +661,85 @@ $shSource = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
 Check "the Bash exclusion list exempts the role file too" ($shSource -match 'LOCAL_IGNORED="[^"]*\.ai/roles/ROLE_ASSIGNMENT\.md')
 Check "Bash commit-check warns about tracked credential files" (($shSource -match '_warn_credential_paths\(\)') -and ($shSource -match 'cmd_commit_check\(\) \{[^}]*_warn_credential_paths'))
 
+# === 4B-4. The shipped package matches the templates it was built from (v3.7.0) ===
+Write-Host "[4B-4] Package freshness"
+
+# v3.5.2 shipped a package whose gitignore-snippet.txt still lacked the seven role-named
+# capture files v3.5.0 introduced: build-skill-package.ps1 had not been re-run before the
+# release. Installing from the repository was fine, installing from the Skill package was
+# not, and nothing compared the two. A release that forgets the build step ships the
+# previous release's content under the new version number.
+$pkgRoots = @(".agents/skills/codex-claude-handoff/assets/package/templates",
+              ".claude/skills/codex-claude-handoff/assets/package/templates")
+$templateRootForPkg = Join-Path $RepoRoot "templates"
+$excludedFromPackage = @("scripts/protocol-tests.ps1", "scripts/protocol-tests.sh")
+$pkgStale = [System.Collections.Generic.List[string]]::new()
+foreach ($pkgRel in $pkgRoots) {
+    $pkgRoot = Join-Path $RepoRoot $pkgRel
+    if (-not (Test-Path -LiteralPath $pkgRoot)) { $pkgStale.Add("missing package root: $pkgRel"); continue }
+    foreach ($srcFile in (Get-ChildItem -LiteralPath $templateRootForPkg -Recurse -File -Force)) {
+        $rel = $srcFile.FullName.Substring($templateRootForPkg.Length).TrimStart([char]92, [char]47).Replace([char]92, [char]47)
+        if ($excludedFromPackage -contains $rel) { continue }
+        $dest = Join-Path $pkgRoot $rel
+        if (-not (Test-Path -LiteralPath $dest)) { $pkgStale.Add("$pkgRel/$rel is missing"); continue }
+        $a = (Get-FileHash -Algorithm SHA256 -LiteralPath $srcFile.FullName).Hash
+        $b = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash
+        if ($a -ne $b) { $pkgStale.Add("$pkgRel/$rel differs from templates/$rel") }
+    }
+}
+Check "the built Skill package matches templates/ byte for byte" ($pkgStale.Count -eq 0) ($pkgStale -join "; ")
+Check "the excluded test harness is genuinely absent from the package" (-not (Test-Path -LiteralPath (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/assets/package/templates/scripts/protocol-tests.ps1")))
+
+# === 4B-5. The decision log survives what AI_HANDOFF.md does not (v3.7.0) ===
+Write-Host "[4B-5] Durable decision log"
+
+# The protocol tells the Master not to write advisory answers into AI_HANDOFF.md, and
+# start archives and replaces that file for every new task. With no second destination,
+# a brainstorming session that settled the product's audience, platform and data
+# retention left no trace anywhere - which is exactly what happened to a real user.
+$decisionsTemplate = Join-Path $RepoRoot "templates/DECISIONS.md"
+Check "a DECISIONS.md template ships with the protocol" (Test-Path -LiteralPath $decisionsTemplate)
+$decisionsText = if (Test-Path -LiteralPath $decisionsTemplate) { Get-Content -Raw -LiteralPath $decisionsTemplate } else { "" }
+Check "the decision log states that it accumulates and is never reset" (($decisionsText -match "accumulates") -and ($decisionsText -match "(?is)nothing\s+here\s+is\s+reset") -and ($decisionsText -match "(?is)never\s+reset\s+by\s+.start."))
+Check "the decision log refuses unconfirmed suggestions by rule" ($decisionsText -match "(?i)suggestion, a recommendation, or an option that was raised and not chosen")
+
+# It must be tracked: a gitignored decision log is invisible to everyone but this machine.
+$snippetForDecisions = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/gitignore-snippet.txt")
+Check "the decision log is NOT gitignored" ($snippetForDecisions -notmatch "(?m)^/DECISIONS\.md$")
+
+# The advisory branch of the Master prompt is the one that used to end in silence.
+$handoffForDecisions = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the Master prompt sends confirmed advisory decisions to DECISIONS.md" ($handoffForDecisions -match "advisory-only, answer directly and do not update AI_HANDOFF\.md - but append any decision the user confirms")
+$masterDoc = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/MASTER.md")
+Check "MASTER.md states the duty to record confirmed decisions" (($masterDoc -match "## Recording Confirmed Decisions") -and ($masterDoc -match "including in an\s*\r?\n?advisory conversation"))
+
+# An upgrade must never overwrite an accumulated log, in either installer.
+$installPs = Get-Content -Raw -Path (Join-Path $RepoRoot "install.ps1")
+$installSh = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/install.sh")
+Check "install.ps1 preserves an existing decision log on -Force" ($installPs -match '\$preserveOnForceFiles = @\("AI_HANDOFF\.md", "AI_SEQUENCE\.md", "DECISIONS\.md"\)')
+Check "install.sh preserves an existing decision log on --force" ($installSh -match '\$rel" = "DECISIONS\.md"')
+
+# End to end: install, record a decision, force-upgrade, and the decision is still there.
+# Asserting the two source lists above is not enough - preserve-on-force is exactly the
+# kind of rule that reads correct and behaves otherwise.
+$decTarget = Join-Path $FixtureRoot "decision-log-target"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $decTarget 2>&1
+Check "a fresh install creates the decision log" (Test-Path -LiteralPath (Join-Path $decTarget "DECISIONS.md"))
+Set-Content -Path (Join-Path $decTarget "DECISIONS.md") -Value "## 2026-09-09 - Mobile first, web and PWA only" -Encoding utf8
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $decTarget -Force 2>&1
+$decAfter = if (Test-Path -LiteralPath (Join-Path $decTarget "DECISIONS.md")) { Get-Content -Raw -Path (Join-Path $decTarget "DECISIONS.md") } else { "" }
+Check "a -Force upgrade does not overwrite recorded decisions" ($decAfter -match "Mobile first, web and PWA only")
+
+# The same guarantee for a section the project added to the role file by hand. The
+# protocol asks the user to record swaps there, and the installer used to delete them.
+$roleFxPath = Join-Path $decTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+$roleBefore = Get-Content -Raw -Path $roleFxPath
+Set-Content -Path $roleFxPath -Value ($roleBefore -replace "The User is always the approval point", "## Role Swap History`n`n| 2026-09-09 | swapped for token limits |`n`nThe User is always the approval point") -Encoding utf8
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $decTarget -Force 2>&1
+$roleAfter = Get-Content -Raw -Path $roleFxPath
+Check "a -Force upgrade preserves sections the project added to the role file" (($roleAfter -match "## Role Swap History") -and ($roleAfter -match "swapped for token limits"))
+Check "the preserved section keeps its position, not appended at the end" ($roleAfter -match "(?s)## Current Binding.*## Role Swap History.*## Role Meanings")
+
 # === 4C. Dynamic model resolver ===
 Write-Host "[4C] Dynamic model resolver"
 $modelRouting = @'

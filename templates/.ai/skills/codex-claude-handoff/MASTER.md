@@ -463,6 +463,24 @@ Use these states consistently:
 - BLOCKED
 - WAITING_FOR_USER
 
+## Recording Confirmed Decisions
+
+Append to `DECISIONS.md` whenever the user confirms a decision, **including in an
+advisory conversation that never opens a task**. That is the case this rule exists for:
+advisory turns are told not to touch `AI_HANDOFF.md`, and without a second destination
+the most valuable output of the protocol - who the product is for, what platform it
+targets, what happens to a user's data - is spoken once and lost.
+
+- Record only what the user **confirmed**, in their terms. A recommendation you made and
+  they did not answer is not a decision.
+- Append; never rewrite. A decision that replaced an earlier one is recorded as a new
+  entry with the earlier one marked superseded, because a reversal is itself knowledge.
+- `DECISIONS.md` accumulates and is never reset by `start`. `AI_HANDOFF.md` remains the
+  source of truth for the live task; `DECISIONS.md` is the source of truth for what the
+  product is. When they disagree on a product decision, the more recent dated entry wins.
+- It is tracked by Git, unlike the local coordination files. Product decisions belong in
+  the project's history and must be readable by a tool that was not in the room.
+
 ## Scope Discipline
 
 Keep the handoff tight:

@@ -29,15 +29,83 @@ function Get-InstalledRoleBinding {
     return $binding
 }
 
+# v3.7.0: an upgrade must not delete what the project added to this file.
+#
+# The merge below builds the new file from the template and substitutes only the three
+# role rows, so any section the project added of its own - a Role Swap History table, a
+# note explaining why a binding was chosen - disappeared on the next -Force upgrade,
+# with no warning and no copy kept. The protocol asks the user to record a swap here
+# ("record what changed, when, and that the user approved it") and the installer then
+# deleted the record. Three swap histories were reconstructed by hand in one day before
+# this was noticed.
+#
+# Sections whose heading the template does not have are carried across and re-inserted
+# after the section they followed, so their position survives too. A section the
+# template owns is still refreshed from the template - that is what -Force is for.
+function Get-MarkdownSectionMap {
+    param([string]$Content)
+    $order = [System.Collections.Generic.List[string]]::new()
+    $bodies = @{}
+    $current = $null
+    $buffer = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($Content -split "`r?`n")) {
+        if ($line -match '^##\s+(.+?)\s*$') {
+            if ($null -ne $current) { $bodies[$current] = ($buffer -join "`n") }
+            $current = $Matches[1]
+            $order.Add($current)
+            $buffer = [System.Collections.Generic.List[string]]::new()
+            $buffer.Add($line)
+        } else {
+            $buffer.Add($line)
+        }
+    }
+    if ($null -ne $current) { $bodies[$current] = ($buffer -join "`n") }
+    return @{ Order = $order; Bodies = $bodies }
+}
+
+function Add-PreservedRoleSections {
+    param([string]$MergedContent, [string]$ExistingContent)
+    if ([string]::IsNullOrWhiteSpace($ExistingContent)) { return $MergedContent }
+    $existing = Get-MarkdownSectionMap -Content $ExistingContent
+    $merged   = Get-MarkdownSectionMap -Content $MergedContent
+    $extra = @($existing.Order | Where-Object { -not $merged.Bodies.ContainsKey($_) })
+    if ($extra.Count -eq 0) { return $MergedContent }
+
+    $lines = @($MergedContent -split "`r?`n")
+    foreach ($heading in $extra) {
+        $idx = $existing.Order.IndexOf($heading)
+        $anchor = $null
+        for ($i = $idx - 1; $i -ge 0; $i--) {
+            if ($merged.Bodies.ContainsKey($existing.Order[$i])) { $anchor = $existing.Order[$i]; break }
+        }
+        $block = @($existing.Bodies[$heading] -split "`n")
+        while ($block.Count -gt 0 -and [string]::IsNullOrWhiteSpace($block[-1])) { $block = $block[0..($block.Count - 2)] }
+        $insertAt = $lines.Count
+        if ($anchor) {
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match ('^##\s+' + [regex]::Escape($anchor) + '\s*$')) {
+                    $insertAt = $i + 1
+                    while ($insertAt -lt $lines.Count -and $lines[$insertAt] -notmatch '^##\s') { $insertAt++ }
+                    break
+                }
+            }
+        }
+        $head = if ($insertAt -gt 0) { $lines[0..($insertAt - 1)] } else { @() }
+        $tail = if ($insertAt -lt $lines.Count) { $lines[$insertAt..($lines.Count - 1)] } else { @() }
+        $lines = @($head) + @($block) + @("") + @($tail)
+    }
+    return ($lines -join "`r`n")
+}
 function Get-MergedRoleAssignmentContent {
-    param([string]$TemplatePath, [hashtable]$Binding)
+    param([string]$TemplatePath, [hashtable]$Binding, [string]$InstalledPath)
     $content = Get-Content -Raw -LiteralPath $TemplatePath
     foreach ($role in @('Master', 'Reviewer', 'Implementer')) {
         $pattern = '(?m)^\|\s*' + [regex]::Escape($role) + '\s*\|\s*.+?\s*\|\s*$'
         $replacement = "| $role | $($Binding[$role]) |"
         $content = [regex]::Replace($content, $pattern, $replacement)
     }
-    return $content
+    $existingRoleContent = if ($InstalledPath -and (Test-Path -LiteralPath $InstalledPath)) { Get-Content -Raw -LiteralPath $InstalledPath } else { "" }
+    return (Add-PreservedRoleSections -MergedContent $content -ExistingContent $existingRoleContent)
 }
 
 if (-not (Test-Path -LiteralPath $templateRoot)) {
@@ -65,7 +133,10 @@ $alwaysOnFiles = @("AGENTS.md", "CLAUDE.md")
 
 # Run update validation before any operation that can mutate the target. An invalid
 # existing role file must fail closed without removing or copying anything.
-$preserveOnForceFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md")
+# v3.7.0: DECISIONS.md accumulates across tasks and must survive an upgrade for the
+# same reason AI_HANDOFF.md does - overwriting it would destroy the only record of
+# what the product is, which no commit message reconstructs.
+$preserveOnForceFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "DECISIONS.md")
 $roleAssignmentRelative = ".ai\roles\ROLE_ASSIGNMENT.md"
 $installedRolePath = Join-Path $targetRoot $roleAssignmentRelative
 $preservedRoleBinding = $null
@@ -150,7 +221,7 @@ foreach ($file in $installFiles) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     if ($file.Relative -eq $roleAssignmentRelative -and $preservedRoleBinding) {
-        $mergedRoleContent = Get-MergedRoleAssignmentContent -TemplatePath $file.Source -Binding $preservedRoleBinding
+        $mergedRoleContent = Get-MergedRoleAssignmentContent -TemplatePath $file.Source -Binding $preservedRoleBinding -InstalledPath $installedRolePath
         $tempRolePath = "$dest.update-$([guid]::NewGuid().ToString('N'))"
         $backupRolePath = "$dest.backup-$([guid]::NewGuid().ToString('N'))"
         try {
