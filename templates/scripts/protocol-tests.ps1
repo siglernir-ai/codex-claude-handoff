@@ -1073,6 +1073,16 @@ $extractedSecurity = if ($extractedPackage) { Join-Path $extractedPackage.FullNa
 $extractedModelGuidance = if ($extractedPackage) { Join-Path $extractedPackage.FullName "MODEL_GUIDANCE.md" } else { "" }
 $extractedLicense = if ($extractedPackage) { Join-Path $extractedPackage.FullName "LICENSE" } else { "" }
 Check "release ZIP contains an installer and excludes package-development tests" ((Test-Path $extractedInstall) -and (-not (Test-Path $extractedProtocolTests)))
+
+# The ZIP is built from the working tree, and a Windows clone with core.autocrlf=true
+# checks shell scripts out as CRLF - which Bash on macOS/Linux refuses to run. It has
+# happened twice. .gitattributes pins *.sh to LF; this checks the bytes that ship.
+$extractedHandoffSh = if ($extractedPackage) { Join-Path $extractedPackage.FullName "templates/scripts/handoff.sh" } else { "" }
+$shippedShBytes = if ($extractedHandoffSh -and (Test-Path -LiteralPath $extractedHandoffSh)) { [System.IO.File]::ReadAllBytes($extractedHandoffSh) } else { $null }
+Check "the release ZIP ships handoff.sh with LF line endings" (($null -ne $shippedShBytes) -and ($shippedShBytes.Length -gt 0) -and (-not ($shippedShBytes -contains 13)))
+$gitattributesPath = Join-Path $RepoRoot ".gitattributes"
+$gitattributesText = if (Test-Path -LiteralPath $gitattributesPath) { Get-Content -Raw -LiteralPath $gitattributesPath } else { "" }
+Check ".gitattributes pins shell scripts to LF" ($gitattributesText -match '(?m)^\*\.sh\s+text\s+eol=lf\s*$')
 Check "release ZIP contains publication guidance and license" ((Test-Path $extractedPublishing) -and (Test-Path $extractedSecurity) -and (Test-Path $extractedModelGuidance) -and (Test-Path $extractedLicense))
 
 $packagedInstallTarget = Join-Path $FixtureRoot "packaged-install-target"

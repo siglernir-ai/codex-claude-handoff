@@ -1,0 +1,4 @@
+# Shell scripts run under Bash on macOS/Linux and must keep LF line endings, even
+# in a Windows clone with core.autocrlf=true. The release package is built from the
+# working tree, so the line endings of the checkout are the line endings that ship.
+*.sh text eol=lf

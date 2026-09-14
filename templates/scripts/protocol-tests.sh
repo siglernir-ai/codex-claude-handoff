@@ -326,6 +326,20 @@ if [ -d "$can" ]; then
     check "canonical/template .ai skill files match" $ok
 fi
 
+# Shell scripts must keep LF: a Windows clone with core.autocrlf=true checks them out as
+# CRLF, and the release package is built from the working tree.
+grep -Eq '^\*\.sh[[:space:]]+text[[:space:]]+eol=lf[[:space:]]*$' "$REPO_ROOT/.gitattributes" 2>/dev/null
+check ".gitattributes pins shell scripts to LF" $?
+cr_files=""
+for f in scripts/handoff.sh scripts/install.sh templates/scripts/handoff.sh \
+         .agents/skills/codex-claude-handoff/assets/package/templates/scripts/handoff.sh \
+         .agents/skills/codex-claude-handoff/scripts/setup.sh; do
+    [ -f "$REPO_ROOT/$f" ] || continue
+    if [ "$(tr -cd '\r' < "$REPO_ROOT/$f" | wc -c)" -gt 0 ]; then cr_files="$cr_files $f"; fi
+done
+[ -z "$cr_files" ]
+check "shell scripts in the working tree have LF line endings" $? "CRLF in:$cr_files"
+
 # --- v3.4.3: execute the Bash exact-scope parser against a real repository ----------
 # Until now the Bash parser was covered only by source-level assertions inside the
 # PowerShell suite: nobody ran it. It carries the same exact-scope semantics as
