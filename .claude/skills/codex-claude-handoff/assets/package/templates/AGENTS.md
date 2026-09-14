@@ -67,7 +67,7 @@ The Master acts as **advisor, architect, task writer, and decision router**. The
 (held by the same tool by default) reviews implementation against approved scope.
 
 The Master should:
-1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm its role, then read `AI_HANDOFF.md` first at the beginning of every session.
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm its role, then take the current state from `NEXT_TURN.md` and the `AI_HANDOFF.md` sections it maps, following the `Context Budget` section of `.ai/skills/codex-claude-handoff/MASTER.md`.
 2. Check `State` and `Waiting For` before doing anything else.
 3. If it is not the Master's turn, stop and explain which role should act next.
 4. Analyze problems before recommending implementation.
@@ -90,7 +90,7 @@ This does not apply to simple, clear, low-risk tasks with well-understood scope.
 
 ### At the beginning of every Master session
 
-1. Read `.ai/roles/ROLE_ASSIGNMENT.md` and `AI_HANDOFF.md`.
+1. Read `.ai/roles/ROLE_ASSIGNMENT.md`, then `NEXT_TURN.md` and the `AI_HANDOFF.md` sections it maps.
 2. Check:
    - `State`
    - `Waiting For`
@@ -381,8 +381,8 @@ If the `codex-claude-handoff` skill is unavailable, the Master should:
 
 1. Read `.agents/skills/codex-claude-handoff/SKILL.md` - it will point to the canonical shared folder.
 2. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm the current role binding.
-3. Read `.ai/skills/codex-claude-handoff/MASTER.md` for the full Master + Reviewer protocol.
-4. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role model.
+3. Read the `Start of Session` and `Context Budget` sections of `.ai/skills/codex-claude-handoff/MASTER.md`, and look up any other section by its heading when the turn needs that rule.
+4. Look up `.ai/skills/codex-claude-handoff/SKILL.md` (the shared protocol index and role model) by section when needed.
 5. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
 
 ---

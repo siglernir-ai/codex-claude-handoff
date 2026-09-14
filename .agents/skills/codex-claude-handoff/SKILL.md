@@ -17,7 +17,7 @@ description: >-
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.7.0"
+  version: "3.8.0"
 ---
 
 # Codex-Claude Handoff
@@ -82,10 +82,16 @@ If it is missing:
 When the canonical protocol exists:
 
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` and confirm the current role.
-2. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index.
-3. Read `.ai/skills/codex-claude-handoff/CODEX.md` when acting as Codex, or
-   `.ai/skills/codex-claude-handoff/CLAUDE.md` when acting as Claude Code.
-4. Read `AI_HANDOFF.md` and continue according to its current state.
+2. Read `.ai/skills/codex-claude-handoff/CODEX.md` when acting as Codex, or
+   `.ai/skills/codex-claude-handoff/CLAUDE.md` when acting as Claude Code. Both are
+   short pointers to the role file.
+3. Run `scripts/handoff.ps1 next` (`scripts/handoff.sh next` on macOS/Linux), then
+   take the current state from `NEXT_TURN.md` and the `AI_HANDOFF.md` sections it
+   maps, and continue according to that state.
+4. As Master or Reviewer, follow the `Context Budget` section of
+   `.ai/skills/codex-claude-handoff/MASTER.md`: look protocol rules up by section
+   heading instead of reading the protocol documents in full, and delegate
+   repository investigation to the Implementer.
 
 The default binding is Codex as Master + Reviewer and Claude Code as Implementer.
 Do not change the binding without explicit user approval. After an approved role

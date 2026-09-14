@@ -76,6 +76,8 @@ When `State: NEEDS_INVESTIGATION` and `Waiting For: Implementer`:
   - Likely files to change and why.
   - Likely implementation approach based on existing codebase patterns.
   - Risks and recommended next step.
+- Keep the report bounded, about 800 words: the Reviewer reads it on its own context
+  budget. Cite `file:line` instead of pasting code or command output.
 - Set `State: READY_FOR_REVIEW` and `Waiting For: Reviewer`.
 
 ## Planning Mode

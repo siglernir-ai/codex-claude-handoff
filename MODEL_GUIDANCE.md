@@ -70,6 +70,23 @@ Run `.\scripts\handoff.ps1 models` to see the effective profile, concrete model,
 and resolution source. Updating a provider model requires changing one local
 mapping value, not editing the protocol.
 
+## The Master's Own Cost
+
+The profiles above control what the Claude Implementer costs. What the Master costs
+depends on two other things, and `MODEL_ROUTING.json` sets neither:
+
+1. **The Master's model.** Route, delegate, and review ordinary turns with the host's
+   standard model at low or medium effort. Switch to the strongest model only for a
+   high-value review pass. In one measured Codex session the strongest model used up
+   a five-hour usage window about five times faster than the standard model on the
+   same volume of input.
+2. **The size of the Master's context.** Every tool call resends the conversation, so
+   ten small reads of a large context cost more than one focused read. Follow the
+   `Context Budget` section of `MASTER.md`: take state from `NEXT_TURN.md` and the
+   `AI_HANDOFF.md` sections it maps, look protocol rules up by heading, delegate
+   repository investigation to the Implementer, and start a fresh window for each
+   protocol turn.
+
 ## Operator Rule
 
 If token or credit budget is low, stop new feature work and spend the remaining

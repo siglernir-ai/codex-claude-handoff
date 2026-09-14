@@ -47,6 +47,15 @@ if ($env:OS -eq "Windows_NT") {
     }
 }
 
+# v3.8.0: the suite must test the code, not the machine. MODEL_GUIDANCE.md tells users to
+# activate model routing with HANDOFF_CLAUDE_MODEL_<PROFILE> environment variables, and a
+# user who did exactly that saw ten resolver checks fail on a clean checkout, because the
+# fixtures expect no override. Clear them for this process only; the tests that exercise
+# an override set their own value and restore it.
+Get-ChildItem Env: | Where-Object { $_.Name -match '^HANDOFF_CLAUDE_MODEL_' } | ForEach-Object {
+    [System.Environment]::SetEnvironmentVariable($_.Name, $null, "Process")
+}
+
 # --- Resolve repo paths (this script lives in scripts/) ---
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot    = Split-Path -Parent $ScriptDir
@@ -739,6 +748,125 @@ $null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot
 $roleAfter = Get-Content -Raw -Path $roleFxPath
 Check "a -Force upgrade preserves sections the project added to the role file" (($roleAfter -match "## Role Swap History") -and ($roleAfter -match "swapped for token limits"))
 Check "the preserved section keeps its position, not appended at the end" ($roleAfter -match "(?s)## Current Binding.*## Role Swap History.*## Role Meanings")
+
+# === 4B-6. The Master's entry path stays inside a context budget (v3.8.0) ===
+Write-Host "[4B-6] Master context budget"
+
+# A real Master session spent about 40,000 tokens - 17% of a five-hour usage window -
+# loading this protocol before doing any work. The window entry path said "Always read
+# SKILL.md", the index listed every document, and the agent read all of them, then
+# carried that weight on every later tool call. The automated Master prompt had been
+# lean since v2.0.1; the path a person actually drives had not. So this measures what the
+# entry files TELL the agent to read in full, resolved to the files that ship - not a
+# convenient proxy such as the size of one document.
+function Get-DocSection {
+    param([string]$Path, [string]$Heading)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $inside = $false
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        if ($line -match '^## ') {
+            if ($inside) { break }
+            if ($line.Trim() -eq "## $Heading") { $inside = $true; continue }
+        }
+        if ($inside) { $out.Add($line) }
+    }
+    return ,$out.ToArray()
+}
+
+function Get-NumberedSteps {
+    param([string[]]$Lines)
+    $steps = [System.Collections.Generic.List[string]]::new()
+    $current = $null
+    foreach ($line in $Lines) {
+        if ($line -match '^\s*\d+\.\s+(.*)$') {
+            if ($null -ne $current) { $steps.Add($current) }
+            $current = $Matches[1]
+        } elseif (($null -ne $current) -and ($line -match '^\s{2,}\S')) {
+            $current = "$current $($line.Trim())"
+        } else {
+            if ($null -ne $current) { $steps.Add($current) }
+            $current = $null
+        }
+    }
+    if ($null -ne $current) { $steps.Add($current) }
+    return ,$steps.ToArray()
+}
+
+$budgetTplRoot = Join-Path $RepoRoot "templates"
+$budgetSkillDir = Join-Path $budgetTplRoot ".ai/skills/codex-claude-handoff"
+$budgetMaster = Join-Path $budgetSkillDir "MASTER.md"
+$entrySources = @(
+    @{ Name = "templates Skill Installed workflow"; Lines = (Get-DocSection -Path (Join-Path $budgetTplRoot ".agents/skills/codex-claude-handoff/SKILL.md") -Heading "Installed workflow") },
+    @{ Name = "public Skill Installed workflow"; Lines = (Get-DocSection -Path (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/SKILL.md") -Heading "Installed workflow") },
+    @{ Name = "CODEX.md"; Lines = @(Get-Content -LiteralPath (Join-Path $budgetSkillDir "CODEX.md")) },
+    @{ Name = "MASTER.md Start of Session"; Lines = (Get-DocSection -Path $budgetMaster -Heading "Start of Session") }
+)
+$entrySteps = [System.Collections.Generic.List[object]]::new()
+foreach ($src in $entrySources) {
+    $srcSteps = Get-NumberedSteps -Lines $src.Lines
+    Check "$($src.Name) has numbered entry steps to measure" ($srcSteps.Count -gt 0)
+    foreach ($s in $srcSteps) { $entrySteps.Add([pscustomobject]@{ Source = $src.Name; Text = $s }) }
+}
+
+# A step reads a file in full when it says read/follow and names the file without
+# narrowing it to a section or making it conditional.
+$narrowing = '(?i)\bsections?\b|\blook\b.*\bup\b|only as needed|if present|when needed'
+$heavyDocs = @("MASTER.md", "ADAPTERS.md", "PROTOCOL_METHOD.md", "CAPABILITIES.md", "CLAUDE_EXECUTION_POLICY.md")
+$fullReadFiles = [System.Collections.Generic.List[string]]::new()
+$heavyViolations = [System.Collections.Generic.List[string]]::new()
+foreach ($step in $entrySteps) {
+    if ($step.Text -notmatch '(?i)\b(read|follow)\b') { continue }
+    if ($step.Text -match $narrowing) { continue }
+    foreach ($m in [regex]::Matches($step.Text, '`([^`\s]+\.md)`')) {
+        $named = $m.Groups[1].Value
+        $leaf = Split-Path -Leaf $named
+        $isSharedIndex = ($named -match '(^|/)\.ai/skills/codex-claude-handoff/SKILL\.md$') -or (($step.Source -eq "CODEX.md") -and ($named -eq "SKILL.md"))
+        if (($heavyDocs -contains $leaf) -or $isSharedIndex) { $heavyViolations.Add("$($step.Source): $named") }
+        if (-not $fullReadFiles.Contains($named)) { $fullReadFiles.Add($named) }
+    }
+}
+Check "no Codex entry step reads a heavy protocol document or the shared index in full" ($heavyViolations.Count -eq 0) ($heavyViolations -join "; ")
+
+$fullReadBytes = 0
+foreach ($named in $fullReadFiles) {
+    $hit = @((Join-Path $budgetTplRoot $named), (Join-Path $budgetSkillDir $named)) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if ($hit) { $fullReadBytes += (Get-Item -LiteralPath $hit).Length }
+}
+$budgetSectionText = ((Get-DocSection -Path $budgetMaster -Heading "Start of Session") + (Get-DocSection -Path $budgetMaster -Heading "Context Budget")) -join "`n"
+$budgetSectionBytes = [System.Text.Encoding]::UTF8.GetByteCount($budgetSectionText)
+Check "the Master's mandatory reads fit about 6,000 tokens (24 KB)" (($fullReadBytes + $budgetSectionBytes) -le 24KB) "full reads $fullReadBytes bytes ($($fullReadFiles -join ', ')) + budget sections $budgetSectionBytes bytes"
+
+$contextBudgetText = (Get-DocSection -Path $budgetMaster -Heading "Context Budget") -join "`n"
+Check "MASTER.md defines a Context Budget section" ($contextBudgetText.Length -gt 0)
+Check "the Context Budget delegates investigation and bounds tool output" (($contextBudgetText -match "Delegate reading") -and ($contextBudgetText -match "NEEDS_INVESTIGATION") -and ($contextBudgetText -match "Bounded tool output"))
+Check "the Context Budget never relaxes a safety gate" ($contextBudgetText -match "never relaxes a safety gate")
+foreach ($pointer in @("templates/.agents/skills/codex-claude-handoff/SKILL.md", ".agents/skills/codex-claude-handoff/SKILL.md", "templates/.ai/skills/codex-claude-handoff/CODEX.md")) {
+    Check "$pointer points the Master at the Context Budget" ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot $pointer)) -match "Context Budget")
+}
+$budgetHandoffPs = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts/handoff.ps1")
+$budgetHandoffSh = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts/handoff.sh")
+Check "the start Master prompt carries the Context Budget in both shells" (($budgetHandoffPs -match "follow the Context Budget in MASTER\.md") -and ($budgetHandoffSh -match "follow the Context Budget in MASTER\.md"))
+Check "an Implementer investigation report is bounded" ((Get-Content -Raw -LiteralPath (Join-Path $budgetSkillDir "IMPLEMENTER.md")) -match "about 800 words")
+
+# The map is only useful if its numbers are right: check each entry against the file.
+$mapFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "context budget map");
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles
+} -InitGit
+$r = Invoke-Handoff -WorkDir $mapFx -Arguments @("next")
+$mapNextTurn = Join-Path $mapFx "NEXT_TURN.md"
+$mapText = if (Test-Path -LiteralPath $mapNextTurn) { Get-Content -Raw -LiteralPath $mapNextTurn } else { "" }
+$mapHandoffLines = @(Get-Content -LiteralPath (Join-Path $mapFx "AI_HANDOFF.md"))
+$mapEntries = @([regex]::Matches($mapText, '(?m)^- line (\d+): (## [^\r\n]+?)\s*$'))
+$mapAccurate = ($mapEntries.Count -gt 0)
+foreach ($entry in $mapEntries) {
+    $lineNo = [int]$entry.Groups[1].Value
+    if (($lineNo -lt 1) -or ($lineNo -gt $mapHandoffLines.Count) -or ($mapHandoffLines[$lineNo - 1].TrimEnd() -ne $entry.Groups[2].Value)) { $mapAccurate = $false }
+}
+$mapExpected = @($mapHandoffLines | Where-Object { $_ -match '^## ' }).Count
+Check "next writes a section map of AI_HANDOFF.md into NEXT_TURN.md" ($mapText -match "## AI_HANDOFF\.md Sections \(line numbers\)") $r.Out
+Check "every mapped line number points at that heading in AI_HANDOFF.md" $mapAccurate
+Check "the section map lists every heading, not a subset" ($mapEntries.Count -eq $mapExpected) "mapped $($mapEntries.Count) of $mapExpected"
 
 # === 4C. Dynamic model resolver ===
 Write-Host "[4C] Dynamic model resolver"

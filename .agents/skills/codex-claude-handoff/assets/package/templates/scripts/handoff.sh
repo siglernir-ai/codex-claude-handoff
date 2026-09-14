@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.7.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.8.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -312,13 +312,18 @@ $cf"
     local timestamp; timestamp=$(date '+%Y-%m-%dT%H:%M:%S')
     local nt_path; nt_path="$(pwd)/NEXT_TURN.md"
 
+    # v3.8.0: a line-numbered map of AI_HANDOFF.md, so the next actor reads the sections its
+    # turn needs instead of the whole file. Same format as handoff.ps1.
+    local section_map
+    section_map=$(tr -d '\r' < "$HANDOFF_FILE" | awk '/^## /{sub(/[ \t]+$/, ""); print "- line " NR ": " $0}')
+
     {   echo "# Next Turn Entry Brief"
         echo "Generated: $timestamp"
         echo "Actor: $actor ($role_label)"
         echo "State: $STATE"
         echo "Current Task: $CURRENT_TASK"
         echo ""
-        echo "NOTE: This file is a convenience summary. Read AI_HANDOFF.md before acting."
+        echo "NOTE: This file is a convenience summary. Read the AI_HANDOFF.md sections this turn needs (see the section map below) before acting."
         echo ""
         echo "## Your Action This Turn"
         echo "$action_line"
@@ -326,6 +331,7 @@ $cf"
         echo "## Next Recommended Step (from AI_HANDOFF.md)"
         if [ -n "$next_step" ]; then echo "$next_step"; else echo "(none - see AI_HANDOFF.md)"; fi
         if [ -n "$key_context" ]; then echo ""; echo "## Key Context"; echo "$key_context"; fi
+        if [ -n "$section_map" ]; then echo ""; echo "## AI_HANDOFF.md Sections (line numbers)"; echo "$section_map"; fi
         if [ -n "$after_line" ];  then echo ""; echo "## After You Finish"; echo "$after_line"; fi
     } > "$nt_path"
 
@@ -374,7 +380,7 @@ cmd_start() {
 Read USER_REQUEST.md for the user's request.
 Read AI_HANDOFF.md for current handoff state.
 Read .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.
-Read .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.
+Read .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions, and follow the Context Budget in MASTER.md: look protocol rules up by section instead of reading protocol documents in full, and delegate repository investigation to the Implementer.
 Route the request through the Decision Router.
 When correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.
 If the request is advisory-only, answer directly and do not update AI_HANDOFF.md.

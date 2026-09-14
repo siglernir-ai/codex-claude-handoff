@@ -402,6 +402,28 @@ else
     printf '%s' "$out3" | grep -q "BLOCKED - git status failed"
     check "bash exact-scope blocks when git status fails" $?
 
+    # v3.8.0: NEXT_TURN.md carries a line-numbered section map of AI_HANDOFF.md so the
+    # next actor reads only the sections its turn needs. The numbers must be right.
+    FX4="$BASH_TMP/map"; mkdir -p "$FX4"; scope_fixture "$FX4"
+    write_handoff "$FX4" "a space.md"
+    ( cd "$FX4" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    grep -q '^## AI_HANDOFF.md Sections (line numbers)$' "$FX4/NEXT_TURN.md" 2>/dev/null
+    check "bash next writes a section map of AI_HANDOFF.md" $?
+
+    map_ok=0
+    map_count=0
+    while IFS= read -r entry; do
+        entry="$(printf '%s' "$entry" | tr -d '\r')"
+        n="${entry#- line }"; n="${n%%:*}"
+        heading="${entry#*: }"
+        actual="$(sed -n "${n}p" "$FX4/AI_HANDOFF.md" | tr -d '\r')"
+        [ "$actual" = "$heading" ] || map_ok=1
+        map_count=$((map_count + 1))
+    done < <(grep '^- line [0-9][0-9]*: ## ' "$FX4/NEXT_TURN.md" 2>/dev/null)
+    expected_count="$(grep -c '^## ' "$FX4/AI_HANDOFF.md")"
+    if [ "$map_count" -eq 0 ] || [ "$map_count" -ne "$expected_count" ]; then map_ok=1; fi
+    check "bash section map points at every AI_HANDOFF.md heading" $map_ok "mapped $map_count of $expected_count"
+
     rm -rf "$BASH_TMP"
 fi
 

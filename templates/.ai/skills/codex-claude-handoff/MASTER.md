@@ -20,12 +20,50 @@ are Reviewer duties.
 At the beginning of a Master session:
 
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm you hold the Master (and Reviewer) role.
-2. Read AI_HANDOFF.md first.
-3. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer, stop before role-dependent work and report the required repair.
-4. Check State.
-5. Check Waiting For.
-6. Read AGENTS.md only as needed.
-7. Do not inspect unrelated files unless the handoff state requires it.
+2. Run `scripts/handoff.ps1 next` (`scripts/handoff.sh next` on macOS/Linux), then read `NEXT_TURN.md`. It carries the State, the current task, the Next Recommended Step, and a line-numbered map of the `AI_HANDOFF.md` sections. If the script cannot run, go straight to step 3.
+3. Read the AI_HANDOFF.md sections this turn needs: always `Status` and `Task Actors`, then `Next Recommended Step`, and `Changed Files` for a review. Read the whole file only when it is short or the turn genuinely depends on all of it.
+4. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer, stop before role-dependent work and report the required repair.
+5. Check State.
+6. Check Waiting For.
+7. Read AGENTS.md only as needed.
+8. Do not inspect unrelated files unless the handoff state requires it.
+
+## Context Budget
+
+Every tool call resends the whole conversation, so a Master turn costs roughly the
+number of tool calls multiplied by the size of everything already in context. In a
+measured session, reading this protocol's documents in full cost about 40,000 tokens
+before any work began, and every later call carried that weight again. The Master
+keeps its context small by rule (since v3.8.0):
+
+- **Ordinary turn reads.** `ROLE_ASSIGNMENT.md`, `NEXT_TURN.md`, and the needed
+  `AI_HANDOFF.md` sections. Nothing else is required to route, delegate, or review.
+- **Look protocol rules up; do not read the documents.** When a rule is needed, find
+  its heading (`rg -n "^## " .ai/skills/codex-claude-handoff/MASTER.md`, or
+  `Select-String -Pattern '^## '` in PowerShell) and read only that section's line
+  range. On an ordinary turn do not read `MASTER.md`, `SKILL.md`, `ADAPTERS.md`,
+  `PROTOCOL_METHOD.md`, `CAPABILITIES.md`, `CLAUDE_EXECUTION_POLICY.md`, or
+  `scripts/handoff.ps1` in full. Open the relevant part only when the task is about
+  that subject - adapters, sequencing, release, or the protocol itself.
+- **Delegate reading.** The Master does not investigate application source itself.
+  When correctness depends on what the code does, route `NEEDS_INVESTIGATION` and read
+  the Implementer's report. For a review, read `git diff` of the files under
+  `Changed Files`, not the surrounding codebase. An advisory answer that needs one or
+  two short files is the exception.
+- **Bounded tool output.** Search before reading (`rg -n`), then read a line range.
+  Do not print a file longer than about 200 lines. Keep each tool result under about
+  4,000 tokens. Prefer one combined command to many small calls, and do not re-read a
+  file that is already in context.
+- **Model.** Route and review ordinary turns with the host's standard model at low or
+  medium effort. Switch to the strongest model only for a high-value review pass; in
+  the same measured session it consumed the usage window about five times faster.
+- **A fresh window per protocol turn.** Durable state lives in `AI_HANDOFF.md`,
+  `DECISIONS.md`, and `NEXT_TURN.md`, so starting each turn in a new window loses no
+  continuity and starts from an empty context.
+
+The budget never relaxes a safety gate. Role checks, turn ownership, exact scope,
+verification evidence, and user authorization apply in full; when a gate requires a
+read, make it.
 
 ## Model and Effort Guidance
 
@@ -362,8 +400,8 @@ If this skill is unavailable in a future session, the Master should:
 
 1. Read `.agents/skills/codex-claude-handoff/SKILL.md` - it will point to the canonical shared folder.
 2. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm the current role binding.
-3. Read `.ai/skills/codex-claude-handoff/MASTER.md` for the full Master + Reviewer protocol.
-4. Read `.ai/skills/codex-claude-handoff/SKILL.md` for the shared protocol index and role split.
+3. Read the `Start of Session` and `Context Budget` sections of `.ai/skills/codex-claude-handoff/MASTER.md`, and look up any other section by its heading when the turn needs that rule.
+4. Look up `.ai/skills/codex-claude-handoff/SKILL.md` (the shared protocol index and role split) by section when needed.
 5. If `.ai/skills/` does not exist (pre-v0.12.0 install), read `.agents/skills/codex-claude-handoff/SKILL.md` directly as a fallback; it may contain the legacy full-protocol content.
 
 ## When the Implementer Adds Value
@@ -411,7 +449,7 @@ When asked, the Implementer should:
 - Use memory or context skills to recover task-relevant prior decisions if available.
 - Not expose unrelated private memory.
 
-The Master should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task. For a new project, a changed tool setup, or a meaningful implementation delegation, the Master should read `CAPABILITIES.md` and `CLAUDE_EXECUTION_POLICY.md` before preparing the Claude Implementer turn.
+The Master should not request capability status every session - only when it adds value for a risky, multi-file, or implementation-uncertain task. For a new project, a changed tool setup, or a meaningful implementation delegation, the Master should look up the relevant sections of `CAPABILITIES.md` and `CLAUDE_EXECUTION_POLICY.md` before preparing the Claude Implementer turn.
 
 ## Handoff Operator
 

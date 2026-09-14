@@ -2845,7 +2845,7 @@ function Invoke-Next {
     $ntLines.Add("State: $State")
     $ntLines.Add("Current Task: $CurrentTask")
     $ntLines.Add("")
-    $ntLines.Add("NOTE: This file is a convenience summary. Read AI_HANDOFF.md before acting.")
+    $ntLines.Add("NOTE: This file is a convenience summary. Read the AI_HANDOFF.md sections this turn needs (see the section map below) before acting.")
     $ntLines.Add("")
     $ntLines.Add("## Your Action This Turn")
     $ntLines.Add($actionLine)
@@ -2853,6 +2853,21 @@ function Invoke-Next {
     $ntLines.Add("## Next Recommended Step (from AI_HANDOFF.md)")
     if ($nextStep -ne "") { $ntLines.Add($nextStep) } else { $ntLines.Add("(none - see AI_HANDOFF.md)") }
     if ($keyContext -ne "") { $ntLines.Add(""); $ntLines.Add("## Key Context"); $ntLines.Add($keyContext) }
+
+    # v3.8.0: a line-numbered map of AI_HANDOFF.md, so the next actor reads the sections its
+    # turn needs instead of the whole file. The handoff grows with every investigation, and a
+    # Master that re-reads all of it pays for that again on every later tool call.
+    $sectionMap = [System.Collections.Generic.List[string]]::new()
+    $handoffLineArray = @($Lines)
+    for ($i = 0; $i -lt $handoffLineArray.Count; $i++) {
+        if ($handoffLineArray[$i] -match '^## ') { $sectionMap.Add("- line $($i + 1): $($handoffLineArray[$i].TrimEnd())") }
+    }
+    if ($sectionMap.Count -gt 0) {
+        $ntLines.Add("")
+        $ntLines.Add("## AI_HANDOFF.md Sections (line numbers)")
+        foreach ($mapEntry in $sectionMap) { $ntLines.Add($mapEntry) }
+    }
+
     if ($afterLine -ne "") { $ntLines.Add(""); $ntLines.Add("## After You Finish"); $ntLines.Add($afterLine) }
 
     $ntPath = Join-Path (Get-Location) "NEXT_TURN.md"
@@ -3030,7 +3045,7 @@ function Invoke-Start {
         }
     }
     $masterTool = Resolve-Actor -Role "Master" -Binding $Binding
-    $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md - but append any decision the user confirms during that conversation to DECISIONS.md, which accumulates across tasks and is never reset by start.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
+    $masterPrompt = "Use the codex-claude-handoff skill.`nRead USER_REQUEST.md for the user's request.`nRead AI_HANDOFF.md for current handoff state.`nRead .ai/roles/ROLE_ASSIGNMENT.md to confirm you hold the Master role.`nRead .agents/skills/codex-claude-handoff/SKILL.md as local protocol instructions, and follow the Context Budget in MASTER.md: look protocol rules up by section instead of reading protocol documents in full, and delegate repository investigation to the Implementer.`nRoute the request through the Decision Router.`nWhen correctness depends on current repo behavior, local implementation details, or verification constraints, default to a read-only Implementer investigation pass (NEEDS_INVESTIGATION) before finalizing the task.`nIf the request is advisory-only, answer directly and do not update AI_HANDOFF.md - but append any decision the user confirms during that conversation to DECISIONS.md, which accumulates across tasks and is never reset by start.`nUpdate AI_HANDOFF.md only if the protocol requires investigation, planning, implementation, user decision tracking, or review."
 
     Write-Host ""
     Write-Host "=== Master Entry Prompt (open: $masterTool) ==="

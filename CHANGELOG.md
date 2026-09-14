@@ -1,3 +1,29 @@
+## 3.8.0 - A Master That Reads Less
+
+- **A Master turn loaded the whole protocol before it did anything.** Measured on a real
+  project, one Codex session spent about 40,000 tokens - 17% of a five-hour usage window -
+  reading `SKILL.md`, `MASTER.md`, `PROTOCOL_METHOD.md`, `ADAPTERS.md` and the execution
+  policy in full, then resent that context on every later tool call. The window ran out
+  three minutes later. The window entry path told the agent to "always read SKILL.md", and
+  the index listed every document. The automated Master prompt had been lean since v2.0.1;
+  the path a person actually drives had not. The entry path now reads `ROLE_ASSIGNMENT.md`,
+  `NEXT_TURN.md` and the `AI_HANDOFF.md` sections the turn needs, and looks every other
+  rule up by section heading.
+- **`MASTER.md` has a `Context Budget` section.** Look protocol rules up instead of
+  reading documents; delegate repository investigation to the Implementer instead of
+  reading application source; search before reading and keep each tool result bounded;
+  route ordinary turns on the standard model; start a fresh window per protocol turn. The
+  budget never relaxes a safety gate.
+- **`NEXT_TURN.md` carries a line-numbered map of `AI_HANDOFF.md`**, in both shells, so the
+  next actor can read one section instead of the whole file.
+- **Implementer investigation reports are bounded** to about 800 words with `file:line`
+  citations, because the Reviewer reads them on its own budget.
+- **`MODEL_GUIDANCE.md` covers the Master's own cost** - its model and its context size,
+  neither of which `MODEL_ROUTING.json` controls.
+- **A test measures what the entry path tells the agent to read in full**, resolved to the
+  files that ship, and fails if a heavy protocol document returns to that path or the
+  mandatory reads grow past about 6,000 tokens.
+
 ## 3.7.0 - A Place To Put What Was Decided
 
 - **The protocol had nowhere to record a decision, so it recorded none.** `AI_HANDOFF.md`
