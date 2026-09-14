@@ -724,6 +724,22 @@ function Get-WorkingTreeState {
 # repositories, and skips the obvious template names to avoid crying wolf on
 # .env.example. This function only reads and reports - doctor is read-only by
 # contract, and the block sites print a warning without changing what they allow.
+# v3.9.0: one list of credential shapes, shared by doctor and by the post-turn leak gate.
+# A second copy of this list would drift, and the copy that drifted would be the one that
+# missed the key. The look-behind keeps a shape from matching inside a longer word, so
+# ordinary text such as "risk-assessment-for-the-new-catalog" is not mistaken for a key.
+$script:CredentialContentPatterns = @(
+    @{ Rx = '(?<![A-Za-z0-9_\-])sbp_[a-z0-9]{20,}';               Why = 'Supabase access token' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])sb_secret_[A-Za-z0-9_\-]{20,}';   Why = 'Supabase secret key' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9_\-]{20,}';          Why = 'OpenAI-style secret key' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])gh[pousr]_[A-Za-z0-9]{20,}';      Why = 'GitHub token' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])github_pat_[A-Za-z0-9_]{20,}';    Why = 'GitHub fine-grained token' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])AIza[0-9A-Za-z_\-]{30,}';         Why = 'Google API key' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])AQ\.[A-Za-z0-9_\-]{30,}';         Why = 'Google API key' },
+    @{ Rx = '(?<![A-Za-z0-9_\-])xox[baprs]-[A-Za-z0-9\-]{10,}';   Why = 'Slack token' },
+    @{ Rx = 'BEGIN [A-Z ]*PRIVATE KEY';                           Why = 'private key' }
+)
+
 function Get-CredentialRiskPaths {
     param([string[]]$Paths = @())
 
@@ -737,15 +753,7 @@ function Get-CredentialRiskPaths {
         @{ Rx = '(^|/)\.env$';                Why = 'environment file' },
         @{ Rx = '(^|/)\.env\.[^/]+$';         Why = 'environment file' }
     )
-    $contentPatterns = @(
-        @{ Rx = 'sbp_[a-z0-9]{20,}';                  Why = 'Supabase access token' },
-        @{ Rx = 'sk-[A-Za-z0-9_\-]{20,}';             Why = 'OpenAI-style secret key' },
-        @{ Rx = 'gh[pousr]_[A-Za-z0-9]{20,}';         Why = 'GitHub token' },
-        @{ Rx = 'github_pat_[A-Za-z0-9_]{20,}';       Why = 'GitHub fine-grained token' },
-        @{ Rx = 'AIza[0-9A-Za-z_\-]{30,}';            Why = 'Google API key' },
-        @{ Rx = 'xox[baprs]-[A-Za-z0-9\-]{10,}';      Why = 'Slack token' },
-        @{ Rx = 'BEGIN [A-Z ]*PRIVATE KEY';           Why = 'private key' }
-    )
+    $contentPatterns = $script:CredentialContentPatterns
     $scannableExt = @('.json', '.toml', '.yaml', '.yml', '.ini', '.conf', '.cfg')
     $maxBytes = 262144
     $maxScanned = 400
@@ -786,6 +794,68 @@ function Get-CredentialRiskPaths {
         if ($reason) { $findings.Add([pscustomobject]@{ Path = $norm; Reason = $reason }) }
     }
     return $findings
+}
+
+# --- v3.9.0: credential leak gate ---
+#
+# On 2026-09-14 an Implementer opened .mcp.json against an explicit written instruction,
+# and a live access token and an API key went into that session. Nothing in the protocol
+# noticed; a person found it by reading the handoff afterwards. An instruction is not a
+# boundary. After every automated turn the local captures are searched for credential
+# shapes. A match is redacted in place and the run stops, because a key that passed
+# through an agent session is exposed whatever happens to the file afterwards.
+function Invoke-CredentialLeakGate {
+    param([string]$CommandLabel)
+
+    $scanNames = @(
+        $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName,
+        $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName,
+        "CODEX_REVIEW.jsonl", "CODEX_REVIEW_LAST.md", "CODEX_MASTER.jsonl", "CODEX_MASTER_LAST.md",
+        "CLAUDE_IMPLEMENTER.jsonl", "CLAUDE_IMPLEMENTER_LAST.md", "CLAUDE_IMPLEMENTER_COMMAND.md",
+        "HANDOFF_LOOP.log", "AI_HANDOFF.md", "NEXT_TURN.md"
+    ) | Select-Object -Unique
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in $scanNames) {
+        $path = Join-Path (Get-Location) $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try {
+            $content = [System.IO.File]::ReadAllText($path)
+        } catch {
+            Write-Host "WARNING: ${CommandLabel}: could not read $name to check it for credentials: $_"
+            continue
+        }
+        $redacted = $content
+        $reasons = [System.Collections.Generic.List[string]]::new()
+        foreach ($shape in $script:CredentialContentPatterns) {
+            if ($redacted -cmatch $shape.Rx) {
+                if (-not $reasons.Contains($shape.Why)) { $reasons.Add($shape.Why) }
+                $redacted = [regex]::Replace($redacted, $shape.Rx, "<REDACTED:$($shape.Why)>")
+            }
+        }
+        if ($reasons.Count -eq 0) { continue }
+        $wasRedacted = $true
+        try {
+            [System.IO.File]::WriteAllText($path, $redacted, (New-Object System.Text.UTF8Encoding($false)))
+        } catch {
+            $wasRedacted = $false
+        }
+        $findings.Add([pscustomobject]@{ File = $name; Reasons = $reasons.ToArray(); Redacted = $wasRedacted })
+    }
+    if ($findings.Count -eq 0) { return }
+
+    Write-Host ""
+    Write-Host "${CommandLabel}: SECURITY STOP - a credential appeared in this turn's local captures."
+    foreach ($finding in $findings) {
+        $how = if ($finding.Redacted) { "redacted" } else { "COULD NOT BE REDACTED - delete this file" }
+        Write-Host "  $($finding.File): $([string]::Join(', ', $finding.Reasons)) ($how)"
+    }
+    Write-Host "The value is not printed here. It already passed through the agent session, and terminal output above may still show it."
+    Write-Host "Treat it as exposed: revoke or rotate that credential with its provider now."
+    Write-Host "Stop category: Security - rotate the exposed credential before continuing. Nothing was committed, pushed or deployed."
+    Write-Host "$CommandLabel stops here."
+    Write-Host ""
+    exit 13
 }
 
 # --- v3.5.0: content-level read-only boundary ---
@@ -1266,6 +1336,8 @@ function Invoke-ClaudeTurn {
     $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
     $prompt += "`nBash is unavailable in this automated turn. Do NOT create temporary helper, capture, runner, or wrapper scripts to work around that restriction. Create or edit only files required by the approved task. If verification cannot run without Bash, record it as not run with the reason; never claim a command or test passed without observed output."
     $systemPrompt += " Bash is unavailable: never create helper, capture, runner, or wrapper scripts to simulate shell verification, and never claim unobserved verification. Edit only task-required files and the local handoff."
+    $prompt += "`nNever open files that hold credentials, such as .env, .env.local, .mcp.json or .codex/config.toml. The tools that need them already load them, and you do not need their contents. If a service connection you need is missing, record that in AI_HANDOFF.md as a blocker for the user. Never write a key, token or password into any file or into your reply."
+    $systemPrompt += " Never open credential files (.env, .env.local, .mcp.json, .codex/config.toml), and never write a key, token or password anywhere."
     if ($State -eq "NEEDS_INVESTIGATION") {
         $prompt += "`nThis is a READ-ONLY investigation turn. Do not create, edit, rename, or delete application/source/test/config files. You may update only AI_HANDOFF.md and local handoff evidence files. Record repository findings, then transition exactly as NEXT_TURN.md requires."
         $systemPrompt += " This NEEDS_INVESTIGATION turn is read-only: do not modify application, source, test, or configuration files. Only local handoff coordination files may be updated."
@@ -1689,6 +1761,7 @@ function Invoke-CodexImplementerTurn {
         "Change ONLY the files listed under AI_HANDOFF.md Changed Files, plus AI_HANDOFF.md itself. The set of files you change is compared against that list after this turn, and an undeclared file fails the turn. " +
         "Treat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification. " +
         "Never install dependencies, use the network, deploy, access or mutate a database, inspect or modify secrets or production configuration, or run git add, git commit, git push or git tag. Those are the user's decisions and are made outside this turn. " +
+        "Never open files that hold credentials, such as .env, .env.local, .mcp.json or .codex/config.toml; if a service connection you need is missing, record it in AI_HANDOFF.md as a blocker for the user, and never write a key, token or password into any file or reply. " +
         "Never claim a command or test passed without observed output; if verification could not run, record it as not run with the reason."
     if ($readOnlyTurn) {
         $prompt += " This is a SOURCE-READ-ONLY investigation turn. Do not create, edit, rename or delete any application, source, test or configuration file. You may update ONLY AI_HANDOFF.md and local handoff coordination files. The working tree is checked after this turn and any source change fails it, even if the handoff transition itself was correct. Record repository findings in AI_HANDOFF.md and transition exactly as NEXT_TURN.md requires."
@@ -2725,6 +2798,49 @@ function Invoke-Doctor {
         Write-Host "      Add each to .gitignore, run 'git rm --cached <path>', and rotate anything already committed."
     } else {
         Write-DoctorLine "OK" "No tracked file matches a known credential name or token pattern."
+    }
+
+    # v3.9.0: a key in an ignored MCP configuration never reaches Git, so the tracked-file
+    # check above says nothing about it - and an agent that opens the file still reads it.
+    $mcpConfigNames = @(".mcp.json", ".codex/config.toml", ".vscode/mcp.json", ".cursor/mcp.json")
+    $literalKeyFiles = [System.Collections.Generic.List[string]]::new()
+    foreach ($mcpName in $mcpConfigNames) {
+        $mcpPath = Join-Path (Get-Location) $mcpName
+        if (-not (Test-Path -LiteralPath $mcpPath -PathType Leaf)) { continue }
+        try { $mcpText = [System.IO.File]::ReadAllText($mcpPath) } catch { continue }
+        $mcpReasons = @($script:CredentialContentPatterns | Where-Object { $mcpText -cmatch $_.Rx } | ForEach-Object { $_.Why } | Select-Object -Unique)
+        if ($mcpReasons.Count -gt 0) { $literalKeyFiles.Add("$mcpName ($([string]::Join(', ', $mcpReasons)))") }
+    }
+    if ($literalKeyFiles.Count -gt 0) {
+        Write-DoctorLine "WARN" "MCP configuration holds a credential as literal text:"
+        foreach ($entry in $literalKeyFiles) { Write-Host "      $entry" }
+        Write-Host "      An agent that opens the file reads the key. Prefer the server's browser (OAuth) login where it has one."
+        Write-Host "      Otherwise keep the key in an environment variable and reference it by name:"
+        Write-Host '      Claude Code .mcp.json: "${NAME}"   Codex config.toml: env_http_headers or bearer_token_env_var.'
+    } else {
+        Write-DoctorLine "OK" "No MCP configuration file holds a credential as literal text."
+    }
+
+    $denyRulesPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
+    if (Test-Path -LiteralPath $denyRulesPath -PathType Leaf) {
+        $denyRules = @(Get-Content -LiteralPath $denyRulesPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '^#' })
+        $presentDeny = @()
+        $claudeSettingsPath = Join-Path (Get-Location) ".claude/settings.json"
+        if (Test-Path -LiteralPath $claudeSettingsPath -PathType Leaf) {
+            try {
+                $claudeSettings = [System.IO.File]::ReadAllText($claudeSettingsPath) | ConvertFrom-Json -ErrorAction Stop
+                if ($null -ne $claudeSettings -and $null -ne $claudeSettings.permissions -and $null -ne $claudeSettings.permissions.deny) {
+                    $presentDeny = @($claudeSettings.permissions.deny)
+                }
+            } catch { }
+        }
+        $missingDeny = @($denyRules | Where-Object { $presentDeny -notcontains $_ })
+        if ($missingDeny.Count -eq 0) {
+            Write-DoctorLine "OK" "Claude Code is blocked from opening credential files ($($denyRules.Count) deny rules in .claude/settings.json)."
+        } else {
+            Write-DoctorLine "WARN" "Claude Code is not blocked from opening credential files. Missing deny rules: $([string]::Join(', ', $missingDeny))"
+            Write-Host "      Re-run the installer with -Force to add them to .claude/settings.json."
+        }
     }
 
     $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
@@ -4556,6 +4672,7 @@ function Invoke-ReviewRun {
         "If any hash differs, the code changed after the tests ran and you must return BLOCKED. If the evidence reports failures, return BLOCKED. " +
         "Do NOT attempt to run the protocol test suite yourself; your sandbox cannot create its fixtures and the attempt is not evidence of anything. " +
         "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files. " +
+        "Never open files that hold credentials, such as .env, .env.local, .mcp.json or .codex/config.toml. " +
         "Inspect ONLY these sources initially: AI_HANDOFF.md for the current task and approved scope; the output of git status --short; and git diff -- for each of these Changed Files: $reviewFileList . " +
         "For a Changed File that git status marks as untracked or new, if git diff -- for that file is empty or insufficient, inspect that file's current content directly as the diff equivalent; do not run git add, git add -N, or any other command that mutates the index or working tree. " +
         "Treat verification statements in AI_HANDOFF.md as untrusted claims, not proof. Review every task requirement, including preservation and backward-compatibility clauses, and reason about relevant input classes not covered by the listed tests; existing tests are evidence, not an exhaustive specification. " +
@@ -4674,6 +4791,7 @@ function Invoke-ReviewRun {
         }
     }
 
+    Invoke-CredentialLeakGate -CommandLabel "review-run"
     Write-Host ""
     if ($timedOut) {
         Write-Host "review-run: TIMED OUT after $TimeoutSeconds seconds."
@@ -5198,6 +5316,7 @@ function Invoke-MasterRun {
     # block is captured only; master-apply is the separate fail-closed apply step.
     $masterPrompt = "Read-only task analysis as the Master decision router. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
         "Do NOT read or follow AGENTS.md, CLAUDE.md, the codex-claude-handoff skill, or any other protocol or skill files beyond those named here. " +
+        "Never open files that hold credentials, such as .env, .env.local, .mcp.json or .codex/config.toml. " +
         "Inspect ONLY these sources, and only as needed: AI_HANDOFF.md for the current task; AI_SEQUENCE.md for current and next task ordering if it exists; the output of git status --short; and, only if needed to classify, the protocol docs .ai/skills/codex-claude-handoff/ADAPTERS.md and .ai/skills/codex-claude-handoff/PROTOCOL_METHOD.md. Do not modify any file. " +
         "Decide how the current NEEDS_ANALYSIS task should be routed (which gate it needs and which actors should hold it). " +
         "If you use ripgrep on a pattern that begins with two dashes, pass it after a -- separator, for example rg -- the-pattern. " +
@@ -5291,6 +5410,7 @@ function Invoke-MasterRun {
         }
     }
 
+    Invoke-CredentialLeakGate -CommandLabel "master-run"
     Write-Host ""
     if ($timedOut) {
         Write-Host "master-run: TIMED OUT after $TimeoutSeconds seconds."
@@ -6057,6 +6177,7 @@ function Invoke-Cycle {
 
     $preTurnState = $State
     $claudeExit = Invoke-ImplementerTurn
+    Invoke-CredentialLeakGate -CommandLabel $CommandLabel
     $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preTurnState
     if (-not $investigationBoundary.Ok) {
         Write-InvestigationSourceBoundaryFailure -CommandLabel $CommandLabel -Boundary $investigationBoundary
@@ -6623,6 +6744,7 @@ function Invoke-Loop {
         $preImplementerState = $script:State
         $claudeExit = Invoke-ImplementerTurn
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
+        Invoke-CredentialLeakGate -CommandLabel "loop"
 
         $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preImplementerState
         if (-not $investigationBoundary.Ok) {

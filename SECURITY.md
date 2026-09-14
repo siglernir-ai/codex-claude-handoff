@@ -46,6 +46,26 @@ The workflow does not require `ANTHROPIC_API_KEY` for the default OAuth-based
 Claude Code path. Avoid adding API keys only to make automation more convenient
 unless you have reviewed your organization's secret-management policy.
 
+### Keys and MCP connections
+
+Agents must never open files that hold credentials. Since v3.9.0 the protocol enforces
+that in three places:
+
+- **Before a turn.** The installer adds deny rules to `.claude/settings.json`, so Claude
+  Code's file tools cannot open `.env`, `.env.local`, `.mcp.json` or
+  `.codex/config.toml`. The programs that use those files still load them. Codex exposes
+  no documented per-path read deny, so this layer covers Claude Code only.
+- **After a turn.** Every automated turn's local captures are searched for credential
+  shapes. A match is redacted in place and the run stops with exit 13: a key that passed
+  through an agent session is exposed, so rotate it.
+- **In `doctor`.** MCP configuration that holds a key as literal text is reported, and so
+  are missing deny rules. Values are never printed.
+
+Prefer an MCP server's browser (OAuth) login where it has one, so no key is stored at
+all. Otherwise keep the key in an environment variable and reference it by name -
+`${NAME}` in Claude Code's `.mcp.json`, `env_http_headers` or `bearer_token_env_var` in
+Codex's `config.toml` - so one variable serves both tools and no file holds the value.
+
 ## Command Transparency
 
 Automated Claude Code turns capture sanitized command evidence. Prompt content and

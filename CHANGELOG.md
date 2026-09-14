@@ -1,3 +1,39 @@
+## 3.9.0 - Keys Stay Out of Reach
+
+- **An agent opened a credential file, and nothing in the protocol noticed.** On a real
+  project an Implementer read `.mcp.json` against an explicit written instruction, and a
+  live access token and an API key went into that session. A person found it afterwards
+  by reading the handoff. The rule existed only as a sentence in a prompt, and a
+  sentence is not a boundary. Three mechanisms now enforce it for every install, with
+  nothing for the user to configure.
+- **The installer keeps Claude Code out of credential files.** Both installers add deny
+  rules to `.claude/settings.json` so Claude Code's file tools cannot open `.env`,
+  `.env.local`, `.env.*.local`, `.env.production`, `.mcp.json` or `.codex/config.toml`.
+  The programs that use those files still load them; only the agent is kept out, and
+  `.env.example` stays readable. The rules live in one shipped file,
+  `CREDENTIAL_READ_DENY.txt`, that both installers read. An existing settings file is
+  merged and never replaced; one that cannot be parsed is left untouched and reported.
+  This changes Claude Code's behavior in the project by design: to let Claude read one of
+  these files, remove its rule from `permissions.deny`. Codex exposes no documented
+  per-path read deny, so this layer covers Claude Code only.
+- **Every automated turn is checked for a leaked credential.** After `cycle`, `loop`,
+  `review-run` and `master-run`, the turn's local captures are searched for credential
+  shapes. A match is redacted in place and the run stops with exit 13 and a Security stop
+  category that names the file and the kind of credential, never the value. Rotation is
+  still the user's job: a key that passed through an agent session is exposed whatever
+  happens to the file. Shapes cannot match inside a longer word, so ordinary text such as
+  a hyphenated task name does not trip the gate.
+- **`doctor` reports literal keys in MCP configuration that Git never sees.** The v3.6.0
+  check covered tracked files only, so a key in an ignored `.mcp.json` was invisible to
+  it. `doctor` now reports literal credentials in `.mcp.json`, `.codex/config.toml`,
+  `.vscode/mcp.json` and `.cursor/mcp.json`, recommends browser login or an environment
+  variable referenced by name, and reports missing deny rules. Values are never printed.
+- **One list of credential shapes.** `doctor`, the tracked-file check and the leak gate
+  share it, and it now recognizes Supabase secret keys and Google's `AQ.` API keys.
+- **The rule is written where each role reads it.** `MASTER.md` gains a `Credential Files`
+  section, `IMPLEMENTER.md` a rule, and every automated agent prompt forbids opening
+  credential files and says to record a missing connection as a blocker for the user.
+
 ## 3.8.0 - A Master That Reads Less
 
 - **A Master turn loaded the whole protocol before it did anything.** Measured on a real

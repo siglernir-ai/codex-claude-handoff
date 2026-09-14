@@ -868,6 +868,124 @@ Check "next writes a section map of AI_HANDOFF.md into NEXT_TURN.md" ($mapText -
 Check "every mapped line number points at that heading in AI_HANDOFF.md" $mapAccurate
 Check "the section map lists every heading, not a subset" ($mapEntries.Count -eq $mapExpected) "mapped $($mapEntries.Count) of $mapExpected"
 
+# === 4B-7. Keys stay out of reach (v3.9.0) ===
+Write-Host "[4B-7] Credential read guard and leak gate"
+
+# On 2026-09-14 an Implementer opened .mcp.json against a written instruction, and a live
+# access token and an API key went into that session. Nothing in the protocol noticed.
+# These checks exercise the three layers that answer it: deny rules the installer writes,
+# a doctor that reports literal keys without printing them, and a gate that stops an
+# automated turn whose captures hold a credential. Fake values are assembled at run time
+# so this public suite never carries a token-shaped literal.
+$guardRulesPath = Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
+$guardRules = @(Get-Content -LiteralPath $guardRulesPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '^#' })
+Check "the shipped deny list blocks the credential files by name" (($guardRules -contains "Read(.mcp.json)") -and ($guardRules -contains "Read(.env)") -and ($guardRules -contains "Read(.env.local)") -and ($guardRules -contains "Read(.codex/config.toml)"))
+Check "the deny list leaves .env.example readable" (@($guardRules | Where-Object { $_ -eq 'Read(.env.*)' -or $_ -eq 'Read(.env.example)' }).Count -eq 0)
+
+function Get-GuardDenyList {
+    param([string]$SettingsPath)
+    if (-not (Test-Path -LiteralPath $SettingsPath)) { return ,@() }
+    try { $parsed = [System.IO.File]::ReadAllText($SettingsPath) | ConvertFrom-Json -ErrorAction Stop } catch { return ,@("<unparseable>") }
+    if ($null -eq $parsed -or $null -eq $parsed.permissions -or $null -eq $parsed.permissions.deny) { return ,@() }
+    return ,@($parsed.permissions.deny)
+}
+
+$guardInstaller = Join-Path $RepoRoot "install.ps1"
+$guardTarget = Join-Path $FixtureRoot "credential-guard-target"
+$guardOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $guardTarget 2>&1 | Out-String
+$guardSettings = Join-Path $guardTarget ".claude/settings.json"
+$freshDeny = Get-GuardDenyList -SettingsPath $guardSettings
+Check "a fresh install writes every deny rule to .claude/settings.json" ((@($guardRules | Where-Object { $freshDeny -notcontains $_ }).Count -eq 0) -and ($guardOut -match "Credential read guard: created")) $guardOut
+
+Set-Content -LiteralPath $guardSettings -Value '{"model":"keep-me","permissions":{"allow":["Read(.env)"],"deny":["Bash(rm *)"]},"enabledPlugins":{}}' -Encoding ascii
+$mergeOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $guardTarget -Force 2>&1 | Out-String
+$mergedSettings = [System.IO.File]::ReadAllText($guardSettings) | ConvertFrom-Json
+$mergedDeny = @($mergedSettings.permissions.deny)
+Check "a -Force upgrade merges the deny rules into an existing settings file" ((@($guardRules | Where-Object { $mergedDeny -notcontains $_ }).Count -eq 0) -and ($mergedDeny -contains "Bash(rm *)") -and ($mergeOut -match "Credential read guard: added")) $mergeOut
+Check "the merge keeps the project's own settings" (($mergedSettings.model -eq "keep-me") -and (@($mergedSettings.permissions.allow) -contains "Read(.env)"))
+$againOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $guardTarget -Force 2>&1 | Out-String
+$againDeny = Get-GuardDenyList -SettingsPath $guardSettings
+Check "a second upgrade adds no duplicate deny rules" (($againDeny.Count -eq $mergedDeny.Count) -and ($againOut -match "Credential read guard: already present")) $againOut
+
+$badGuardTarget = Join-Path $FixtureRoot "credential-guard-malformed"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $badGuardTarget 2>&1
+$badGuardSettings = Join-Path $badGuardTarget ".claude/settings.json"
+Set-Content -LiteralPath $badGuardSettings -Value '{ "model": "unfinished", ' -Encoding ascii
+$badBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $badGuardSettings).Hash
+$badOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $badGuardTarget -Force 2>&1 | Out-String
+$badAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $badGuardSettings).Hash
+Check "an unparseable settings file is left untouched and reported" (($badBefore -eq $badAfter) -and ($badOut -match "credential read guard was not added")) $badOut
+
+# doctor: a literal key in an ignored MCP file is reported by name and shape, never by value.
+$fakeSupabaseToken = "sbp_" + ("0123456789abcdef" * 3)
+$doctorGuardFiles = @{}
+foreach ($key in $doctorFiles.Keys) { $doctorGuardFiles[$key] = $doctorFiles[$key] }
+$doctorGuardFiles[".ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"] = (Get-Content -Raw -LiteralPath $guardRulesPath)
+$doctorGuardFiles[".mcp.json"] = '{"mcpServers":{"supabase":{"type":"http","url":"https://mcp.supabase.com/mcp","headers":{"Authorization":"Bearer ' + $fakeSupabaseToken + '"}}}}'
+$doctorGuardFx = New-Fixture -Files $doctorGuardFiles -InitGit
+$r = Invoke-Handoff -WorkDir $doctorGuardFx -Arguments @("doctor")
+Check "doctor reports a literal key in an ignored MCP configuration" (($r.Out -match "MCP configuration holds a credential as literal text") -and ($r.Out -match "\.mcp\.json \(Supabase access token\)")) $r.Out
+Check "doctor never prints the key it found" ($r.Out -notmatch [regex]::Escape($fakeSupabaseToken))
+Check "doctor reports missing Claude Code deny rules" ($r.Out -match "Claude Code is not blocked from opening credential files")
+Check "the credential guard warnings do not fail doctor" ($r.Code -ne 10) "exit $($r.Code)"
+
+Set-Content -LiteralPath (Join-Path $doctorGuardFx ".mcp.json") -Value '{"mcpServers":{"supabase":{"type":"http","url":"https://mcp.supabase.com/mcp","headers":{"Authorization":"Bearer ${SUPABASE_ACCESS_TOKEN}"}}}}' -Encoding ascii
+New-Item -ItemType Directory -Path (Join-Path $doctorGuardFx ".claude") -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $doctorGuardFx ".claude/settings.json") -Value (@{ permissions = @{ deny = $guardRules } } | ConvertTo-Json -Depth 5) -Encoding ascii
+$r = Invoke-Handoff -WorkDir $doctorGuardFx -Arguments @("doctor")
+Check "doctor accepts an MCP configuration that references the key by name" ($r.Out -match "No MCP configuration file holds a credential as literal text") $r.Out
+Check "doctor confirms the deny rules once they are present" ($r.Out -match "Claude Code is blocked from opening credential files")
+
+# The leak gate, end to end: a fake Claude prints a credential; the turn must stop with
+# exit 13, redact the captures and not repeat the value. The benign mode proves ordinary
+# hyphenated text does not trip it.
+$leakBin = Join-Path $FixtureRoot "leak-bin"
+New-Item -ItemType Directory -Path $leakBin -Force | Out-Null
+Set-Content -Path (Join-Path $leakBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%CMDCMDLINE%"
+if not "!ALL:--version=!"=="!ALL!" (
+  echo claude-code-test
+  exit /b 0
+)
+if "%FAKE_LEAK_MODE%"=="benign" (
+  echo Reviewed risk-assessment-for-the-new-exercise-catalog-and-approval-flow
+  exit /b 0
+)
+echo Found the connection settings: Bearer $fakeSupabaseToken
+exit /b 0
+"@
+$prevLeakPath = $env:Path
+$prevLeakMode = $env:FAKE_LEAK_MODE
+$env:Path = $leakBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $env:FAKE_LEAK_MODE = "leak"
+    $leakFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.9.0 - Leak gate"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $leakFx
+    $r = Invoke-Handoff -WorkDir $leakFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    $leakLastText = if (Test-Path -LiteralPath (Join-Path $leakFx "IMPLEMENTER_LAST.md")) { [System.IO.File]::ReadAllText((Join-Path $leakFx "IMPLEMENTER_LAST.md")) } else { "" }
+    $leakJsonlText = if (Test-Path -LiteralPath (Join-Path $leakFx "IMPLEMENTER.jsonl")) { [System.IO.File]::ReadAllText((Join-Path $leakFx "IMPLEMENTER.jsonl")) } else { "" }
+    $securityBlock = if ($r.Out -match '(?s)SECURITY STOP.*') { $Matches[0] } else { "" }
+    Check "a turn whose capture holds a credential stops with exit 13" (($r.Code -eq 13) -and ($securityBlock -match "Supabase access token")) $r.Out
+    Check "the leaked value is redacted from the local captures" (($leakLastText.Length -gt 0) -and ($leakLastText -notmatch [regex]::Escape($fakeSupabaseToken)) -and ($leakLastText -match "<REDACTED:Supabase access token>") -and ($leakJsonlText -notmatch [regex]::Escape($fakeSupabaseToken)))
+    Check "the security stop never prints the value" (($securityBlock.Length -gt 0) -and ($securityBlock -notmatch [regex]::Escape($fakeSupabaseToken)))
+
+    $env:FAKE_LEAK_MODE = "benign"
+    $benignFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "v3.9.0 - Leak gate benign"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $benignFx
+    $r = Invoke-Handoff -WorkDir $benignFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "ordinary hyphenated text does not trip the leak gate" (($r.Code -ne 13) -and ($r.Out -notmatch "SECURITY STOP")) $r.Out
+} finally {
+    $env:Path = $prevLeakPath
+    $env:FAKE_LEAK_MODE = $prevLeakMode
+}
+
+$guardHandoffSrc = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "every automated agent prompt forbids opening credential files" ([regex]::Matches($guardHandoffSrc, 'Never open files that hold credentials').Count -ge 4)
+Check "the leak gate runs after Implementer, loop, Reviewer and Master turns" ([regex]::Matches($guardHandoffSrc, 'Invoke-CredentialLeakGate -CommandLabel').Count -ge 4)
+Check "the protocol documents carry the credential rule" (((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/MASTER.md")) -match "## Credential Files") -and ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/IMPLEMENTER.md")) -match "Never open files that hold credentials"))
+
 # === 4C. Dynamic model resolver ===
 Write-Host "[4C] Dynamic model resolver"
 $modelRouting = @'

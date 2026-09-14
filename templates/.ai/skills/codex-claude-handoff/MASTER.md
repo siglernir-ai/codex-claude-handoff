@@ -394,6 +394,23 @@ The Master and the Implementer must not run the following without explicit user 
 
 If any are required, set State to WAITING_FOR_USER and document the required action under Open Issues.
 
+## Credential Files
+
+No role opens a file that holds credentials: `.env`, `.env.local`, `.mcp.json`,
+`.codex/config.toml` or anything similar. The tools that use those files already load
+them, so an agent never needs their contents. When a service connection is missing,
+record a blocker for the user; do not look for the key, and never ask for one to be
+pasted into chat or into handoff files. To act on a service that only the other tool is
+connected to, ask that role to perform the action through a dialogue state - share the
+action, not the key (since v3.9.0).
+
+The installer enforces part of this for Claude Code with deny rules in
+`.claude/settings.json`, listed in `CREDENTIAL_READ_DENY.txt`. Codex exposes no
+documented per-path read deny, so for Codex this rule and the leak gate are the
+protection. After every automated turn, `handoff.ps1` searches that turn's local
+captures for credential shapes; a match is redacted and the run stops with exit 13 so
+the credential can be rotated.
+
 ## Skill Fallback
 
 If this skill is unavailable in a future session, the Master should:

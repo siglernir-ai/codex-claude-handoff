@@ -238,6 +238,77 @@ if ! grep -qFx "AI_HANDOFF.md" "$GITIGNORE_PATH" 2>/dev/null; then
     printf '\n%s\n' "$(cat "$TEMPLATES_DIR/gitignore-snippet.txt")" >> "$GITIGNORE_PATH"
 fi
 
+# v3.9.0: keep Claude Code's file tools out of files that hold credentials. Same rules
+# file and same messages as install.ps1 (Add-CredentialReadGuard); both must agree.
+# An existing settings file is merged with Python when it is available, and is never
+# rewritten by hand-rolled JSON editing: without Python the rules are only reported.
+RULES_FILE="$TEMPLATES_DIR/.ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
+SETTINGS_PATH="$TARGET_PATH/.claude/settings.json"
+if [ -f "$RULES_FILE" ]; then
+    RULES=()
+    while IFS= read -r _rule || [ -n "$_rule" ]; do
+        _rule="${_rule%$'\r'}"
+        _rule="$(printf '%s' "$_rule" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        case "$_rule" in ""|\#*) continue ;; esac
+        RULES+=("$_rule")
+    done < "$RULES_FILE"
+
+    if [ ${#RULES[@]} -gt 0 ]; then
+        if [ ! -f "$SETTINGS_PATH" ]; then
+            mkdir -p "$TARGET_PATH/.claude"
+            {
+                printf '{\n  "permissions": {\n    "deny": [\n'
+                _last=$((${#RULES[@]} - 1))
+                for _i in "${!RULES[@]}"; do
+                    _sep=","; [ "$_i" -eq "$_last" ] && _sep=""
+                    printf '      "%s"%s\n' "${RULES[$_i]}" "$_sep"
+                done
+                printf '    ]\n  }\n}\n'
+            } > "$SETTINGS_PATH"
+            echo "Credential read guard: created .claude/settings.json with ${#RULES[@]} deny rules."
+        else
+            _py=""
+            for _candidate in python3 python; do
+                if command -v "$_candidate" >/dev/null 2>&1 && "$_candidate" -c 'import json' >/dev/null 2>&1; then
+                    _py="$_candidate"; break
+                fi
+            done
+            _guard_out=""
+            if [ -n "$_py" ] && _guard_out="$("$_py" - "$SETTINGS_PATH" "${RULES[@]}" <<'PYEOF'
+import json, sys
+path, rules = sys.argv[1], sys.argv[2:]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+data = json.loads(text) if text.strip() else {}
+if not isinstance(data, dict):
+    raise SystemExit("settings.json is not a JSON object")
+permissions = data.setdefault("permissions", {})
+if not isinstance(permissions, dict):
+    raise SystemExit("permissions is not a JSON object")
+deny = permissions.setdefault("deny", [])
+if not isinstance(deny, list):
+    raise SystemExit("permissions.deny is not a list")
+missing = [rule for rule in rules if rule not in deny]
+if missing:
+    deny.extend(missing)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(data, indent=2) + "\n")
+print(len(missing))
+PYEOF
+)"; then
+                if [ "$_guard_out" = "0" ]; then
+                    echo "Credential read guard: already present in .claude/settings.json."
+                else
+                    echo "Credential read guard: added $_guard_out deny rules to .claude/settings.json."
+                fi
+            else
+                echo "WARNING: the credential read guard was not added, because .claude/settings.json could not be merged safely."
+                echo "The file was left unchanged. Add these entries to permissions.deny by hand: ${RULES[*]}"
+            fi
+        fi
+    fi
+fi
+
 if $ALWAYS_ON; then
     MODE="always-on"
 else

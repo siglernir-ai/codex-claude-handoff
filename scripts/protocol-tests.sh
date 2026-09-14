@@ -340,6 +340,29 @@ done
 [ -z "$cr_files" ]
 check "shell scripts in the working tree have LF line endings" $? "CRLF in:$cr_files"
 
+# v3.9.0: the Bash installer writes the same Claude Code deny rules as install.ps1.
+echo "[bash] Credential read guard"
+guard_target="$FIXTURE_ROOT/bash-guard-target"
+mkdir -p "$guard_target"
+git -C "$guard_target" init -q
+guard_out="$(bash "$SCRIPT_DIR/install.sh" "$guard_target" 2>&1)"
+guard_ok=0
+while IFS= read -r rule || [ -n "$rule" ]; do
+    rule="${rule%$'\r'}"
+    case "$rule" in ""|\#*) continue ;; esac
+    grep -qF "\"$rule\"" "$guard_target/.claude/settings.json" 2>/dev/null || guard_ok=1
+done < "$REPO_ROOT/templates/.ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
+printf '%s' "$guard_out" | grep -q "Credential read guard: created" || guard_ok=1
+check "bash fresh install writes every Claude Code deny rule" $guard_ok "$guard_out"
+
+guard_again="$(bash "$SCRIPT_DIR/install.sh" "$guard_target" --force 2>&1)"
+dup_ok=0
+if ! printf '%s' "$guard_again" | grep -q "could not be merged safely"; then
+    printf '%s' "$guard_again" | grep -q "Credential read guard: already present" || dup_ok=1
+fi
+[ "$(grep -cF '"Read(.mcp.json)"' "$guard_target/.claude/settings.json")" -eq 1 ] || dup_ok=1
+check "bash --force upgrade adds no duplicate deny rules" $dup_ok "$guard_again"
+
 # --- v3.4.3: execute the Bash exact-scope parser against a real repository ----------
 # Until now the Bash parser was covered only by source-level assertions inside the
 # PowerShell suite: nobody ran it. It carries the same exact-scope semantics as

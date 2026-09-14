@@ -49,6 +49,7 @@ Before significant work:
 - Do not edit `AI_HANDOFF.md` until the implementation result is clear.
 - Do not make speculative improvements.
 - Do not modify secrets or local environment files.
+- Never open files that hold credentials (`.env`, `.env.local`, `.mcp.json`, `.codex/config.toml`). The tools that need them already load them. If a service connection is missing, record a blocker for the user instead of looking for the key, and never write a key, token or password into any file or reply (since v3.9.0).
 - Do not run deploys, live migrations, database resets or destructive data operations, file deletions, production configuration changes, or secret/env changes without explicit user approval. If any are required, set `State: WAITING_FOR_USER` and document the required action under `Open Issues`.
 
 ## Claude Execution Evidence
