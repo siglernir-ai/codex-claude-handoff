@@ -51,8 +51,8 @@ if ($env:OS -eq "Windows_NT") {
 # activate model routing with HANDOFF_CLAUDE_MODEL_<PROFILE> environment variables, and a
 # user who did exactly that saw ten resolver checks fail on a clean checkout, because the
 # fixtures expect no override. Clear them for this process only; the tests that exercise
-# an override set their own value and restore it.
-Get-ChildItem Env: | Where-Object { $_.Name -match '^HANDOFF_CLAUDE_MODEL_' } | ForEach-Object {
+# an override set their own value and restore it. v3.10.0: the same holds for Codex.
+Get-ChildItem Env: | Where-Object { $_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODEL_' } | ForEach-Object {
     [System.Environment]::SetEnvironmentVariable($_.Name, $null, "Process")
 }
 
@@ -1530,6 +1530,192 @@ $badBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $fxBad ".ai
 $r = Invoke-Handoff -WorkDir $fxBad -Arguments @("models", "-Activate", "-Standard", "x")
 Check "models -Activate refuses to edit an unparseable config" ($r.Out -match "not valid JSON")
 Check "an unparseable config is left byte-identical" ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $fxBad ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")).Hash -eq $badBefore)
+
+# --- v3.10.0: one profile, one model per tool ---
+#
+# Every codex exec inherited whatever model the local Codex configuration named, so a task
+# the Master marked high_reasoning ran on the standard model, and a window left on the
+# strongest model ran ordinary turns on it: one real session spent a five-hour usage
+# window in three minutes that way. Codex now resolves its own model from the same
+# profile, automated Codex turns pass it, and NEXT_TURN.md names it for a window.
+Write-Host "[4C-2] Codex model routing (v3.10.0)"
+$shippedRoutingText = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json")
+$shippedRoutingConfig = $shippedRoutingText | ConvertFrom-Json
+Check "shipped routing names a codexModel for every profile" (@($shippedRoutingConfig.profiles.PSObject.Properties | Where-Object { $null -eq $_.Value.PSObject.Properties['codexModel'] }).Count -eq 0)
+Check "shipped routing keeps every codexModel on inherit (install changes no behavior)" ($shippedRoutingText -notmatch '"codexModel"\s*:\s*"(?!inherit)')
+
+$codexRouting = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"test-claude-standard","codexModel":"test-codex-standard"},"high_reasoning":{"claudeModel":"inherit","codexModel":"test-codex-high"}}}'
+$highProfileHandoff = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "codex routing high") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: high_reasoning"
+$codexFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "codex routing"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting }
+$r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models")
+Check "models resolves the Codex model from the profile's codexModel" (($r.Code -eq 0) -and ($r.Out -match "Codex model:\s+test-codex-standard") -and ($r.Out -match "Codex source:\s+MODEL_ROUTING\.json"))
+Check "the Claude model still resolves from claudeModel beside it" ($r.Out -match "Claude model:\s+test-claude-standard")
+Check "models names the Codex override order" ($r.Out -match "Codex order:\s+-CodexModel, HANDOFF_CODEX_MODEL_<PROFILE>, MODEL_ROUTING\.json codexModel, inherit")
+Check "models tells a window driver that a model change means a new window" ($r.Out -match "Start a new window when the model changes")
+
+$prevCodexStandard = $env:HANDOFF_CODEX_MODEL_STANDARD
+$env:HANDOFF_CODEX_MODEL_STANDARD = "test-env-codex-standard"
+try {
+    $r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models")
+    Check "HANDOFF_CODEX_MODEL_<PROFILE> overrides codexModel" (($r.Out -match "Codex model:\s+test-env-codex-standard") -and ($r.Out -match "Codex source:\s+environment HANDOFF_CODEX_MODEL_STANDARD"))
+    Check "a Codex override leaves the Claude model alone" ($r.Out -match "Claude model:\s+test-claude-standard")
+    $r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models", "-CodexModel", "test-cli-codex")
+    Check "-CodexModel overrides the environment" (($r.Out -match "Codex model:\s+test-cli-codex") -and ($r.Out -match "command line -CodexModel"))
+} finally {
+    if ($null -eq $prevCodexStandard) { Remove-Item Env:\HANDOFF_CODEX_MODEL_STANDARD -ErrorAction SilentlyContinue } else { $env:HANDOFF_CODEX_MODEL_STANDARD = $prevCodexStandard }
+}
+$r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models", "-CodexModel", "two words")
+Check "an unsafe Codex model value fails closed" (($r.Code -eq 1) -and ($r.Out -match "Resolved Codex model value must be a single model identifier"))
+
+$codexOnlyFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit","codexModel":"test-codex-only"},"economy":{"claudeModel":"inherit","codexModel":"inherit"}}}' }
+$r = Invoke-Handoff -WorkDir $codexOnlyFx -Arguments @("models")
+Check "a codexModel mapping alone clears INERT" ($r.Out -notmatch "INERT")
+$codexInertFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit","codexModel":"inherit"}}}' }
+$r = Invoke-Handoff -WorkDir $codexInertFx -Arguments @("models")
+Check "all-inherit Claude and Codex values still report INERT" ($r.Out -match "INERT")
+$prevCodexEconomy = $env:HANDOFF_CODEX_MODEL_ECONOMY
+$env:HANDOFF_CODEX_MODEL_ECONOMY = "test-env-codex-economy"
+try {
+    $r = Invoke-Handoff -WorkDir $codexInertFx -Arguments @("models")
+    Check "a Codex environment override clears INERT" ($r.Out -notmatch "INERT")
+} finally {
+    if ($null -eq $prevCodexEconomy) { Remove-Item Env:\HANDOFF_CODEX_MODEL_ECONOMY -ErrorAction SilentlyContinue } else { $env:HANDOFF_CODEX_MODEL_ECONOMY = $prevCodexEconomy }
+}
+
+# NEXT_TURN.md names the model for the actor's own tool, and the new-window rule.
+$null = Invoke-Handoff -WorkDir $codexFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $codexFx "NEXT_TURN.md")
+Check "NEXT_TURN.md names the Codex model for a Codex Master turn" (($nt -match "## Model For This Turn") -and ($nt -match "Profile: standard") -and ($nt -match "Codex model: test-codex-standard \(MODEL_ROUTING\.json\)"))
+Check "NEXT_TURN.md says to start a new window rather than switch models" ($nt -match "start a new window on this one instead of switching inside the conversation")
+$highNextFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $highProfileHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting }
+$null = Invoke-Handoff -WorkDir $highNextFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $highNextFx "NEXT_TURN.md")
+Check "a high_reasoning task names the strongest mapped Codex model" (($nt -match "Profile: high_reasoning") -and ($nt -match "Codex model: test-codex-high"))
+$claudeNextFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting }
+$null = Invoke-Handoff -WorkDir $claudeNextFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $claudeNextFx "NEXT_TURN.md")
+Check "a Claude Code turn names the Claude model, not the Codex one" (($nt -match "Claude model: test-claude-standard \(MODEL_ROUTING\.json\)") -and ($nt -notmatch "Codex model:"))
+$inheritNextFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$null = Invoke-Handoff -WorkDir $inheritNextFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $inheritNextFx "NEXT_TURN.md")
+Check "an unmapped profile says to keep the window's model" (($nt -match "Codex model: inherit \(built-in fallback\)") -and ($nt -match "keep the model your window already uses"))
+$userNextFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$null = Invoke-Handoff -WorkDir $userNextFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $userNextFx "NEXT_TURN.md")
+Check "a User turn carries no model section" ($nt -notmatch "## Model For This Turn")
+
+# Both shells, one answer: handoff.sh writes the same model section for the same project.
+$parityBash = Get-Command bash -ErrorAction SilentlyContinue
+if ($null -eq $parityBash) {
+    Write-Host "  SKIP  model section parity with handoff.sh: no bash interpreter on this machine"
+} else {
+    $shPath = (Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/'
+    $activateLayout = @"
+{
+    "schemaVersion":  1,
+    "profiles":  {
+                     "standard":  {
+                                      "claudeModel":  "test-claude-standard",
+                                      "codexModel":  "test-codex-layout"
+                                  },
+                     "high_reasoning":  {
+                                            "codexModel":  "test-codex-high"
+                                        }
+                 }
+}
+"@
+    $parityCases = @(
+        @{ Name = "file mapping"; Fx = $codexFx; Env = @{} },
+        @{ Name = "environment override"; Fx = $codexFx; Env = @{ HANDOFF_CODEX_MODEL_STANDARD = "test-env-parity" } },
+        @{ Name = "high_reasoning task"; Fx = $highNextFx; Env = @{} },
+        @{ Name = "Claude Code turn"; Fx = $claudeNextFx; Env = @{} },
+        @{ Name = "unmapped profile"; Fx = $inheritNextFx; Env = @{} },
+        @{ Name = "models -Activate layout"; Fx = (New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $activateLayout }); Env = @{} },
+        @{ Name = "the other tool's value is unsafe"; Fx = $codexFx; Env = @{ HANDOFF_CLAUDE_MODEL_STANDARD = "two words" } },
+        @{ Name = "malformed routing file"; Fx = (New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"codexModel":"test-codex-broken"}}' }); Env = @{} }
+    )
+    foreach ($case in $parityCases) {
+        $saved = @{}
+        foreach ($k in $case.Env.Keys) { $saved[$k] = [System.Environment]::GetEnvironmentVariable($k, "Process"); [System.Environment]::SetEnvironmentVariable($k, $case.Env[$k], "Process") }
+        try {
+            $null = Invoke-Handoff -WorkDir $case.Fx -Arguments @("next")
+            $psText = (Get-Content -Raw -Path (Join-Path $case.Fx "NEXT_TURN.md")) -replace "`r", ""
+            $prevCwd = [System.Environment]::CurrentDirectory
+            Push-Location $case.Fx
+            [System.Environment]::CurrentDirectory = $case.Fx
+            try { $null = & $parityBash.Source $shPath next 2>&1 } finally { Pop-Location; [System.Environment]::CurrentDirectory = $prevCwd }
+            $shText = (Get-Content -Raw -Path (Join-Path $case.Fx "NEXT_TURN.md")) -replace "`r", ""
+        } finally {
+            foreach ($k in $case.Env.Keys) { [System.Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
+        }
+        $psSection = if ($psText -match '(?s)## Model For This Turn\n(.*?)\n\n') { $Matches[1] } else { "<none>" }
+        $shSection = if ($shText -match '(?s)## Model For This Turn\n(.*?)\n\n') { $Matches[1] } else { "<none>" }
+        Check "handoff.sh and handoff.ps1 write the same model section ($($case.Name))" (($psSection -ne "<none>") -and ($psSection -eq $shSection)) "ps=[$psSection] sh=[$shSection]"
+    }
+}
+
+# Automated Codex turns pass the resolved model and run the Codex cost gate.
+$fakeModelEcho = Join-Path $FixtureRoot "fake-codex-model-echo.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo %* > FAKE_ARGV.txt
+echo MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION> MASTER_LAST.md
+echo VERDICT: APPROVED model-routing> REVIEW_LAST.md
+:done
+'@ | Set-Content -Path $fakeModelEcho -Encoding ascii
+$prevCodexCli = $env:CODEX_CLI
+$env:CODEX_CLI = $fakeModelEcho
+try {
+    $mfx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "codex routing"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting } -InitGit
+    $r = Invoke-Handoff -WorkDir $mfx -Arguments @("master-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $mfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $mfx "FAKE_ARGV.txt") } else { "" }
+    Check "master-run passes the resolved Codex model to codex exec" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-standard --cd "))
+    Check "master-run prints the model it runs on" ($r.Out -match "Codex model: test-codex-standard \(profile standard; MODEL_ROUTING\.json\)")
+
+    $mfx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    $r = Invoke-Handoff -WorkDir $mfx -Arguments @("master-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $mfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $mfx "FAKE_ARGV.txt") } else { "" }
+    Check "master-run with no mapping passes no --model (Codex keeps its own default)" (($r.Code -eq 0) -and ($argv -match "^exec --cd ") -and ($argv -notmatch "--model"))
+
+    $mfx = New-Fixture -Files @{ "AI_HANDOFF.md" = $highProfileHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting } -InitGit
+    $r = Invoke-Handoff -WorkDir $mfx -Arguments @("master-run", "-Yes")
+    Check "master-run on a concrete high_reasoning Codex model requires -AllowModelEscalation" (($r.Code -eq 1) -and ($r.Out -match "requires explicit cost escalation approval") -and (-not (Test-Path (Join-Path $mfx "FAKE_ARGV.txt"))))
+    $r = Invoke-Handoff -WorkDir $mfx -Arguments @("master-run", "-Yes", "-AllowModelEscalation")
+    $argv = if (Test-Path (Join-Path $mfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $mfx "FAKE_ARGV.txt") } else { "" }
+    Check "an approved escalation runs master-run on the strongest mapped model" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-high "))
+
+    $rfx = New-Fixture -Files @{ "AI_HANDOFF.md" = ((New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "codex review routing") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: high_reasoning"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting } -InitGit
+    Initialize-FixtureGitBaseline -Dir $rfx
+    New-Item -ItemType Directory -Path (Join-Path $rfx "scripts") -Force | Out-Null
+    Set-Content -Path (Join-Path $rfx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+    $h = (Get-Content -Raw -Path (Join-Path $rfx "AI_HANDOFF.md")) -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+    Set-Content -Path (Join-Path $rfx "AI_HANDOFF.md") -Value $h -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $rfx -Arguments @("review-run", "-Yes")
+    Check "review-run on a concrete high_reasoning Codex model requires -AllowModelEscalation" (($r.Code -eq 1) -and ($r.Out -match "requires explicit cost escalation approval") -and (-not (Test-Path (Join-Path $rfx "FAKE_ARGV.txt"))))
+    $r = Invoke-Handoff -WorkDir $rfx -Arguments @("review-run", "-Yes", "-AllowModelEscalation")
+    $argv = if (Test-Path (Join-Path $rfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $rfx "FAKE_ARGV.txt") } else { "" }
+    Check "an approved review-run passes the strongest mapped Codex model" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-high "))
+} finally {
+    if ($null -eq $prevCodexCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevCodexCli }
+}
+$handoffSrcV310 = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+# -Model names a Claude model. It must not move Codex off the task's profile.
+$r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models", "-Model", "some-claude-model")
+Check "-Model moves only Claude; Codex keeps the task's profile" (($r.Out -match "Effective profile:\s+explicit_user_choice") -and ($r.Out -match "Codex profile:\s+standard") -and ($r.Out -match "Codex model:\s+test-codex-standard"))
+$r = Invoke-Handoff -WorkDir $highNextFx -Arguments @("models", "-Model", "some-claude-model")
+Check "-Model does not lift the Codex cost gate on a high_reasoning task" (($r.Out -match "Codex profile:\s+high_reasoning") -and ($r.Out -match "Codex approval:"))
+
+# cycle with a Codex Implementer stops at the Codex cost gate BEFORE asking for yes, with exit 1.
+$codexImplRoles = $DefaultRoles -replace "\| Implementer \| Claude Code \|", "| Implementer | Codex |" -replace "\| Reviewer \| Codex \|", "| Reviewer | Claude Code |"
+$codexImplHandoff = ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "codex implementer routing") -replace "(- Current Task:[^\r\n]+)", "`$1`r`n- Model Profile: high_reasoning") -replace "- Implementer: Claude Code", "- Implementer: Codex" -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$cifx = New-Fixture -Files @{ "AI_HANDOFF.md" = $codexImplHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $codexImplRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $codexRouting } -InitGit
+Initialize-FixtureGitBaseline -Dir $cifx
+$r = Invoke-Handoff -WorkDir $cifx -Arguments @("cycle")
+Check "cycle with a Codex Implementer stops at the Codex cost gate before the yes prompt" (($r.Code -eq 1) -and ($r.Out -match "Codex Implementer turn: blocked - model routing") -and ($r.Out -notmatch "Cancelled") -and ($r.Out -notmatch "exited with error")) "code=$($r.Code)"
+
+Check "the Codex Implementer turn runs the Codex cost gate and passes the resolved model" (($handoffSrcV310 -match '(?s)function Invoke-CodexImplementerTurn.{0,2500}Test-CodexModelPreflight') -and ($handoffSrcV310 -match "(?s)function Invoke-CodexImplementerTurn.{0,6000}CodexUsesConcreteModel\) \{ \`$argList \+= @\('--model'"))
 
 # The Bash suite is run for real when a Bash interpreter exists, and reported as SKIPPED
 # - never as passing - when one does not. A suite that silently counts as green when it

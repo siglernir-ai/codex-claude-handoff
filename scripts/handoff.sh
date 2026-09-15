@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.9.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.10.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -281,6 +281,131 @@ cmd_adapters() {
     echo ""
 }
 
+# v3.10.0: the model this turn should run on, resolved the same way as handoff.ps1:
+# HANDOFF_<TOOL>_MODEL_<PROFILE>, then the profile's claudeModel/codexModel in
+# MODEL_ROUTING.json, then inherit. handoff.ps1 models remains the full view.
+_canonical_tool() {
+    local t
+    t="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$t" in
+        codex|"codex window"|"codex cli"|"codex desktop"|"openai codex") echo "codex" ;;
+        "claude code"|claude-code|claudecode|"claude code cli"|"claude code window") echo "claude-code" ;;
+        *) echo "" ;;
+    esac
+}
+
+_effective_profile() {
+    local p
+    p="$(printf '%s' "$MODEL_PROFILE" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$p" in
+        "") p="auto" ;;
+        economical|cheap) p="economy" ;;
+        readonly) p="cheap_readonly" ;;
+        deep_reasoning|strongest_available) p="high_reasoning" ;;
+    esac
+    case "$p" in
+        auto) if [ "$STATE" = "NEEDS_INVESTIGATION" ]; then echo "cheap_readonly"; else echo "standard"; fi ;;
+        inherit|economy|cheap_readonly|standard|high_reasoning|explicit_user_choice) echo "$p" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Prints the value of <key> inside the "<profile>": { ... } object of MODEL_ROUTING.json.
+# Reads one key per line (the shipped layout and the models -Activate layout) or a
+# single-line object.
+_routing_value() {
+    local file="$1" profile="$2" key="$3"
+    [ -f "$file" ] || return 0
+    tr -d '\r' < "$file" | awk -v prof="$profile" -v key="$key" '
+        {
+            if (!inb) {
+                opener = "\"" prof "\"[ \t]*:[ \t]*\\{"
+                if (match($0, opener)) { inb = 1; rest = substr($0, RSTART + RLENGTH) } else { next }
+            } else { rest = $0 }
+            cut = index(rest, "}")
+            seg = (cut > 0) ? substr(rest, 1, cut - 1) : rest
+            pat = "\"" key "\"[ \t]*:[ \t]*\"[^\"]*\""
+            if (match(seg, pat)) {
+                v = substr(seg, RSTART, RLENGTH)
+                sub("^\"" key "\"[ \t]*:[ \t]*\"", "", v); sub("\"$", "", v)
+                print v; exit
+            }
+            if (cut > 0) exit
+        }'
+}
+
+# Sets TOOL_MODEL and TOOL_SOURCE for one tool: environment, then MODEL_ROUTING.json, then inherit.
+_resolve_tool_model() {
+    local env_prefix="$1" key="$2" profile="$3" file="$4" env_name env_value file_value
+    TOOL_MODEL="inherit"; TOOL_SOURCE="built-in fallback"
+    env_name="${env_prefix}$(printf '%s' "$profile" | tr '[:lower:]' '[:upper:]')"
+    env_value="${!env_name:-}"
+    env_value="$(printf '%s' "$env_value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -n "$env_value" ]; then
+        TOOL_MODEL="$env_value"; TOOL_SOURCE="environment $env_name"
+    else
+        file_value="$(_routing_value "$file" "$profile" "$key" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        if [ -n "$file_value" ]; then TOOL_MODEL="$file_value"; TOOL_SOURCE="MODEL_ROUTING.json"; fi
+    fi
+    if [ "$TOOL_MODEL" = "default" ]; then TOOL_MODEL="inherit"; fi
+}
+
+_safe_model() {
+    [ "$1" = "inherit" ] || printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/@-]*$'
+}
+
+# handoff.ps1 parses MODEL_ROUTING.json strictly and blocks on any error. Without a JSON
+# parser this catches what can be checked by counting: the schema version, balanced
+# braces and brackets, and an even number of quotes.
+_routing_file_usable() {
+    local file="$1" opens closes
+    [ -f "$file" ] || return 0
+    grep -Eq '"schemaVersion"[[:space:]]*:[[:space:]]*1([^0-9]|$)' "$file" || return 1
+    opens="$(tr -cd '{' < "$file" | wc -c | tr -d ' ')"; closes="$(tr -cd '}' < "$file" | wc -c | tr -d ' ')"
+    [ "$opens" = "$closes" ] || return 1
+    opens="$(tr -cd '[' < "$file" | wc -c | tr -d ' ')"; closes="$(tr -cd ']' < "$file" | wc -c | tr -d ' ')"
+    [ "$opens" = "$closes" ] || return 1
+    [ $(( $(tr -cd '"' < "$file" | wc -c | tr -d ' ') % 2 )) -eq 0 ]
+}
+
+_model_lines() {
+    local canonical label profile file claude_model claude_source model source
+    canonical="$(_canonical_tool "$1")"
+    case "$canonical" in
+        codex)       label="Codex model" ;;
+        claude-code) label="Claude model" ;;
+        *) return 0 ;;
+    esac
+    echo ""
+    echo "## Model For This Turn"
+    file="$(pwd)/.ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+    profile="$(_effective_profile)"
+    if [ -z "$profile" ] || ! _routing_file_usable "$file"; then
+        echo "Model routing is BLOCKED - run handoff.ps1 models before this turn."
+        return 0
+    fi
+    # Both tools are resolved and checked, as handoff.ps1 does: one unsafe value blocks the turn.
+    _resolve_tool_model "HANDOFF_CLAUDE_MODEL_" "claudeModel" "$profile" "$file"
+    claude_model="$TOOL_MODEL"; claude_source="$TOOL_SOURCE"
+    _resolve_tool_model "HANDOFF_CODEX_MODEL_" "codexModel" "$profile" "$file"
+    if ! _safe_model "$claude_model" || ! _safe_model "$TOOL_MODEL"; then
+        echo "Model routing is BLOCKED - run handoff.ps1 models before this turn."
+        return 0
+    fi
+    if [ "$canonical" = "codex" ]; then
+        model="$TOOL_MODEL"; source="$TOOL_SOURCE"
+    else
+        model="$claude_model"; source="$claude_source"
+    fi
+    echo "Profile: $profile"
+    echo "$label: $model ($source)"
+    if [ "$model" = "inherit" ]; then
+        echo "No model is mapped for this profile: keep the model your window already uses."
+    else
+        echo "If your open window runs a different model, start a new window on this one instead of switching inside the conversation. A switch resends the whole conversation to the new model without its cache; a new window loses nothing, because the state is in AI_HANDOFF.md and this file."
+    fi
+}
+
 cmd_next() {
     local exp_role exp_tool actor role_label action_line after_line is_mismatch=false
     exp_role=$(_expected_role "$STATE")
@@ -331,6 +456,7 @@ $cf"
         echo "## Next Recommended Step (from AI_HANDOFF.md)"
         if [ -n "$next_step" ]; then echo "$next_step"; else echo "(none - see AI_HANDOFF.md)"; fi
         if [ -n "$key_context" ]; then echo ""; echo "## Key Context"; echo "$key_context"; fi
+        if ! $is_mismatch && [ "$actor" != "User" ]; then _model_lines "$actor"; fi
         if [ -n "$section_map" ]; then echo ""; echo "## AI_HANDOFF.md Sections (line numbers)"; echo "$section_map"; fi
         if [ -n "$after_line" ];  then echo ""; echo "## After You Finish"; echo "$after_line"; fi
     } > "$nt_path"

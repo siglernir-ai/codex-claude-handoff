@@ -15,6 +15,13 @@
 
 set -u
 
+# v3.10.0: test the code, not the machine. A user who activated model routing through the
+# environment must not see these fixtures resolve to their own models.
+while IFS='=' read -r _model_var _; do
+    case "$_model_var" in HANDOFF_CLAUDE_MODEL_*|HANDOFF_CODEX_MODEL_*) unset "$_model_var" ;; esac
+done < <(env)
+unset _model_var
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HANDOFF_SH="$SCRIPT_DIR/handoff.sh"
@@ -460,6 +467,75 @@ else
     expected_count="$(grep -c '^## ' "$FX4/AI_HANDOFF.md")"
     if [ "$map_count" -eq 0 ] || [ "$map_count" -ne "$expected_count" ]; then map_ok=1; fi
     check "bash section map points at every AI_HANDOFF.md heading" $map_ok "mapped $map_count of $expected_count"
+
+    # v3.10.0: NEXT_TURN.md names the model for the turn, resolved the way handoff.ps1
+    # resolves it: environment, then MODEL_ROUTING.json, then inherit.
+    model_section() {
+        # model_section <fixture> -> prints the lines under "## Model For This Turn"
+        tr -d '\r' < "$1/NEXT_TURN.md" | awk '/^## Model For This Turn$/{s=1;next} s&&/^$/{exit} s{print}'
+    }
+    set_routing() {
+        mkdir -p "$1/.ai/skills/codex-claude-handoff"
+        printf '%s\n' "$2" > "$1/.ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
+    }
+    set_profile() {
+        awk -v p="$2" '{print} /^- Current Task: /{print "- Model Profile: " p}' "$1/AI_HANDOFF.md" > "$1/AI_HANDOFF.tmp" && mv "$1/AI_HANDOFF.tmp" "$1/AI_HANDOFF.md"
+    }
+
+    FX5="$(make_fixture NEEDS_ANALYSIS Master)"
+    set_routing "$FX5" '{
+  "schemaVersion": 1,
+  "profiles": {
+    "standard": {
+      "claudeModel": "test-claude-standard",
+      "codexModel": "test-codex-standard"
+    },
+    "high_reasoning": {
+      "claudeModel": "inherit",
+      "codexModel": "test-codex-high"
+    }
+  }
+}'
+    ( cd "$FX5" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    model_section "$FX5" | grep -qx 'Codex model: test-codex-standard (MODEL_ROUTING.json)'
+    check "bash next names the Codex model from codexModel" $?
+    model_section "$FX5" | grep -q 'start a new window on this one instead of switching inside the conversation'
+    check "bash next says to start a new window rather than switch models" $?
+
+    ( cd "$FX5" && HANDOFF_CODEX_MODEL_STANDARD=test-env-codex bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    model_section "$FX5" | grep -qx 'Codex model: test-env-codex (environment HANDOFF_CODEX_MODEL_STANDARD)'
+    check "bash next lets HANDOFF_CODEX_MODEL_<PROFILE> override the file" $?
+
+    set_profile "$FX5" high_reasoning
+    ( cd "$FX5" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    model_section "$FX5" | grep -qx 'Codex model: test-codex-high (MODEL_ROUTING.json)'
+    check "bash next reads the high_reasoning profile, not its neighbour" $?
+
+    FX6="$(make_fixture NEEDS_ANALYSIS Master)"
+    set_routing "$FX6" '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit"},"economy":{"codexModel":"wrong-neighbour"}}}'
+    ( cd "$FX6" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    model_section "$FX6" | grep -qx 'Codex model: inherit (built-in fallback)'
+    check "bash next never reads a single-line neighbour profile's value" $?
+    model_section "$FX6" | grep -qx 'No model is mapped for this profile: keep the model your window already uses.'
+    check "bash next says to keep the window's model when none is mapped" $?
+
+    FX7="$(make_fixture READY_FOR_IMPLEMENTATION Implementer)"
+    set_routing "$FX7" '{
+    "schemaVersion":  1,
+    "profiles":  {
+                     "standard":  {
+                                      "claudeModel":  "test-claude-layout"
+                                  }
+                 }
+}'
+    ( cd "$FX7" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    model_section "$FX7" | grep -qx 'Claude model: test-claude-layout (MODEL_ROUTING.json)'
+    check "bash next names the Claude model for a Claude Code turn (models -Activate layout)" $?
+
+    FX8="$(make_fixture REVIEW_DONE User)"
+    ( cd "$FX8" && bash "$HANDOFF_SH" next ) >/dev/null 2>&1
+    ! grep -q '^## Model For This Turn$' "$FX8/NEXT_TURN.md"
+    check "bash next writes no model section for a User turn" $?
 
     rm -rf "$BASH_TMP"
 fi

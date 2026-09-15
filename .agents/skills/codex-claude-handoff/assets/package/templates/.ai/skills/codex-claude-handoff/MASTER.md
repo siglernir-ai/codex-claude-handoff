@@ -57,9 +57,14 @@ keeps its context small by rule (since v3.8.0):
 - **Model.** Route and review ordinary turns with the host's standard model at low or
   medium effort. Switch to the strongest model only for a high-value review pass; in
   the same measured session it consumed the usage window about five times faster.
-- **A fresh window per protocol turn.** Durable state lives in `AI_HANDOFF.md`,
-  `DECISIONS.md`, and `NEXT_TURN.md`, so starting each turn in a new window loses no
-  continuity and starts from an empty context.
+  `NEXT_TURN.md` names the model the task's profile resolves to under
+  `Model For This Turn` (since v3.10.0).
+- **A fresh window per protocol turn, and always when the model changes.** Durable
+  state lives in `AI_HANDOFF.md`, `DECISIONS.md`, and `NEXT_TURN.md`, so starting each
+  turn in a new window loses no continuity and starts from an empty context. Never
+  switch models inside a long conversation: the switch resends the whole conversation
+  to the new model without its cache. Before a window closes, write anything decided
+  in it that is not yet in those files.
 
 The budget never relaxes a safety gate. Role checks, turn ownership, exact scope,
 verification evidence, and user authorization apply in full; when a gate requires a
@@ -69,9 +74,11 @@ read, make it.
 
 The Master selects a capability profile for each meaningful task and records it as
 `Model Profile` in the `AI_HANDOFF.md` Status section. The Master does not hard-code
-provider model names. The Claude adapter may translate the profile to a concrete
-model through `MODEL_ROUTING.json` or an environment override; Codex model selection
-remains controlled by the user or host UI when no callable adapter can switch it.
+provider model names. Each tool translates the profile to its own concrete model
+through `MODEL_ROUTING.json` (`claudeModel`, `codexModel`) or an environment override
+(`HANDOFF_CLAUDE_MODEL_<PROFILE>`, `HANDOFF_CODEX_MODEL_<PROFILE>`). Automated turns pass
+that model to the tool; a window turn reads it from `NEXT_TURN.md`, and the person
+driving the window opens a new window on it when it differs (since v3.10.0).
 
 Choose the least expensive profile that can reliably complete and verify the work:
 

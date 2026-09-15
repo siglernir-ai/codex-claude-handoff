@@ -682,3 +682,22 @@ models` and `doctor` report the profile, resolved value, and source without
 running an AI turn. Command and continuity evidence record the adapter's requested
 profile/model separately from the actual runtime model, which remains
 `unknown/not exposed` unless Claude Code reports it directly.
+
+### Codex model (v3.10.0)
+
+The same profile resolves to a Codex model for every automated Codex turn:
+`master-run`, `review-run`, and the Codex Implementer. The order mirrors Claude's:
+
+1. `-CodexModel` for an operator's concrete one-command choice.
+2. `HANDOFF_CODEX_MODEL_<PROFILE>` process environment variable.
+3. The profile's `codexModel` in `MODEL_ROUTING.json`.
+4. `inherit`, which omits `--model` and lets Codex use its configured default.
+
+A concrete value is passed as `codex exec --model <value>`, and the command prints the
+model it runs on. A concrete `high_reasoning` Codex model fails closed without
+`-AllowModelEscalation`; `cycle` and `loop` check it before asking for confirmation. `-Model`
+names a Claude model and leaves Codex on the task's profile, and an explicit `-CodexModel`
+is the operator's own choice, as `-Model` is for Claude. For a turn driven in a window, `NEXT_TURN.md` carries a
+`Model For This Turn` section with the profile and the model for the actor's tool; a
+person switching to that model opens a new window rather than switching inside a long
+conversation.

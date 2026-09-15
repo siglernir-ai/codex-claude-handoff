@@ -70,7 +70,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 | `CLAUDE.md` | Claude Code entry pointer - resolves Claude Code's current role(s) and points to the role file |
 | `CAPABILITIES.md` | Agent capability profile: what each tool is good at and the default role binding |
 | `CLAUDE_EXECUTION_POLICY.md` | Claude execution profiles, command transparency, model/subagent evidence rules, and continuity artifacts |
-| `MODEL_ROUTING.json` | Project-local, replaceable mapping from stable capability profiles to current Claude Code model identifiers |
+| `MODEL_ROUTING.json` | Project-local, replaceable mapping from stable capability profiles to current Claude Code and Codex model identifiers (Codex since v3.10.0) |
 | `CREDENTIAL_READ_DENY.txt` | Claude Code deny rules the installer adds to `.claude/settings.json`, so agents cannot open credential files (since v3.9.0) |
 | `README.md` | Human-facing overview of this folder |
 | `VERSION` | Installed protocol version |

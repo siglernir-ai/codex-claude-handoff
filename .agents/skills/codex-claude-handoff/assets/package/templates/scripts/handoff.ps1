@@ -13,6 +13,7 @@ param(
     [string]$SupersededVersions,
     [string]$ModelProfile,
     [string]$Model,
+    [string]$CodexModel,
     [int]$TimeoutSeconds = 180,
     [switch]$Yes,
     [switch]$IncludeMaster,
@@ -125,7 +126,8 @@ function Resolve-ModelSelection {
         [string]$ForState,
         [string]$HandoffProfile,
         [string]$CommandProfile,
-        [string]$CommandModel
+        [string]$CommandModel,
+        [string]$CodexCommandModel
     )
 
     $errors = [System.Collections.Generic.List[string]]::new()
@@ -135,6 +137,9 @@ function Resolve-ModelSelection {
         Normalize-ModelProfile -Value $HandoffProfile
     }
 
+    # v3.10.0: -Model names a CLAUDE model, so it moves only Claude to explicit_user_choice.
+    # Codex keeps the task's profile; -CodexModel is its own explicit choice.
+    $taskRequested = $requested
     if (-not [string]::IsNullOrWhiteSpace($CommandModel)) {
         $requested = "explicit_user_choice"
     }
@@ -145,6 +150,11 @@ function Resolve-ModelSelection {
     $effective = $requested
     if ($effective -eq "auto") {
         $effective = if ($ForState -eq "NEEDS_INVESTIGATION") { "cheap_readonly" } else { "standard" }
+    }
+    $codexEffective = $taskRequested
+    if ($ValidModelProfiles -notcontains $codexEffective) { $codexEffective = "inherit" }
+    if ($codexEffective -eq "auto") {
+        $codexEffective = if ($ForState -eq "NEEDS_INVESTIGATION") { "cheap_readonly" } else { "standard" }
     }
 
     $resolvedModel = "inherit"
@@ -161,43 +171,71 @@ function Resolve-ModelSelection {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($CommandModel)) {
-        $resolvedModel = $CommandModel.Trim()
-        $source = "command line -Model"
-    } else {
-        $envName = "HANDOFF_CLAUDE_MODEL_" + $effective.ToUpperInvariant()
-        $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
-        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
-            $resolvedModel = $envValue.Trim()
-            $source = "environment $envName"
-        } elseif ($null -ne $config -and $null -ne $config.profiles) {
-            $profileConfig = $config.profiles.PSObject.Properties[$effective]
-            if ($null -ne $profileConfig -and $null -ne $profileConfig.Value.claudeModel) {
-                $candidate = [string]$profileConfig.Value.claudeModel
-                if (-not [string]::IsNullOrWhiteSpace($candidate)) {
-                    $resolvedModel = $candidate.Trim()
-                    $source = "MODEL_ROUTING.json"
-                }
-            }
+    # v3.10.0: one profile, one model per tool. The same resolution order serves both
+    # vendors, so the question "which model does this turn run on" has one answer shape
+    # whichever tool holds the role.
+    $claude = Resolve-ToolModel -EnvPrefix "HANDOFF_CLAUDE_MODEL_" -ConfigKey "claudeModel" -CommandFlag "-Model" `
+        -Effective $effective -Config $config -CommandValue $CommandModel
+    $codex = Resolve-ToolModel -EnvPrefix "HANDOFF_CODEX_MODEL_" -ConfigKey "codexModel" -CommandFlag "-CodexModel" `
+        -Effective $codexEffective -Config $config -CommandValue $CodexCommandModel
+    foreach ($resolution in @(@{ Tool = "Claude"; Model = $claude.Model }, @{ Tool = "Codex"; Model = $codex.Model })) {
+        if ($resolution.Model -ne "inherit" -and -not (Test-SafeModelValue -Value $resolution.Model)) {
+            $errors.Add("Resolved $($resolution.Tool) model value must be a single model identifier using letters, digits, dot, underscore, colon, slash, at-sign, or hyphen.")
         }
     }
 
-    if ($resolvedModel -eq "default") { $resolvedModel = "inherit" }
-    if ($resolvedModel -ne "inherit" -and -not (Test-SafeModelValue -Value $resolvedModel)) {
-        $errors.Add("Resolved model value must be a single model identifier using letters, digits, dot, underscore, colon, slash, at-sign, or hyphen.")
-    }
-
-    $needsEscalationApproval = ($effective -eq "high_reasoning" -and $resolvedModel -ne "inherit")
     return @{
         Ok = ($errors.Count -eq 0)
         Errors = $errors
         RequestedProfile = $requested
         EffectiveProfile = $effective
-        ClaudeModel = $resolvedModel
-        Source = $source
-        UsesConcreteModel = ($resolvedModel -ne "inherit")
-        NeedsEscalationApproval = $needsEscalationApproval
+        ClaudeModel = $claude.Model
+        Source = $claude.Source
+        UsesConcreteModel = ($claude.Model -ne "inherit")
+        NeedsEscalationApproval = ($effective -eq "high_reasoning" -and $claude.Model -ne "inherit")
+        CodexModel = $codex.Model
+        CodexSource = $codex.Source
+        CodexUsesConcreteModel = ($codex.Model -ne "inherit")
+        CodexEffectiveProfile = $codexEffective
+        CodexNeedsEscalationApproval = ($codexEffective -eq "high_reasoning" -and $codex.Model -ne "inherit" -and [string]::IsNullOrWhiteSpace($CodexCommandModel))
     }
+}
+
+# Resolution order for one tool: command line, then <EnvPrefix><PROFILE>, then the
+# profile's <ConfigKey> in MODEL_ROUTING.json, then inherit (the tool's own default).
+function Resolve-ToolModel {
+    param(
+        [string]$EnvPrefix,
+        [string]$ConfigKey,
+        [string]$CommandFlag,
+        [string]$Effective,
+        $Config,
+        [string]$CommandValue
+    )
+    $model = "inherit"
+    $source = "built-in fallback"
+    if (-not [string]::IsNullOrWhiteSpace($CommandValue)) {
+        $model = $CommandValue.Trim()
+        $source = "command line $CommandFlag"
+    } else {
+        $envName = $EnvPrefix + $Effective.ToUpperInvariant()
+        $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
+        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+            $model = $envValue.Trim()
+            $source = "environment $envName"
+        } elseif ($null -ne $Config -and $null -ne $Config.profiles) {
+            $profileConfig = $Config.profiles.PSObject.Properties[$Effective]
+            if ($null -ne $profileConfig -and $null -ne $profileConfig.Value -and $null -ne $profileConfig.Value.PSObject.Properties[$ConfigKey]) {
+                $candidate = [string]$profileConfig.Value.PSObject.Properties[$ConfigKey].Value
+                if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                    $model = $candidate.Trim()
+                    $source = "MODEL_ROUTING.json"
+                }
+            }
+        }
+    }
+    if ($model -eq "default") { $model = "inherit" }
+    return @{ Model = $model; Source = $source }
 }
 
 # --- Canonical tool identity (v3.4.1) ---
@@ -1063,6 +1101,13 @@ function Get-SanitizedClaudeInvocation {
 }
 
 function Test-ModelTurnPreflight {
+    # v3.10.0: the Implementer turn's cost gate belongs to the tool that runs it. Checking
+    # Claude's mapping for a Codex Implementer let the turn pass here, ask for "yes", and
+    # only then stop inside the Codex runner with a misleading Claude error and exit 5.
+    $preflightImplementer = Resolve-Actor -Role "Implementer" -Binding $script:Binding
+    if (Test-SameToolIdentity -First $preflightImplementer -Second "Codex") {
+        return (Test-CodexModelPreflight -CommandLabel "Codex Implementer turn")
+    }
     if (-not $script:ModelSelection.Ok) {
         Write-Host "Model routing blocked."
         foreach ($error in $script:ModelSelection.Errors) { Write-Host "Reason: $error" }
@@ -1077,6 +1122,36 @@ function Test-ModelTurnPreflight {
         return $false
     }
     return $true
+}
+
+# v3.10.0: automated Codex turns (Master, Reviewer, Implementer) run on the model the
+# task's profile resolves to, under the same cost gate as Claude. Before this, every
+# codex exec inherited whatever model the local Codex configuration named, so a task the
+# Master marked high_reasoning ran on the standard model, and a window left on the
+# strongest model ran ordinary turns on it.
+function Test-CodexModelPreflight {
+    param([string]$CommandLabel)
+    if (-not $script:ModelSelection.Ok) {
+        Write-Host "$($CommandLabel): blocked - model routing is invalid."
+        foreach ($routingError in $script:ModelSelection.Errors) { Write-Host "Reason: $routingError" }
+        Write-Host "Stop category: Environment/Preflight - repair model routing before retrying."
+        return $false
+    }
+    if ($script:ModelSelection.CodexNeedsEscalationApproval -and -not $AllowModelEscalation) {
+        Write-Host "$($CommandLabel): blocked - model routing."
+        Write-Host "Reason: profile high_reasoning resolves to the concrete Codex model '$($script:ModelSelection.CodexModel)' and requires explicit cost escalation approval."
+        Write-Host "Next step: rerun with -AllowModelEscalation after reviewing the resolved model with 'handoff.ps1 models'."
+        Write-Host "Stop category: User Decision - model cost escalation approval required."
+        return $false
+    }
+    return $true
+}
+
+function Get-CodexModelDisplay {
+    if ($null -ne $script:ModelSelection -and $script:ModelSelection.CodexUsesConcreteModel) {
+        return " --model `"$($script:ModelSelection.CodexModel)`""
+    }
+    return ""
 }
 
 function New-ClaudeCommandEvidence {
@@ -1735,6 +1810,7 @@ function Invoke-CodexImplementerTurn {
         Write-Host "Stop category: Environment/Preflight - not a user decision."
         return 3
     }
+    if (-not (Test-CodexModelPreflight -CommandLabel "Codex Implementer turn")) { return 1 }
 
     $repoRoot = (Get-Location).Path
     $lastPath = Join-Path $repoRoot $ClaudeImplementerLastName
@@ -1767,14 +1843,17 @@ function Invoke-CodexImplementerTurn {
         $prompt += " This is a SOURCE-READ-ONLY investigation turn. Do not create, edit, rename or delete any application, source, test or configuration file. You may update ONLY AI_HANDOFF.md and local handoff coordination files. The working tree is checked after this turn and any source change fails it, even if the handoff transition itself was correct. Record repository findings in AI_HANDOFF.md and transition exactly as NEXT_TURN.md requires."
     }
 
-    Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox $implementerSandbox --ephemeral --json --output-last-message `"$ClaudeImplementerLastName`" -   (prompt via stdin)"
+    Write-Host "Invocation: codex exec$(Get-CodexModelDisplay) --cd `"$repoRoot`" --sandbox $implementerSandbox --ephemeral --json --output-last-message `"$ClaudeImplementerLastName`" -   (prompt via stdin)"
+    Write-Host "Codex model: $($script:ModelSelection.CodexModel) (profile $($script:ModelSelection.CodexEffectiveProfile); $($script:ModelSelection.CodexSource))"
     Write-Host ""
 
     $tmpOut = [System.IO.Path]::GetTempFileName()
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $promptFile = [System.IO.Path]::GetTempFileName()
     Set-Content -Path $promptFile -Value $prompt -Encoding utf8 -ErrorAction SilentlyContinue
-    $argList = @('exec', '--cd', $repoRoot, '--sandbox', $implementerSandbox, '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+    $argList = @('exec')
+    if ($script:ModelSelection.CodexUsesConcreteModel) { $argList += @('--model', $script:ModelSelection.CodexModel) }
+    $argList += @('--cd', $repoRoot, '--sandbox', $implementerSandbox, '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
     $timedOut = $false
     $codexExit = -1
     try {
@@ -1878,7 +1957,7 @@ function Get-AdapterProfile {
             $invocation = "bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode --append-system-prompt `"<system-prompt:redacted>`" -p `"<prompt>`" --permission-mode acceptEdits --disallowed-tools `"Bash`" --max-budget-usd N --no-session-persistence --output-format text --setting-sources `"project,local`" [--model `"<resolved-local-model>`"]"
             $toolLimits = "Claude customizations/plugins/hooks disabled with --safe-mode; Bash disallowed"
         } else {
-            $invocation = "bounded runner -> codex exec --cd `"<repo>`" --sandbox workspace-write --ephemeral --json --output-last-message `"$ImplementerLastName`" -   (prompt via stdin)"
+            $invocation = "bounded runner -> codex exec [--model `"<resolved-local-model>`"] --cd `"<repo>`" --sandbox workspace-write --ephemeral --json --output-last-message `"$ImplementerLastName`" -   (prompt via stdin)"
             $toolLimits = "Codex runs --sandbox workspace-write, which confines writes to the repository working directory; no --ask-for-approval; no --dangerously-bypass-approvals-and-sandbox; no danger-full-access"
         }
         return @{
@@ -2089,7 +2168,7 @@ $State         = $HandoffStatus.State
 $WaitingFor    = $HandoffStatus.WaitingFor
 $CurrentTask   = $HandoffStatus.CurrentTask
 $HandoffModelProfile = $HandoffStatus.ModelProfile
-$script:ModelSelection = Resolve-ModelSelection -ForState $State -HandoffProfile $HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model
+$script:ModelSelection = Resolve-ModelSelection -ForState $State -HandoffProfile $HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model -CodexCommandModel $CodexModel
 $RoleCheckpoint = Test-RoleCheckpoint
 
 # v3.4.1 (G6): the checkpoint gates every command except the three read-only ones.
@@ -2471,6 +2550,9 @@ function Invoke-Models {
     Write-Host "Effective profile:  $($script:ModelSelection.EffectiveProfile)"
     Write-Host "Claude model:       $($script:ModelSelection.ClaudeModel)"
     Write-Host "Resolution source:  $($script:ModelSelection.Source)"
+    Write-Host "Codex profile:      $($script:ModelSelection.CodexEffectiveProfile)"
+    Write-Host "Codex model:        $($script:ModelSelection.CodexModel)"
+    Write-Host "Codex source:       $($script:ModelSelection.CodexSource)"
     Write-Host "Config:             .ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
     if (-not $script:ModelSelection.Ok) {
         Write-Host "Status:             BLOCKED"
@@ -2483,9 +2565,19 @@ function Invoke-Models {
     } else {
         Write-Host "Behavior:           The Claude adapter passes --model with the resolved value."
     }
+    if ($script:ModelSelection.CodexModel -eq "inherit") {
+        Write-Host "Codex behavior:     Codex uses its configured/default model."
+    } else {
+        Write-Host "Codex behavior:     master-run, review-run and the Codex Implementer pass --model with the resolved value."
+    }
     if ($script:ModelSelection.NeedsEscalationApproval) {
         Write-Host "Approval:           -AllowModelEscalation is required for cycle/loop."
     }
+    if ($script:ModelSelection.CodexNeedsEscalationApproval) {
+        Write-Host "Codex approval:     -AllowModelEscalation is required for Codex master-run, review-run, cycle and loop."
+    }
+    Write-Host "Window turns:       Start a new window when the model changes. Switching models inside a"
+    Write-Host "                    conversation resends all of it to the new model without its cache."
     if (Test-ModelRoutingInert) {
         Write-Host ""
         # v3.5.2: the environment route is named FIRST here and in doctor alike. The
@@ -2495,14 +2587,15 @@ function Invoke-Models {
         Write-Host "Routing:            INERT - no profile resolves to a concrete model."
         Write-Host "                    The Master still selects a capability profile per task, but the"
         Write-Host "                    selection currently changes nothing: every turn runs on whatever"
-        Write-Host "                    model Claude Code is already using."
+        Write-Host "                    model Claude Code or Codex is already using."
         Write-Host "                    Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment"
-        Write-Host "                    (no tracked file is touched), or by mapping profiles in"
+        Write-Host "                    (and HANDOFF_CODEX_MODEL_<PROFILE> for Codex; no tracked file is touched), or by mapping profiles in"
         Write-Host "                    .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
     }
 
     Write-Host ""
     Write-Host "Override order: -Model, HANDOFF_CLAUDE_MODEL_<PROFILE>, MODEL_ROUTING.json, inherit."
+    Write-Host "Codex order:    -CodexModel, HANDOFF_CODEX_MODEL_<PROFILE>, MODEL_ROUTING.json codexModel, inherit."
     Write-Host "The protocol selects capability profiles; concrete provider model names remain local and replaceable."
 }
 
@@ -2527,11 +2620,14 @@ function Invoke-Models {
 # The file must be all-inherit AND no profile may carry an environment override.
 function Test-ModelRoutingInert {
     # An environment override activates routing on its own, whatever the file says.
-    foreach ($profileName in @("inherit", "economy", "cheap_readonly", "standard", "high_reasoning")) {
-        $envName = "HANDOFF_CLAUDE_MODEL_" + $profileName.ToUpperInvariant()
-        $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
-        if (-not [string]::IsNullOrWhiteSpace($envValue) -and $envValue.Trim() -ne "inherit") {
-            return $false
+    # v3.10.0: Codex has its own route to a concrete model, so it counts too.
+    foreach ($envPrefix in @("HANDOFF_CLAUDE_MODEL_", "HANDOFF_CODEX_MODEL_")) {
+        foreach ($profileName in @("inherit", "economy", "cheap_readonly", "standard", "high_reasoning")) {
+            $envName = $envPrefix + $profileName.ToUpperInvariant()
+            $envValue = [System.Environment]::GetEnvironmentVariable($envName, "Process")
+            if (-not [string]::IsNullOrWhiteSpace($envValue) -and $envValue.Trim() -ne "inherit") {
+                return $false
+            }
         }
     }
 
@@ -2548,10 +2644,14 @@ function Test-ModelRoutingInert {
     foreach ($property in $config.profiles.PSObject.Properties) {
         $value = $property.Value
         if ($null -eq $value) { continue }
-        $model = $value.claudeModel
-        if ([string]::IsNullOrWhiteSpace($model)) { continue }
-        $any = $true
-        if ($model -ne "inherit") { return $false }
+        foreach ($key in @("claudeModel", "codexModel")) {
+            $entry = $value.PSObject.Properties[$key]
+            if ($null -eq $entry) { continue }
+            $model = [string]$entry.Value
+            if ([string]::IsNullOrWhiteSpace($model)) { continue }
+            $any = $true
+            if ($model.Trim() -ne "inherit" -and $model.Trim() -ne "default") { return $false }
+        }
     }
     return $any
 }
@@ -2752,9 +2852,9 @@ function Invoke-Doctor {
         Write-DoctorLine "OK" "No automated turn is running."
     }
 
-    $doctorModelSelection = Resolve-ModelSelection -ForState $doctorStatus.State -HandoffProfile $doctorStatus.ModelProfile -CommandProfile $ModelProfile -CommandModel $Model
+    $doctorModelSelection = Resolve-ModelSelection -ForState $doctorStatus.State -HandoffProfile $doctorStatus.ModelProfile -CommandProfile $ModelProfile -CommandModel $Model -CodexCommandModel $CodexModel
     if ($doctorModelSelection.Ok) {
-        Write-DoctorLine "OK" "Model routing: profile=$($doctorModelSelection.EffectiveProfile); Claude model=$($doctorModelSelection.ClaudeModel); source=$($doctorModelSelection.Source)"
+        Write-DoctorLine "OK" "Model routing: profile=$($doctorModelSelection.EffectiveProfile); Claude model=$($doctorModelSelection.ClaudeModel); source=$($doctorModelSelection.Source); Codex model=$($doctorModelSelection.CodexModel); Codex source=$($doctorModelSelection.CodexSource)"
     if (Test-ModelRoutingInert) {
         # v3.5.2: doctor and models must give the SAME activation guidance. v3.5.1 taught
         # Test-ModelRoutingInert about environment overrides but updated only the models
@@ -2763,7 +2863,7 @@ function Invoke-Doctor {
         # should not take.
         Write-DoctorLine "INFO" "Model routing is INERT: no profile resolves to a concrete model, so profile selection currently changes no model."
         Write-Host "      Activate it either by setting HANDOFF_CLAUDE_MODEL_<PROFILE> in your environment"
-        Write-Host "      (no tracked file is touched), or by mapping profiles in"
+        Write-Host "      (and HANDOFF_CODEX_MODEL_<PROFILE> for Codex; no tracked file is touched), or by mapping profiles in"
         Write-Host "      .ai/skills/codex-claude-handoff/MODEL_ROUTING.json."
     }
     } else {
@@ -2917,6 +3017,33 @@ function Invoke-Status {
     Write-Host ""
 }
 
+function Get-NextTurnModelLines {
+    param([string]$Tool)
+    $identity = Resolve-ToolIdentity -Tool $Tool
+    if (-not $identity.Ok -or $identity.Kind -ne "tool") { return @() }
+    $out = [System.Collections.Generic.List[string]]::new()
+    $out.Add("")
+    $out.Add("## Model For This Turn")
+    if (-not $script:ModelSelection.Ok) {
+        $out.Add("Model routing is BLOCKED - run handoff.ps1 models before this turn.")
+        return $out.ToArray()
+    }
+    if ($identity.Canonical -eq "codex") {
+        $label = "Codex model"; $model = $script:ModelSelection.CodexModel; $source = $script:ModelSelection.CodexSource
+        $out.Add("Profile: $($script:ModelSelection.CodexEffectiveProfile)")
+    } else {
+        $label = "Claude model"; $model = $script:ModelSelection.ClaudeModel; $source = $script:ModelSelection.Source
+        $out.Add("Profile: $($script:ModelSelection.EffectiveProfile)")
+    }
+    $out.Add("$($label): $model ($source)")
+    if ($model -eq "inherit") {
+        $out.Add("No model is mapped for this profile: keep the model your window already uses.")
+    } else {
+        $out.Add("If your open window runs a different model, start a new window on this one instead of switching inside the conversation. A switch resends the whole conversation to the new model without its cache; a new window loses nothing, because the state is in AI_HANDOFF.md and this file.")
+    }
+    return $out.ToArray()
+}
+
 function Invoke-Next {
     param([bool]$MenuMode = $false, [bool]$Silent = $false)
 
@@ -2969,6 +3096,14 @@ function Invoke-Next {
     $ntLines.Add("## Next Recommended Step (from AI_HANDOFF.md)")
     if ($nextStep -ne "") { $ntLines.Add($nextStep) } else { $ntLines.Add("(none - see AI_HANDOFF.md)") }
     if ($keyContext -ne "") { $ntLines.Add(""); $ntLines.Add("## Key Context"); $ntLines.Add($keyContext) }
+
+    # v3.10.0: name the model this turn should run on. A person driving a window cannot see
+    # the task's profile, so a Master left on the strongest model ran ordinary turns on it
+    # and a high_reasoning task ran on whatever the window happened to use. Same lines in
+    # handoff.sh.
+    if (-not $isMismatch -and $actor -ne "User") {
+        foreach ($modelLine in (Get-NextTurnModelLines -Tool $actor)) { $ntLines.Add($modelLine) }
+    }
 
     # v3.8.0: a line-numbered map of AI_HANDOFF.md, so the next actor reads the sections its
     # turn needs instead of the whole file. The handoff grows with every investigation, and a
@@ -4448,7 +4583,8 @@ function Show-ReviewPlan {
     Write-Host ""
     Write-Host "Read-only invocation shape (review-run, after explicit confirmation):"
     if ($Plan.ReviewerIsCodex) {
-        Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (review prompt via stdin)"
+        Write-Host "  codex exec$(Get-CodexModelDisplay) --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (review prompt via stdin)"
+        Write-Host "  Codex model: $($script:ModelSelection.CodexModel) (profile $($script:ModelSelection.CodexEffectiveProfile); $($script:ModelSelection.CodexSource))"
     } else {
         Write-Host "  npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<review prompt>`" --output-format text   (final message captured to $ReviewLastName)"
     }
@@ -4595,6 +4731,11 @@ function Invoke-ReviewRun {
             Write-Host ""
             exit 3
         }
+        if (-not (Test-CodexModelPreflight -CommandLabel "review-run")) {
+            Write-Host "No Codex review invocation was run."
+            Write-Host ""
+            exit 1
+        }
     }
 
     $repoRoot = (Get-Location).Path
@@ -4706,7 +4847,7 @@ function Invoke-ReviewRun {
     Write-Host ""
     if ($plan.ReviewerIsCodex) {
         Write-Host "Running Codex read-only review (timeout: ${TimeoutSeconds}s)..."
-        Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (prompt via stdin)"
+        Write-Host "Invocation: codex exec$(Get-CodexModelDisplay) --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$ReviewLastName`" -   (prompt via stdin)"
     } else {
         Write-Host "Running $($plan.BoundReviewer) read-only review (timeout: ${TimeoutSeconds}s)..."
         Write-Host "Invocation: bounded runner -> npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<review prompt>`" --output-format text   (final message captured to $ReviewLastName)"
@@ -4726,7 +4867,9 @@ function Invoke-ReviewRun {
         $tmpErr = [System.IO.Path]::GetTempFileName()
         $promptFile = [System.IO.Path]::GetTempFileName()
         Set-Content -Path $promptFile -Value $reviewPrompt -Encoding utf8 -ErrorAction SilentlyContinue
-        $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+        $argList = @('exec')
+        if ($script:ModelSelection.CodexUsesConcreteModel) { $argList += @('--model', $script:ModelSelection.CodexModel) }
+        $argList += @('--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
         try {
             $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
                 -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
@@ -5206,7 +5349,8 @@ function Show-MasterPlan {
     Write-Host ""
     Write-Host "Read-only invocation shape (master-run, after explicit confirmation):"
     if ($Plan.MasterIsCodex) {
-        Write-Host "  codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (master prompt via stdin)"
+        Write-Host "  codex exec$(Get-CodexModelDisplay) --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (master prompt via stdin)"
+        Write-Host "  Codex model: $($script:ModelSelection.CodexModel) (profile $($script:ModelSelection.CodexEffectiveProfile); $($script:ModelSelection.CodexSource))"
     } else {
         Write-Host "  npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<master prompt>`" --output-format text   (final message captured to $MasterLastName)"
     }
@@ -5289,6 +5433,11 @@ function Invoke-MasterRun {
             Write-Host ""
             exit 3
         }
+        if (-not (Test-CodexModelPreflight -CommandLabel "master-run")) {
+            Write-Host "No Codex Master invocation was run."
+            Write-Host ""
+            exit 1
+        }
     }
 
     $repoRoot = (Get-Location).Path
@@ -5333,7 +5482,7 @@ function Invoke-MasterRun {
     Write-Host ""
     Write-Host "Running Codex read-only Master analysis (timeout: ${TimeoutSeconds}s)..."
     if ($plan.MasterIsCodex) {
-        Write-Host "Invocation: codex exec --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (prompt via stdin)"
+        Write-Host "Invocation: codex exec$(Get-CodexModelDisplay) --cd `"$repoRoot`" --sandbox read-only --ephemeral --json --output-last-message `"$MasterLastName`" -   (prompt via stdin)"
     } else {
         Write-Host "Invocation: bounded runner -> npx --yes @anthropic-ai/claude-code --safe-mode --disallowed-tools `"Bash,Edit,Write,NotebookEdit`" -p `"<master prompt>`" --output-format text   (final message captured to $MasterLastName)"
     }
@@ -5357,7 +5506,9 @@ function Invoke-MasterRun {
         $tmpErr = [System.IO.Path]::GetTempFileName()
         $promptFile = [System.IO.Path]::GetTempFileName()
         Set-Content -Path $promptFile -Value $masterPrompt -Encoding utf8 -ErrorAction SilentlyContinue
-        $argList = @('exec', '--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
+        $argList = @('exec')
+        if ($script:ModelSelection.CodexUsesConcreteModel) { $argList += @('--model', $script:ModelSelection.CodexModel) }
+        $argList += @('--cd', $repoRoot, '--sandbox', 'read-only', '--ephemeral', '--json', '--output-last-message', $lastPath, '-')
         try {
             $proc = Start-Process -FilePath $plan.Cli.Path -ArgumentList $argList -NoNewWindow -PassThru `
                 -RedirectStandardInput $promptFile -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
@@ -6461,7 +6612,7 @@ function Invoke-Loop {
         $script:WaitingFor  = $freshStatus.WaitingFor
         $script:CurrentTask = $freshStatus.CurrentTask
         $script:HandoffModelProfile = $freshStatus.ModelProfile
-        $script:ModelSelection = Resolve-ModelSelection -ForState $script:State -HandoffProfile $script:HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model
+        $script:ModelSelection = Resolve-ModelSelection -ForState $script:State -HandoffProfile $script:HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model -CodexCommandModel $CodexModel
         $script:Binding     = Get-RoleBinding
 
         $entry = $ActionMap[$script:State]
@@ -6890,8 +7041,8 @@ switch ($Command) {
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
             Write-Host "  stop                      Stop an automated turn that is running now. No git, deploy, database or secret action."
             Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
-            Write-Host "  models [-ModelProfile P] [-Model M]"
-            Write-Host "                            Show the effective capability profile and Claude model resolution. Read-only."
+            Write-Host "  models [-ModelProfile P] [-Model M] [-CodexModel M]"
+            Write-Host "                            Show the effective capability profile and the Claude and Codex model resolution. Read-only."
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
@@ -6910,11 +7061,11 @@ switch ($Command) {
             Write-Host "  sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]"
             Write-Host "                            Advance local AI_SEQUENCE.md/AI_HANDOFF.md after a release. Never runs git."
             Write-Host "  review-check              Dry-run the Codex Reviewer POC plan for READY_FOR_REVIEW. Mutates nothing."
-            Write-Host "  review-run [-TimeoutSeconds N] [-Yes]"
+            Write-Host "  review-run [-TimeoutSeconds N] [-CodexModel M] [-AllowModelEscalation] [-Yes]"
             Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
             Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeReviewer."
             Write-Host "  master-check              Dry-run the Codex Master capture plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
-            Write-Host "  master-run [-TimeoutSeconds N] [-Yes]"
+            Write-Host "  master-run [-TimeoutSeconds N] [-CodexModel M] [-AllowModelEscalation] [-Yes]"
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
             Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeMaster."
             Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-Yes]"

@@ -1,3 +1,32 @@
+## 3.10.0 - The Model Follows the Task
+
+- **Every Codex turn ran on whatever model the Codex configuration named.** The Master
+  picks a capability profile for each task, but only Claude read it. `master-run`,
+  `review-run` and the Codex Implementer called `codex exec` with no model, so a task
+  marked `high_reasoning` was routed and reviewed on the standard model, and a window
+  left on the strongest model ran ordinary turns on it. In one measured session that
+  used up a five-hour usage window in three minutes.
+- **One profile now resolves to one model per tool.** `MODEL_ROUTING.json` gains
+  `codexModel` beside `claudeModel`, and `HANDOFF_CODEX_MODEL_<PROFILE>` overrides it the
+  way `HANDOFF_CLAUDE_MODEL_<PROFILE>` does for Claude. `-CodexModel` sets it for one
+  command. Every shipped value stays `inherit`, so installing changes nothing until you
+  map a model.
+- **Automated Codex turns pass the resolved model.** `master-run`, `review-run` and the
+  Codex Implementer add `--model` for a concrete value and print the model they run on.
+  A concrete `high_reasoning` Codex model requires `-AllowModelEscalation`, the same cost
+  gate Claude has had since v3.4.0.
+- **`NEXT_TURN.md` names the model for a turn you drive in a window.** A
+  `Model For This Turn` section gives the profile and the model for the actor's own
+  tool, in both shells. When a model is mapped, it says to start a new window on it
+  rather than switch models inside the conversation: a switch resends the whole
+  conversation to the new model without its cache, and a new window loses nothing
+  because the state is in `AI_HANDOFF.md`.
+- **`models` and `doctor` report the Codex model and its source**, and INERT now means
+  that neither tool has a route to a concrete model.
+- **The Bash suite no longer reads the machine's routing.** Like the PowerShell suite
+  since v3.8.0, it clears `HANDOFF_*_MODEL_*` for its own process. A user with routing
+  activated saw their own model where the fixtures expected none.
+
 ## 3.9.0 - Keys Stay Out of Reach
 
 - **An agent opened a credential file, and nothing in the protocol noticed.** On a real
