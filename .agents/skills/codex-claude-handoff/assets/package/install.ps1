@@ -280,6 +280,57 @@ if (Test-Path -LiteralPath $snippetPath) {
     }
 }
 
+# v3.10.1: Windows PowerShell 5.1 ConvertTo-Json pads every property with extra spaces and
+# indents by column, so merging the deny rules turned the user's settings.json into a noisy
+# diff. These write the layout Python's json.dumps(indent=2) uses, which install.sh writes.
+function ConvertTo-JsonStringLiteral {
+    param([string]$Text)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $Text.ToCharArray()) {
+        $code = [int]$ch
+        switch ($code) {
+            34 { [void]$sb.Append('\"') }
+            92 { [void]$sb.Append('\\') }
+            8 { [void]$sb.Append('\b') }
+            9 { [void]$sb.Append('\t') }
+            10 { [void]$sb.Append('\n') }
+            12 { [void]$sb.Append('\f') }
+            13 { [void]$sb.Append('\r') }
+            default {
+                if ($code -lt 32) { [void]$sb.Append(('\u{0:x4}' -f $code)) } else { [void]$sb.Append($ch) }
+            }
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function ConvertTo-IndentedJson {
+    param($Value, [int]$Level = 0)
+    $inner = '  ' * ($Level + 1)
+    $outer = '  ' * $Level
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [bool]) { if ($Value) { return 'true' } else { return 'false' } }
+    if ($Value -is [string]) { return (ConvertTo-JsonStringLiteral -Text $Value) }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) {
+        return [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $members = @($Value.PSObject.Properties)
+        if ($members.Count -eq 0) { return '{}' }
+        $parts = @(foreach ($member in $members) { $inner + (ConvertTo-JsonStringLiteral -Text $member.Name) + ': ' + (ConvertTo-IndentedJson -Value $member.Value -Level ($Level + 1)) })
+        return "{`n" + ($parts -join ",`n") + "`n$outer}"
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $items = @($Value)
+        if ($items.Count -eq 0) { return '[]' }
+        $parts = @(foreach ($item in $items) { $inner + (ConvertTo-IndentedJson -Value $item -Level ($Level + 1)) })
+        return "[`n" + ($parts -join ",`n") + "`n$outer]"
+    }
+    return (ConvertTo-JsonStringLiteral -Text ([string]$Value))
+}
+
 # v3.9.0: keep Claude Code's file tools out of files that hold credentials.
 #
 # On 2026-09-14 an Implementer opened .mcp.json against an explicit written instruction,
@@ -329,7 +380,7 @@ function Add-CredentialReadGuard {
             return
         }
         $settings.permissions | Add-Member -NotePropertyName 'deny' -NotePropertyValue @($existing + $missing) -Force
-        [System.IO.File]::WriteAllText($settingsPath, (($settings | ConvertTo-Json -Depth 32) + "`n"), $utf8NoBom)
+        [System.IO.File]::WriteAllText($settingsPath, ((ConvertTo-IndentedJson -Value $settings) + "`n"), $utf8NoBom)
         Write-Host "Credential read guard: added $($missing.Count) deny rules to .claude/settings.json."
     }
     catch {

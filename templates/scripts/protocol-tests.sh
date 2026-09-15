@@ -438,6 +438,17 @@ else
     printf '%s' "$out2" | grep -q "does not match"
     check "bash exact-scope still blocks an undeclared file" $?
 
+    # v3.10.1: agents annotate entries. "- `path` (a note)" and "- path (new)" name the path;
+    # a filename that really ends in a parenthesis, such as "Copy (2).md", is kept whole.
+    FXA="$BASH_TMP/annotated"; mkdir -p "$FXA"; scope_fixture "$FXA"
+    printf 'a\n' > "$FXA/a space.md"
+    printf 'n\n' > "$FXA/new.md"
+    printf 'c\n' > "$FXA/Copy (2).md"
+    write_handoff "$FXA" '`a space.md` (2-line change; see Done)' 'new.md (new)' 'Copy (2).md'
+    outa="$( cd "$FXA" && bash "$HANDOFF_SH" commit-check 2>&1 )"
+    printf '%s' "$outa" | grep -q "Commit: ALLOWED"
+    check "bash exact-scope reads annotated Changed Files entries" $? "$outa"
+
     # git status failing must block, never approve a partial set.
     FX3="$BASH_TMP/nogit"; mkdir -p "$FX3/.ai/roles"
     cp "$FX/.ai/roles/ROLE_ASSIGNMENT.md" "$FX3/.ai/roles/ROLE_ASSIGNMENT.md"

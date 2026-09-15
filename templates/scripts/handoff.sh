@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.10.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.10.1)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -404,6 +404,7 @@ _model_lines() {
     else
         echo "If your open window runs a different model, start a new window on this one instead of switching inside the conversation. A switch resends the whole conversation to the new model without its cache; a new window loses nothing, because the state is in AI_HANDOFF.md and this file."
     fi
+    echo "One window, one protocol turn: run an automated command once with the longest wait your tool allows instead of checking on it repeatedly, and open a new window for the next task."
 }
 
 cmd_next() {
@@ -544,6 +545,7 @@ cmd_commit_check() {
         local LOCAL_IGNORED="AI_HANDOFF.md NEXT_TURN.md USER_REQUEST.md HANDOFF_LOOP.log AI_SEQUENCE.md HANDOFF_RUN.json REVIEW.jsonl REVIEW_LAST.md MASTER.jsonl MASTER_LAST.md IMPLEMENTER.jsonl IMPLEMENTER_LAST.md IMPLEMENTER_COMMAND.md CODEX_REVIEW.jsonl CODEX_REVIEW_LAST.md CODEX_MASTER.jsonl CODEX_MASTER_LAST.md CLAUDE_IMPLEMENTER.jsonl CLAUDE_IMPLEMENTER_LAST.md CLAUDE_IMPLEMENTER_COMMAND.md .ai/roles/ROLE_ASSIGNMENT.md"
         local commit_files=() actual_files=()
         local line entry in_cf=false
+        local status_suffix_re='^(.*[^[:space:]])[[:space:]]+\((new|new file|added|modified|updated|changed|deleted|removed|renamed)\)$'
 
         while IFS= read -r line; do
             [ "$line" = "## Changed Files" ] && { in_cf=true; continue; }
@@ -552,10 +554,20 @@ cmd_commit_check() {
             case "$line" in
                 "- "*)
                     entry="${line#- }"
-                    entry="${entry//\`/}"
-                    entry="${entry%% - *}"
+                    if [[ "$entry" == \`*\`* ]]; then
+                        # v3.10.1: "- `path` (a note)" - the path is what the backticks hold.
+                        entry="${entry#\`}"
+                        entry="${entry%%\`*}"
+                    else
+                        entry="${entry//\`/}"
+                        entry="${entry%% - *}"
+                    fi
                     entry="${entry#"${entry%%[! ]*}"}"
                     entry="${entry%"${entry##*[! ]}"}"
+                    # v3.10.1: a trailing status such as "(new)" describes the change, not the path.
+                    shopt -s nocasematch
+                    if [[ "$entry" =~ $status_suffix_re ]]; then entry="${BASH_REMATCH[1]}"; fi
+                    shopt -u nocasematch
                     if [ -n "$entry" ] && [ "$entry" != "None yet" ]; then
                         case " $LOCAL_IGNORED " in
                             *" $entry "*) ;;

@@ -1,3 +1,34 @@
+## 3.10.1 - A Window Is Not a Loop
+
+- **A Master window used up a five-hour usage window in 48 minutes on the standard model.**
+  Entering the protocol cost about 6,000 tokens, as v3.8.0 intended, but the person asked
+  the Master to keep going, and it drove two whole tasks - about ten protocol turns - in
+  one conversation. The context grew from 21,000 to 140,000 tokens and every call resent
+  it: 116 calls and 9.8 million input tokens. Four protocol defects multiplied the calls.
+- **Review works in a product repository.** `review-run` looked only for this project's
+  own `scripts/protocol-tests.ps1`. Anywhere else the evidence said "not run", so every
+  automated review returned BLOCKED, and the Master installed dependencies, ran builds and
+  read whole diffs in its own window to get past it. With no protocol suite, `review-run`
+  now runs the project's `typecheck` and `test` scripts from `package.json` outside the
+  sandbox and gives the Reviewer their exit codes and last lines. Lint is not run, because
+  a backlog that predates the task would block every review. A plan review runs no checks
+  at all, since there is no code yet, and says so.
+- **Implementer turns get ten minutes.** `cycle` and `loop` default to 600 seconds. At 180 a
+  turn that edited four files was killed halfway, and the partial work took a review and a
+  correction round to repair. An explicit `-TimeoutSeconds` still wins.
+- **`Changed Files` accepts the notes agents write.** "- `path` (a note)" and "- path (new)"
+  now name the path, in both shells. Twice the scope check failed on an annotation and a
+  turn was spent removing it. A filename that really ends in a parenthesis is kept whole.
+- **One window, one protocol turn.** `NEXT_TURN.md` tells the actor to run an automated
+  command once with a long wait instead of checking on it repeatedly - 35 of the 116 calls
+  did only that - and to open a new window for the next task. `MASTER.md` adds three rules:
+  do not babysit commands, stop at the task boundary, and do not do the harness's work. A
+  long unattended chain belongs in `loop -IncludeMaster -IncludeReviewer` in a terminal,
+  where every turn is a fresh, small `codex exec`.
+- **The merged `.claude/settings.json` keeps a clean layout.** Windows PowerShell 5.1 wrote
+  it with padded, column-aligned properties; the installer now writes two-space JSON, the
+  layout `install.sh` already wrote.
+
 ## 3.10.0 - The Model Follows the Task
 
 - **Every Codex turn ran on whatever model the Codex configuration named.** The Master

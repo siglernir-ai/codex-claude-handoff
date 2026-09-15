@@ -34,6 +34,14 @@ param(
 
 if ($CopyPrompt) { $Clip = $true }
 
+# v3.10.1: an Implementer turn that edits several files routinely needs more than three
+# minutes. At 180 seconds a real turn was killed mid-edit and left partial work that took
+# a review and a correction round to repair. cycle and loop default to 600 seconds; an
+# explicit -TimeoutSeconds still wins, and the capture commands keep 180.
+if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds') -and (@('cycle', 'run-next', 'loop') -contains $Command)) {
+    $TimeoutSeconds = 600
+}
+
 # Some Windows hosts can expose both Path and PATH in the process environment. PowerShell's
 # Start-Process fails before launching children when those case-only duplicates exist.
 if ($env:OS -eq "Windows_NT") {
@@ -3041,6 +3049,9 @@ function Get-NextTurnModelLines {
     } else {
         $out.Add("If your open window runs a different model, start a new window on this one instead of switching inside the conversation. A switch resends the whole conversation to the new model without its cache; a new window loses nothing, because the state is in AI_HANDOFF.md and this file.")
     }
+    # v3.10.1: one real window spent 35 of 116 calls checking on commands that were still
+    # running, each check resending a context that had grown to 140k tokens.
+    $out.Add("One window, one protocol turn: run an automated command once with the longest wait your tool allows instead of checking on it repeatedly, and open a new window for the next task.")
     return $out.ToArray()
 }
 
@@ -3337,8 +3348,17 @@ function Get-ReleaseChangedFiles {
     foreach ($line in $changedFilesLines) {
         $trimmed = $line.Trim()
         if ($trimmed -notmatch '^-\s+') { continue }
-        $entry = $trimmed -replace '^-\s+', '' -replace '`', ''
-        if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
+        $entry = $trimmed -replace '^-\s+', ''
+        if ($entry -match '^`([^`]+)`') {
+            # v3.10.1: agents write "- `path` (a note)". The path is what the backticks hold;
+            # before this, the note became part of the path and the exact-scope check failed.
+            $entry = $Matches[1]
+        } else {
+            $entry = $entry -replace '`', ''
+            if ($entry -match '^(.+?)\s+-\s+.+$') { $entry = $Matches[1].Trim() }
+        }
+        # v3.10.1: a trailing status such as "(new)" describes the change, not the path.
+        $entry = $entry -replace '\s+\((?i:new|new file|added|modified|updated|changed|deleted|removed|renamed)\)$', ''
         $entry = $entry.Trim()
         if ($entry -ne "" -and $entry -ne "None yet" -and ($LocalHandoffFiles -notcontains $entry)) {
             $files.Add($entry)
@@ -4636,13 +4656,89 @@ function Invoke-ReviewCheck {
 #
 # A suite that cannot be found or cannot complete produces an explicitly negative
 # summary, never an optimistic one: the Reviewer must block on it.
+# v3.10.1: in a product repository there is no protocol suite, so every automated review
+# returned BLOCKED ("required tests were not run"), and the Master fell back to installing
+# dependencies, running builds and reading whole diffs in its own window - the most
+# expensive place to do it. The protocol now runs the project's own typecheck and test
+# scripts outside the sandbox, the way it runs its own suite. Lint is left out on purpose:
+# a lint backlog that predates the task would block every review.
+function Get-ProjectCheckEvidence {
+    $notFound = "NOT RUN - scripts/protocol-tests.ps1 was not found in this repository and package.json declares no typecheck or test script. Treat readiness as unverified and return BLOCKED."
+    $packagePath = Join-Path (Get-Location) "package.json"
+    if (-not (Test-Path -LiteralPath $packagePath)) { return $notFound }
+    try {
+        $package = [System.IO.File]::ReadAllText($packagePath) | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return "NOT RUN - package.json could not be parsed, so no project check was run. Treat readiness as unverified and return BLOCKED."
+    }
+    $names = @()
+    if ($null -ne $package -and $null -ne $package.scripts) {
+        foreach ($candidate in @("typecheck", "test")) {
+            $entry = $package.scripts.PSObject.Properties[$candidate]
+            if ($null -ne $entry -and -not [string]::IsNullOrWhiteSpace([string]$entry.Value) -and ([string]$entry.Value) -notmatch 'no test specified') {
+                $names += $candidate
+            }
+        }
+    }
+    if ($names.Count -eq 0) { return $notFound }
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($null -eq $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+    if ($null -eq $npm) {
+        return "NOT RUN - package.json declares $($names -join ' and ') but npm is not available. Treat readiness as unverified and return BLOCKED."
+    }
+    $results = @()
+    $allPassed = $true
+    foreach ($name in $names) {
+        Write-Host "Running the project's '$name' script for review evidence (outside the sandbox)..."
+        $run = Invoke-ProjectCheck -NpmPath $npm.Source -ScriptName $name -CheckTimeoutSeconds 600
+        if ($run.ExitCode -ne 0) { $allPassed = $false; $results += "npm run $name -> $($run.Status) (last output: $($run.Tail))" }
+        else { $results += "npm run $name -> $($run.Status)" }
+    }
+    $verdictText = if ($allPassed) { "All project checks passed." } else { "At least one project check failed or did not finish, so return BLOCKED." }
+    $summary = "PROJECT CHECKS (run by handoff.ps1; this repository has no protocol suite): " + ($results -join "; ") + ". " + $verdictText +
+        " These are the project's own scripts: if package.json or a check's configuration is among the files under review, the change defines its own evidence, so verify it rather than trust it. Lint is not run."
+    Write-Host "  $summary"
+    return $summary
+}
+
+function Invoke-ProjectCheck {
+    param([string]$NpmPath, [string]$ScriptName, [int]$CheckTimeoutSeconds)
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $NpmPath -ArgumentList @('run', $ScriptName) -NoNewWindow -PassThru `
+            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        try { $null = $proc.Handle } catch { }
+        if ($proc.WaitForExit($CheckTimeoutSeconds * 1000)) {
+            $code = $proc.ExitCode
+            if ($null -eq $code) { $code = -1; $status = "exit code unavailable" } else { $status = "exit $code" }
+        } else {
+            Stop-ProcessTree -ProcessId $proc.Id
+            $code = -1
+            $status = "TIMED OUT after ${CheckTimeoutSeconds}s"
+        }
+        $text = [string](Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) + "`n" + [string](Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue)
+        $tail = ((@($text -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 6)) -join " | ") -replace '\s+', ' '
+        if ($tail.Length -gt 600) { $tail = $tail.Substring($tail.Length - 600) }
+        return @{ ExitCode = $code; Status = $status; Tail = $tail }
+    } catch {
+        return @{ ExitCode = -1; Status = "could not start: $($_.Exception.Message)"; Tail = "" }
+    } finally {
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-ReviewTestEvidence {
-    param([string[]]$Files)
+    param([string[]]$Files, [switch]$PlanReview)
 
     $suite = Join-Path (Get-Location) "scripts/protocol-tests.ps1"
     $summary = ""
-    if (-not (Test-Path -LiteralPath $suite)) {
-        $summary = "NOT RUN - scripts/protocol-tests.ps1 was not found in this repository. Treat readiness as unverified and return BLOCKED."
+    if ($PlanReview) {
+        # v3.10.1: a plan has no code to test. Running a suite here only cost time, and in a
+        # repository without the protocol suite it made every plan review return BLOCKED.
+        $summary = "PLAN REVIEW - there is no implementation yet, so no test suite or project check was run. The hash below binds the plan text under review."
+    } elseif (-not (Test-Path -LiteralPath $suite)) {
+        $summary = Get-ProjectCheckEvidence
     } else {
         try {
             Write-Host "Running the protocol suite for review evidence (outside the sandbox)..."
@@ -4786,7 +4882,7 @@ function Invoke-ReviewRun {
     # v3.4.4: reviewing a PLAN, not code. Evidence is the handoff itself, hashed the same
     # way, so a plan edited after the evidence was produced fails the same check.
     if ($plan.PlanMode) {
-        $planEvidence = Get-ReviewTestEvidence -Files @("AI_HANDOFF.md")
+        $planEvidence = Get-ReviewTestEvidence -Files @("AI_HANDOFF.md") -PlanReview
         Write-Host ""
         Write-Host "PLAN REVIEW: Changed Files is empty and AI_HANDOFF.md carries a Plan section."
         Write-Host "Codex will judge the plan's scope and acceptance criteria, not code."
@@ -7069,11 +7165,11 @@ switch ($Command) {
             Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
             Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeMaster."
             Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-Yes]"
-            Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff."
+            Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff. Default -TimeoutSeconds is 600."
             Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
             Write-Host "                            Alias of cycle (kept for backward compatibility)."
             Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-IncludeMaster] [-IncludeReviewer] [-Yes]"
-            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor unless that actor is explicitly included for this session. With -IncludeMaster, also auto-runs the Codex Master's NEEDS_ANALYSIS turn in-session (master-run capture + master-apply, fail-closed). With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed). User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log."
+            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor unless that actor is explicitly included for this session. With -IncludeMaster, also auto-runs the Codex Master's NEEDS_ANALYSIS turn in-session (master-run capture + master-apply, fail-closed). With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed). User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log. Default -TimeoutSeconds is 600."
             Write-Host ""
         }
     }

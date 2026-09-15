@@ -65,6 +65,20 @@ keeps its context small by rule (since v3.8.0):
   switch models inside a long conversation: the switch resends the whole conversation
   to the new model without its cache. Before a window closes, write anything decided
   in it that is not yet in those files.
+- **Do not babysit automated commands (since v3.10.1).** `loop`, `cycle` and
+  `review-run` can run for minutes. Run each once with the longest wait your tool
+  allows; never check on a running command again and again, because every check
+  resends the whole conversation. One measured window spent 35 of its 116 calls
+  checking on commands that were still running, and used up the usage window.
+- **Stop at the task boundary.** When a task reaches `REVIEW_DONE` or is committed,
+  write the next step into `AI_HANDOFF.md` and end the window; the next task starts in
+  a new one. For a long unattended chain, give the user
+  `handoff.ps1 loop -IncludeMaster -IncludeReviewer` to run in a terminal, where every
+  turn is a fresh, small `codex exec` instead of a growing conversation.
+- **Do not do the harness's work.** Do not install dependencies or run the project's
+  builds yourself to unblock a review: `review-run` runs the project's `typecheck` and
+  `test` scripts outside the sandbox and hands the Reviewer the result (since v3.10.1).
+  When that evidence says dependencies are missing, installing them is the user's call.
 
 The budget never relaxes a safety gate. Role checks, turn ownership, exact scope,
 verification evidence, and user authorization apply in full; when a gate requires a

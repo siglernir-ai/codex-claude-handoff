@@ -903,6 +903,10 @@ $mergedSettings = [System.IO.File]::ReadAllText($guardSettings) | ConvertFrom-Js
 $mergedDeny = @($mergedSettings.permissions.deny)
 Check "a -Force upgrade merges the deny rules into an existing settings file" ((@($guardRules | Where-Object { $mergedDeny -notcontains $_ }).Count -eq 0) -and ($mergedDeny -contains "Bash(rm *)") -and ($mergeOut -match "Credential read guard: added")) $mergeOut
 Check "the merge keeps the project's own settings" (($mergedSettings.model -eq "keep-me") -and (@($mergedSettings.permissions.allow) -contains "Read(.env)"))
+# v3.10.1: Windows PowerShell 5.1 ConvertTo-Json padded and column-indented the merged file,
+# a noisy diff for the user. The merge now writes two-space indentation like install.sh.
+$mergedText = [System.IO.File]::ReadAllText($guardSettings)
+Check "the merged settings file uses two-space indentation and no padded colons" (($mergedText -match '(?m)^  "permissions": \{$') -and ($mergedText -match '(?m)^    "deny": \[$') -and ($mergedText -notmatch '":\s{2,}') -and ($mergedText -match '"enabledPlugins": \{\}')) $mergedText
 $againOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $guardInstaller -Project $guardTarget -Force 2>&1 | Out-String
 $againDeny = Get-GuardDenyList -SettingsPath $guardSettings
 Check "a second upgrade adds no duplicate deny rules" (($againDeny.Count -eq $mergedDeny.Count) -and ($againOut -match "Credential read guard: already present")) $againOut
@@ -1700,6 +1704,41 @@ try {
 } finally {
     if ($null -eq $prevCodexCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevCodexCli }
 }
+# --- v3.10.1: what a real product repository needs from a review ---
+Write-Host "[4C-3] Review in a product repository (v3.10.1)"
+# Annotated Changed Files entries name the path; a real "(2)" in a filename stays.
+$annotatedHandoff = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "annotated scope") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- ``a space.md`` (2-line change; see Done)`n- new.md (new)`n- Copy (2).md"
+$afx = New-Fixture -Files @{ "AI_HANDOFF.md" = $annotatedHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $afx
+foreach ($name in @("a space.md", "new.md", "Copy (2).md")) { Set-Content -LiteralPath (Join-Path $afx $name) -Value "x" -Encoding utf8 }
+$r = Invoke-Handoff -WorkDir $afx -Arguments @("commit-check")
+Check "commit-check reads annotated Changed Files entries and keeps a real (2) in a filename" (($r.Code -eq 0) -and ($r.Out -notmatch "does not exactly match")) $r.Out
+
+# review-run runs the project's typecheck and test scripts when there is no protocol suite.
+$fakeStdinEcho = Join-Path $FixtureRoot "fake-codex-stdin-echo.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > FAKE_STDIN.txt
+echo VERDICT: APPROVED project-checks> REVIEW_LAST.md
+:done
+'@ | Set-Content -Path $fakeStdinEcho -Encoding ascii
+$prevCodexCliChecks = $env:CODEX_CLI
+$env:CODEX_CLI = $fakeStdinEcho
+try {
+    $packageJson = '{"name":"fixture","private":true,"scripts":{"typecheck":"node -e \"process.exit(0)\"","test":"node -e \"console.log(''boom-from-test''); process.exit(3)\"","lint":"node -e \"process.exit(9)\""}}'
+    $pfx = New-Fixture -Files @{ "AI_HANDOFF.md" = ((New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "project checks") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- src/app.js"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; "package.json" = $packageJson } -InitGit
+    Initialize-FixtureGitBaseline -Dir $pfx
+    New-Item -ItemType Directory -Path (Join-Path $pfx "src") -Force | Out-Null
+    Set-Content -Path (Join-Path $pfx "src/app.js") -Value "// fixture" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $pfx -Arguments @("review-run", "-Yes")
+    $stdinText = if (Test-Path (Join-Path $pfx "FAKE_STDIN.txt")) { Get-Content -Raw -Path (Join-Path $pfx "FAKE_STDIN.txt") } else { "" }
+    Check "review-run hands the Reviewer the project's own check results" (($stdinText -match "PROJECT CHECKS") -and ($stdinText -match "npm run typecheck -> exit 0") -and ($stdinText -match "npm run test -> exit 3") -and ($stdinText -match "boom-from-test")) "code=$($r.Code) stdin=$stdinText"
+    Check "a failing project check tells the Reviewer to block, and lint is not run" (($stdinText -match "At least one project check failed") -and ($stdinText -notmatch "npm run lint"))
+} finally {
+    if ($null -eq $prevCodexCliChecks) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevCodexCliChecks }
+}
+
 $handoffSrcV310 = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
 # -Model names a Claude model. It must not move Codex off the task's profile.
 $r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models", "-Model", "some-claude-model")
@@ -1859,6 +1898,8 @@ Check "a hash mismatch forces BLOCKED" ($handoffSource -match 'the code changed 
 Check "reported test failures force BLOCKED" ($handoffSource -match 'If the evidence reports failures, return BLOCKED')
 Check "the Reviewer is told not to run the suite in its own sandbox" ($handoffSource -match 'Do NOT attempt to run the protocol test suite yourself')
 Check "a missing or inconclusive suite yields a negative summary, never an optimistic one" (($handoffSource -match 'NOT RUN - scripts/protocol-tests\.ps1 was not found') -and ($handoffSource -match 'INCONCLUSIVE - the suite produced no Results line'))
+Check "a plan review runs no suite and says so" (($handoffSource -match 'Get-ReviewTestEvidence -Files @\("AI_HANDOFF\.md"\) -PlanReview') -and ($handoffSource -match 'PLAN REVIEW - there is no implementation yet'))
+Check "cycle and loop default to a 600-second turn unless -TimeoutSeconds is given" ($handoffSource -match "(?s)ContainsKey\('TimeoutSeconds'\).{0,120}'cycle', 'run-next', 'loop'.{0,40}\`$TimeoutSeconds = 600")
 # The printed Results line is the suite's claim about itself; the exit code is the
 # independent signal. A run that crashes after printing, or fails where the counter
 # cannot see it, still exits nonzero - so success requires BOTH.
