@@ -1427,6 +1427,60 @@ function Invoke-Stop {
     Write-Host ""
 }
 
+# --- Push reminder (v3.12.0) ---
+#
+# The protocol never pushes: commit-approved makes a local commit and says so. But
+# nothing ever pointed the user back at the push either, and one real project collected
+# 20 local commits over three weeks. A first push that size publishes weeks of work at
+# once, and where the host deploys on push, it deploys all of it. Pushing stays the
+# user's; the count is now in front of them after every commit and in work, status and
+# doctor. It compares with the local upstream ref, so it runs no network command.
+function Get-UnpushedState {
+    $result = @{ Ok = $false; Branch = ""; Upstream = ""; HasUpstream = $false; HasRemote = $false; Ahead = 0 }
+    try {
+        $inside = (& git rev-parse --is-inside-work-tree 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $inside -ne "true") { return $result }
+        $branch = (& git rev-parse --abbrev-ref HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($branch) -or $branch -eq "HEAD") { return $result }
+        $result.Branch = $branch
+        $remotes = @(& git remote 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $result.HasRemote = ($remotes.Count -gt 0)
+        $upstream = (& git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($upstream)) {
+            $result.HasUpstream = $true
+            $result.Upstream = $upstream
+            $ahead = (& git rev-list --count "@{u}..HEAD" 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $ahead -match '^\d+$') { $result.Ahead = [int]$ahead }
+        } elseif ($result.HasRemote) {
+            $count = (& git rev-list --count HEAD 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and $count -match '^\d+$') { $result.Ahead = [int]$count }
+        }
+        $result.Ok = $true
+    } catch { }
+    return $result
+}
+
+function Get-PushReminderLines {
+    $push = Get-UnpushedState
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (-not $push.Ok -or -not $push.HasRemote -or $push.Ahead -lt 1) { return $lines.ToArray() }
+    if ($push.HasUpstream) {
+        $lines.Add("$($push.Ahead) local commit(s) on $($push.Branch) are not pushed to $($push.Upstream). Pushing is yours: git push")
+    } else {
+        $lines.Add("Branch $($push.Branch) has never been pushed ($($push.Ahead) commit(s)). Pushing is yours: git push -u origin $($push.Branch)")
+    }
+    $lines.Add("If this project deploys on push, the push also publishes. The count is from the last fetch.")
+    return $lines.ToArray()
+}
+
+function Write-PushReminder {
+    param([string]$Label = "Not pushed:   ")
+    $reminder = @(Get-PushReminderLines)
+    if ($reminder.Count -eq 0) { return }
+    Write-Host "$Label$($reminder[0])"
+    for ($i = 1; $i -lt $reminder.Count; $i++) { Write-Host ((" " * $Label.Length) + $reminder[$i]) }
+}
+
 # --- Background runs (v3.11.0) ---
 #
 # v3.10.1 told the Master window, in MASTER.md and NEXT_TURN.md, not to check on a
@@ -2664,6 +2718,7 @@ function Invoke-Work {
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Current Task: $CurrentTask"
     Write-BackgroundStatusLine
+    Write-PushReminder
     Write-Host ""
 
     if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
@@ -3306,6 +3361,12 @@ function Invoke-Doctor {
         Write-DoctorLine "INFO" "Codex CLI helper is not present in this script; skipping Codex CLI availability."
     }
 
+    $doctorPush = @(Get-PushReminderLines)
+    if ($doctorPush.Count -gt 0) {
+        Write-DoctorLine "INFO" $doctorPush[0]
+        for ($i = 1; $i -lt $doctorPush.Count; $i++) { Write-Host "      $($doctorPush[$i])" }
+    }
+
     if ($protocolVersion -and ($protocolVersion -match '^\d+\.\d+\.\d+$')) {
         Invoke-DoctorRemoteVersionCheck -InstalledVersion $protocolVersion
     }
@@ -3353,6 +3414,7 @@ function Invoke-Status {
         Write-Host "Running:      no automated turn in flight"
     }
     Write-BackgroundStatusLine
+    Write-PushReminder
     Write-Host ""
 }
 
@@ -4208,7 +4270,14 @@ function Invoke-CommitApproved {
     Write-Host ""
     Write-Host "commit-approved: complete."
     Write-Host "No push/tag/release action was run."
-    Write-Host "Next step: continue with the next handoff task, or push manually when you decide."
+    $pushLines = @(Get-PushReminderLines)
+    if ($pushLines.Count -gt 0) {
+        Write-Host "Push:         $($pushLines[0])"
+        for ($i = 1; $i -lt $pushLines.Count; $i++) { Write-Host "              $($pushLines[$i])" }
+        Write-Host "Next step: tell the user how many commits wait for their push, then continue with the next handoff task."
+    } else {
+        Write-Host "Next step: continue with the next handoff task."
+    }
     Write-Host ""
 }
 

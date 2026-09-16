@@ -3783,6 +3783,53 @@ Check "an already-committed release still lists push and tag" (($r.Out -match "g
 Check "the executor's skip condition and the plan's are the same flag" ((@($handoffSource -split "`r?`n" | Where-Object { $_.Contains('$Plan.ReleaseFromHead') }).Count -ge 1) -and (@($handoffSource -split "`r?`n" | Where-Object { $_.Contains('$plan.ReleaseFromHead') }).Count -ge 1))
 
 
+# --- v3.12.0: the push reminder ---
+Write-Host "[4D-2] Push reminder (v3.12.0)"
+# The protocol never pushes. One project collected 20 local commits because nothing ever
+# pointed the user back at the push.
+$pushRemote = Join-Path $FixtureRoot ("push-remote-" + [Guid]::NewGuid().ToString("N") + ".git")
+& git init -q --bare $pushRemote 2>$null | Out-Null
+$pushFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $pushFx
+$r = Invoke-Handoff -WorkDir $pushFx -Arguments @("work")
+Check "a project with no remote shows no push reminder" ($r.Out -notmatch "Not pushed:")
+Push-Location $pushFx
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & git remote add origin $pushRemote 2>$null | Out-Null
+} finally { $ErrorActionPreference = $prevEap; Pop-Location }
+$r = Invoke-Handoff -WorkDir $pushFx -Arguments @("status")
+Check "a branch that was never pushed is named with the command to push it" ($r.Out -match "has never been pushed \(1 commit\(s\)\)\. Pushing is yours: git push -u origin")
+Push-Location $pushFx
+$ErrorActionPreference = 'Continue'
+try {
+    $pushBranch = (& git rev-parse --abbrev-ref HEAD 2>$null | Out-String).Trim()
+    & git push -q -u origin $pushBranch 2>$null | Out-Null
+    & git -c core.autocrlf=false commit -q --allow-empty -m "second" 2>$null | Out-Null
+    & git -c core.autocrlf=false commit -q --allow-empty -m "third" 2>$null | Out-Null
+} finally { $ErrorActionPreference = $prevEap; Pop-Location }
+$r = Invoke-Handoff -WorkDir $pushFx -Arguments @("work")
+Check "work counts the local commits that wait for a push" ($r.Out -match "Not pushed:\s+2 local commit\(s\) on .* are not pushed to origin/")
+Check "the reminder warns that a push can deploy" ($r.Out -match "deploys on push, the push also publishes")
+$r = Invoke-Handoff -WorkDir $pushFx -Arguments @("doctor")
+# The fixture is not a full install, so doctor fails on other checks; only the push line is under test.
+Check "doctor reports unpushed commits as information, not failure" (($r.Out -match "INFO  2 local commit\(s\)") -and ($r.Out -notmatch "(FAIL|WARN)  2 local commit"))
+Push-Location $pushFx
+$ErrorActionPreference = 'Continue'
+try { & git push -q 2>$null | Out-Null } finally { $ErrorActionPreference = $prevEap; Pop-Location }
+$r = Invoke-Handoff -WorkDir $pushFx -Arguments @("status")
+Check "a fully pushed branch shows no reminder" ($r.Out -notmatch "Not pushed:")
+$pushSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "commit-approved prints the push count after the commit" ($pushSrc -match 'Push:\s+\$\(\$pushLines\[0\]\)')
+$pushFnStart = $pushSrc.IndexOf('function Get-UnpushedState')
+$pushFnEnd = $pushSrc.IndexOf('function Write-PushReminder')
+$pushFnText = $pushSrc.Substring($pushFnStart, $pushFnEnd - $pushFnStart)
+Check "the reminder never runs a push or a network command" (($pushFnStart -ge 0) -and ($pushFnText -notmatch 'git push"?\s*$|& git push|& git fetch|& git pull'))
+$pushSh = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
+Check "the Bash status carries the same reminder" ($pushSh -match '_push_reminder\(\)')
+
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

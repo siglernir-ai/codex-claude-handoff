@@ -75,7 +75,8 @@ keeps its context small by rule (since v3.8.0):
   the next window spent 23 of its 44 calls checking and used up the usage window.
 - **Stop at the task boundary.** When a task reaches `REVIEW_DONE` or is committed,
   write the next step into `AI_HANDOFF.md` and end the window; the next task starts in
-  a new one. For a long unattended chain, give the user
+  a new one. After a commit, tell the user in one line how many local commits wait for
+  their push; `commit-approved` and `work` print the count (since v3.12.0). Never push. For a long unattended chain, give the user
   `handoff.ps1 loop -IncludeMaster -IncludeReviewer` to run in a terminal, where every
   turn is a fresh, small `codex exec` instead of a growing conversation.
 - **Do not do the harness's work.** Do not install dependencies or run the project's

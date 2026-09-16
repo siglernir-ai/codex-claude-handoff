@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.11.1)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.12.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -231,7 +231,28 @@ cmd_status() {
     echo "Commit:       $(_commit_status_text)"
     [ -f "$(pwd)/.agents/skills/codex-claude-handoff/SKILL.md" ] && \
         echo "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
+    _push_reminder
     echo ""
+}
+
+# v3.12.0: the protocol never pushes, so say how many local commits wait for the user's push.
+# Compares with the local upstream ref only; no network command.
+_push_reminder() {
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+    [ -n "$(git remote 2>/dev/null)" ] || return 0
+    local branch upstream ahead
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    { [ -z "$branch" ] || [ "$branch" = "HEAD" ]; } && return 0
+    if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" && [ -n "$upstream" ]; then
+        ahead="$(git rev-list --count '@{u}..HEAD' 2>/dev/null)"
+        [ -n "$ahead" ] && [ "$ahead" -gt 0 ] 2>/dev/null || return 0
+        echo "Not pushed:   $ahead local commit(s) on $branch are not pushed to $upstream. Pushing is yours: git push"
+    else
+        ahead="$(git rev-list --count HEAD 2>/dev/null)"
+        [ -n "$ahead" ] && [ "$ahead" -gt 0 ] 2>/dev/null || return 0
+        echo "Not pushed:   Branch $branch has never been pushed ($ahead commit(s)). Pushing is yours: git push -u origin $branch"
+    fi
+    echo "              If this project deploys on push, the push also publishes. The count is from the last fetch."
 }
 
 cmd_adapters() {

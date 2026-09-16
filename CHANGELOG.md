@@ -1,3 +1,19 @@
+## 3.12.0 - The Push Is Yours, and Now You See It
+
+- **Commits piled up unpushed.** The protocol never pushes, by design: `commit-approved`
+  makes a local commit and says so. But nothing ever pointed the user back at the push,
+  and one real project collected 20 local commits over three weeks. A first push that
+  size publishes weeks of work at once, and where the host deploys on push, it deploys
+  all of it.
+- **The count is now in front of the user.** `commit-approved`, `work` and `status` say how
+  many local commits wait for a push and give the command; `doctor` reports it as
+  information. A branch that was never pushed gets `git push -u origin <branch>`. The
+  reminder warns that a push can also deploy. It compares with the local upstream ref,
+  so it runs no network command, and it never pushes.
+- The Bash `status` carries the same reminder.
+- `MASTER.md`: after a commit, the Master tells the user in one line how many commits wait
+  for their push, and never pushes.
+
 ## 3.11.1 - Fast Is Not Further
 
 - **Fast mode was spending the usage window 2.5x faster for the same answers.** The Codex
