@@ -92,7 +92,15 @@ What the Master costs depends on two things:
    **A new model means a new window.** Switching models inside a conversation resends
    the whole conversation to the new model without its cache. A new window starts from
    `NEXT_TURN.md` and `AI_HANDOFF.md` and loses nothing.
-2. **The size of the Master's context.** Every tool call resends the conversation, so
+2. **Fast mode (since v3.11.1, `doctor` warns about it).** Fast mode, which the Codex app
+   stores as `service_tier = "priority"` in `config.toml`, answers about 1.5x sooner and
+   consumes usage at 2.5x the Standard rate on GPT-5.6 and GPT-5.5. It is the same model
+   with the same reasoning, so the result is the same; only the wait is shorter. On a plan
+   where the five-hour usage window runs out before the day does, Standard gets about 2.5x
+   more work done per window. In one measured session a Master window on Fast went from 0%
+   to 99% of the window in 17 minutes. Remove the `service_tier` line and switch Fast off in
+   the Codex window, which keeps its own per-conversation setting.
+3. **The size of the Master's context.** Every tool call resends the conversation, so
    ten small reads of a large context cost more than one focused read. Follow the
    `Context Budget` section of `MASTER.md`: take state from `NEXT_TURN.md` and the
    `AI_HANDOFF.md` sections it maps, look protocol rules up by heading, delegate

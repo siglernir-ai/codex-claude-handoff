@@ -3225,6 +3225,40 @@ function Invoke-Doctor {
         Write-DoctorLine "OK" "No MCP configuration file holds a credential as literal text."
     }
 
+    # v3.11.1: Fast mode multiplies what every Codex call costs. The Codex app writes
+    # service_tier = "priority" when Fast is switched on, and from then on every window runs
+    # on it: GPT-5.6 and GPT-5.5 consume usage at 2.5x the Standard rate for the same answer.
+    # On a small plan the usage window, not the wall clock, is what limits progress. Only the
+    # top-level service_tier line is read, and only its value is printed; both files can
+    # hold MCP keys.
+    $codexHome = $env:CODEX_HOME
+    if ([string]::IsNullOrWhiteSpace($codexHome) -and -not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $codexHome = Join-Path $env:USERPROFILE ".codex" }
+    if ([string]::IsNullOrWhiteSpace($codexHome) -and -not [string]::IsNullOrWhiteSpace($HOME)) { $codexHome = Join-Path $HOME ".codex" }
+    $tierSources = [System.Collections.Generic.List[object]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($codexHome)) { $tierSources.Add(@{ Path = (Join-Path $codexHome "config.toml"); Label = "Codex user config (config.toml in CODEX_HOME)" }) }
+    $tierSources.Add(@{ Path = (Join-Path (Get-Location) ".codex/config.toml"); Label = "project .codex/config.toml" })
+    $fastTierFiles = [System.Collections.Generic.List[string]]::new()
+    foreach ($tierSource in $tierSources) {
+        if (-not (Test-Path -LiteralPath $tierSource.Path -PathType Leaf)) { continue }
+        try { $tierLines = [System.IO.File]::ReadAllLines($tierSource.Path) } catch { continue }
+        foreach ($tierLine in $tierLines) {
+            if ($tierLine -match '^\s*\[') { break }
+            if ($tierLine -match '^\s*service_tier\s*=\s*"(priority|fast)"') {
+                $fastTierFiles.Add("$($tierSource.Label): service_tier = `"$($Matches[1])`"")
+                break
+            }
+        }
+    }
+    if ($fastTierFiles.Count -gt 0) {
+        Write-DoctorLine "WARN" "Codex runs in Fast mode, which uses about 2.5x the usage window per call:"
+        foreach ($entry in $fastTierFiles) { Write-Host "      $entry" }
+        Write-Host "      Fast returns the same answer sooner; it does not make the model smarter. When the usage"
+        Write-Host "      window is what runs out, Standard gets about 2.5x more work done before it resets."
+        Write-Host "      Remove the service_tier line and switch Fast off in the Codex window, which keeps its own setting."
+    } else {
+        Write-DoctorLine "OK" "Codex Fast mode is not set in the Codex configuration."
+    }
+
     $denyRulesPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
     if (Test-Path -LiteralPath $denyRulesPath -PathType Leaf) {
         $denyRules = @(Get-Content -LiteralPath $denyRulesPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '^#' })

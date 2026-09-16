@@ -78,6 +78,11 @@ if (-not $PwshExe) { Write-Host "Harness error: no PowerShell host (pwsh/powersh
 $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-protocol-tests-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $FixtureRoot -Force | Out-Null
 
+# v3.11.1: doctor reads the Codex user configuration. Point it at an empty home so the
+# developer's own Codex settings cannot change a result; the Fast mode tests set their own.
+$env:CODEX_HOME = Join-Path $FixtureRoot "codex-home-empty"
+New-Item -ItemType Directory -Path $env:CODEX_HOME -Force | Out-Null
+
 # --- Tiny assertion framework ---
 $script:Pass = 0
 $script:Fail = 0
@@ -937,6 +942,35 @@ Check "doctor reports a literal key in an ignored MCP configuration" (($r.Out -m
 Check "doctor never prints the key it found" ($r.Out -notmatch [regex]::Escape($fakeSupabaseToken))
 Check "doctor reports missing Claude Code deny rules" ($r.Out -match "Claude Code is not blocked from opening credential files")
 Check "the credential guard warnings do not fail doctor" ($r.Code -ne 10) "exit $($r.Code)"
+
+# v3.11.1: doctor names Fast mode, which spends the usage window 2.5x faster for the same answers.
+$savedCodexHome = $env:CODEX_HOME
+try {
+    $fastHome = Join-Path $FixtureRoot ("codex-home-fast-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $fastHome -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $fastHome "config.toml") -Value ('service_tier = "priority"' + "`n" + 'model = "probe"' + "`n`n" + '[mcp_servers.probe]' + "`n" + 'bearer_token = "' + $fakeSupabaseToken + '"') -Encoding ascii
+    $env:CODEX_HOME = $fastHome
+    $r = Invoke-Handoff -WorkDir $doctorGuardFx -Arguments @("doctor")
+    Check "doctor warns when the Codex user config sets Fast mode" (($r.Out -match "Codex runs in Fast mode") -and ($r.Out -match 'service_tier = "priority"')) $r.Out
+    Check "the Fast mode warning prints no other line of the config" (($r.Out -notmatch [regex]::Escape($fakeSupabaseToken)) -and ($r.Out -notmatch 'model = "probe"'))
+    Check "the Fast mode warning does not fail doctor" ($r.Code -ne 10) "exit $($r.Code)"
+
+    $standardHome = Join-Path $FixtureRoot ("codex-home-standard-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $standardHome -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $standardHome "config.toml") -Value ('model = "probe"' + "`n`n" + '[profiles.quick]' + "`n" + 'service_tier = "priority"') -Encoding ascii
+    $env:CODEX_HOME = $standardHome
+    $r = Invoke-Handoff -WorkDir $doctorGuardFx -Arguments @("doctor")
+    Check "doctor reports Standard when only a named profile sets Fast" ($r.Out -match "Codex Fast mode is not set in the Codex configuration")
+
+    $projectFastFiles = @{}
+    foreach ($key in $doctorFiles.Keys) { $projectFastFiles[$key] = $doctorFiles[$key] }
+    $projectFastFiles[".codex/config.toml"] = 'service_tier = "fast"'
+    $projectFastFx = New-Fixture -Files $projectFastFiles -InitGit
+    $r = Invoke-Handoff -WorkDir $projectFastFx -Arguments @("doctor")
+    Check "doctor warns when the project's .codex/config.toml sets Fast mode" ($r.Out -match 'project \.codex/config\.toml: service_tier = "fast"')
+} finally {
+    [System.Environment]::SetEnvironmentVariable("CODEX_HOME", $savedCodexHome, "Process")
+}
 
 Set-Content -LiteralPath (Join-Path $doctorGuardFx ".mcp.json") -Value '{"mcpServers":{"supabase":{"type":"http","url":"https://mcp.supabase.com/mcp","headers":{"Authorization":"Bearer ${SUPABASE_ACCESS_TOKEN}"}}}}' -Encoding ascii
 New-Item -ItemType Directory -Path (Join-Path $doctorGuardFx ".claude") -Force | Out-Null

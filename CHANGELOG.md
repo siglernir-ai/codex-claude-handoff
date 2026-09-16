@@ -1,3 +1,16 @@
+## 3.11.1 - Fast Is Not Further
+
+- **Fast mode was spending the usage window 2.5x faster for the same answers.** The Codex
+  app stores Fast as `service_tier = "priority"` in `config.toml`, and every window then
+  runs on it. Per OpenAI's documentation GPT-5.6 and GPT-5.5 consume usage at 2.5x the
+  Standard rate in Fast mode; the model and its reasoning are unchanged, only the wait is
+  shorter. After a usage reset a Master window on Fast went from 0% to 99% in 17 minutes.
+  When the usage window is the limit, Fast buys minutes and costs hours.
+- **`doctor` warns when Fast mode is set** in the Codex user configuration (`CODEX_HOME`,
+  default `~/.codex`) or the project's `.codex/config.toml`. It reads only the top-level
+  `service_tier` line and prints only its value, because both files can hold MCP keys.
+- `MODEL_GUIDANCE.md` explains what Fast changes and what it does not.
+
 ## 3.11.0 - Launch and Leave
 
 - **v3.10.1's rule against checking on a running command was only words, and it did not
