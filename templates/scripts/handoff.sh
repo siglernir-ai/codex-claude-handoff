@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.10.1)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.11.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -404,7 +404,7 @@ _model_lines() {
     else
         echo "If your open window runs a different model, start a new window on this one instead of switching inside the conversation. A switch resends the whole conversation to the new model without its cache; a new window loses nothing, because the state is in AI_HANDOFF.md and this file."
     fi
-    echo "One window, one protocol turn: run an automated command once with the longest wait your tool allows instead of checking on it repeatedly, and open a new window for the next task."
+    echo "One window, one protocol turn: from an agent window, cycle, loop, review-run and master-run start in the background and return at once. End your turn then; do not check on the run. Open a new window for the next task."
 }
 
 cmd_next() {

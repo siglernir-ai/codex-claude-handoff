@@ -1,3 +1,33 @@
+## 3.11.0 - Launch and Leave
+
+- **v3.10.1's rule against checking on a running command was only words, and it did not
+  hold.** The next Master window read "Do not babysit automated commands", started `loop`
+  with a one-second wait, and then checked on it every minute. 23 of its 44 calls were
+  those checks, each resending 50,000-80,000 tokens, and the five-hour usage window went
+  from 17% to 98% in 19 minutes. An agent tool cannot wait longer than about a minute per
+  call, so any command that runs for ten minutes invites the same loop.
+- **From an agent window, long commands now start in the background and return at once.**
+  `cycle`, `run-next`, `loop`, `review-run` and `master-run` detect an agent shell -
+  `CODEX_CI` or `CODEX_SANDBOX*` for Codex, `CLAUDECODE` for Claude Code, or a `codex` or
+  `claude` process above the shell - and relaunch themselves as a detached process with
+  the same arguments. The call returns in about two seconds with nothing left to wait on,
+  and prints `AGENT: END YOUR TURN NOW`. The run is created through WMI, so a tool that
+  kills its command's process tree cannot take the run with it; `Start-Process` is the
+  fallback.
+- **The run reports itself.** It records `HANDOFF_BACKGROUND.json` (process, start time,
+  finish time, exit code) and writes its output to `HANDOFF_BACKGROUND.log`; both are
+  local, gitignored and exempt from the clean-tree check. Windows shows a notification
+  when it ends. `status` and `work` show the run or its result, and `stop` terminates it.
+- **One run at a time.** A second long command while a run is alive is refused, from an
+  agent or a terminal, instead of racing it on the same `AI_HANDOFF.md`.
+- **A background run cannot ask for confirmation,** so without `-Yes` it is not started,
+  and the agent is told to ask the user first.
+- **A person at a terminal is not affected.** Their shell has no agent above it and the
+  command runs in the foreground as before. `HANDOFF_RUN_MODE=foreground` forces the old
+  behaviour anywhere; `HANDOFF_RUN_MODE=background` forces the new one.
+- `MASTER.md` and `NEXT_TURN.md` now describe what the command does instead of asking for
+  restraint.
+
 ## 3.10.1 - A Window Is Not a Loop
 
 - **A Master window used up a five-hour usage window in 48 minutes on the standard model.**

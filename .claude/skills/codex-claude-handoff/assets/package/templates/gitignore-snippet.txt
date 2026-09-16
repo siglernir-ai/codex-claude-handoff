@@ -22,6 +22,8 @@
 /IMPLEMENTER_CLI_BRIEF.md
 /.ai/handoff-history/
 /HANDOFF_RUN.json
+/HANDOFF_BACKGROUND.json
+/HANDOFF_BACKGROUND.log
 
 # Agent MCP configuration - holds API keys and access tokens in plain text.
 # This protocol requires Codex and Claude Code in the same repository, so their

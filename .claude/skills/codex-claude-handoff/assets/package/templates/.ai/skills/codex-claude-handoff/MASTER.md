@@ -65,11 +65,14 @@ keeps its context small by rule (since v3.8.0):
   switch models inside a long conversation: the switch resends the whole conversation
   to the new model without its cache. Before a window closes, write anything decided
   in it that is not yet in those files.
-- **Do not babysit automated commands (since v3.10.1).** `loop`, `cycle` and
-  `review-run` can run for minutes. Run each once with the longest wait your tool
-  allows; never check on a running command again and again, because every check
-  resends the whole conversation. One measured window spent 35 of its 116 calls
-  checking on commands that were still running, and used up the usage window.
+- **Start automated commands and end the turn (since v3.11.0).** From an agent window,
+  `cycle`, `loop`, `review-run` and `master-run` start in the background and return at
+  once; the command says so and prints `AGENT: END YOUR TURN NOW`. Do exactly that. Do
+  not run `status`, `wait` or `sleep`, and do not read `HANDOFF_BACKGROUND.log`, to see
+  whether the run finished: every check resends the whole conversation. Tell the user in
+  one line that it is running; Windows shows a notification when it ends, and a new
+  window continues from `handoff.ps1 work`. v3.10.1 asked for this in words only, and
+  the next window spent 23 of its 44 calls checking and used up the usage window.
 - **Stop at the task boundary.** When a task reaches `REVIEW_DONE` or is committed,
   write the next step into `AI_HANDOFF.md` and end the window; the next task starts in
   a new one. For a long unattended chain, give the user

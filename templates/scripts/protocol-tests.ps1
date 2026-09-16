@@ -56,6 +56,11 @@ Get-ChildItem Env: | Where-Object { $_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODE
     [System.Environment]::SetEnvironmentVariable($_.Name, $null, "Process")
 }
 
+# v3.11.0: long commands run from an agent shell detach into the background. This suite is
+# often run from an agent's shell, so fix the foreground path for every test; the tests of
+# the background path set the mode themselves.
+$env:HANDOFF_RUN_MODE = "foreground"
+
 # --- Resolve repo paths (this script lives in scripts/) ---
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot    = Split-Path -Parent $ScriptDir
@@ -1830,6 +1835,111 @@ $fxZeroTicks = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READ
 Set-Content -Path (Join-Path $fxZeroTicks "HANDOFF_RUN.json") -Value ('{"processId":' + $PID + ',"startTicks":0,"kind":"test","startedUtc":"2026-08-30T00:00:00Z","budgetUsd":2,"timeoutSec":180}') -Encoding utf8
 $r = Invoke-Handoff -WorkDir $fxZeroTicks -Arguments @("stop")
 Check "stop refuses to kill a process it cannot positively identify" ($r.Out -match "stale run marker was found")
+
+# --- v3.11.0: long commands launched from an agent window run in the background ---
+Write-Host "[4B-9] Background runs from an agent window (v3.11.0)"
+
+# v3.10.1 asked the Master not to check on a running loop. The next window did it anyway,
+# 23 of 44 calls, and used up the usage window. The command itself must leave nothing to wait on.
+function Wait-BackgroundFinished {
+    param([string]$Dir, [int]$Seconds = 45)
+    $markerPath = Join-Path $Dir "HANDOFF_BACKGROUND.json"
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $markerPath) {
+            try {
+                $data = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+                if ($data.finishedUtc) { return $data }
+            } catch { }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $null
+}
+
+$env:HANDOFF_BACKGROUND_NO_NOTIFY = "1"
+$fxBg = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $fxBg
+$env:HANDOFF_RUN_MODE = "background"
+try {
+    $bgWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-Handoff -WorkDir $fxBg -Arguments @("loop", "-MaxTurns", "0", "-BudgetUsd", "1.5", "-Yes")
+    $bgWatch.Stop()
+} finally {
+    $env:HANDOFF_RUN_MODE = "foreground"
+}
+Check "an agent-window loop returns at once with exit 0" (($r.Code -eq 0) -and ($r.Out -match "loop: started in the background"))
+Check "the launch returns well before the run could finish a turn" ($bgWatch.Elapsed.TotalSeconds -lt 30)
+Check "the launch tells the agent to end its turn" ($r.Out -match "AGENT: END YOUR TURN NOW")
+$bgDone = Wait-BackgroundFinished -Dir $fxBg
+Check "the background run records that it finished" ($null -ne $bgDone)
+if ($null -ne $bgDone) {
+    Check "the background run records the command's own exit code" ([string]$bgDone.exitCode -eq "1")
+    $bgLog = Get-Content -Raw -LiteralPath (Join-Path $fxBg "HANDOFF_BACKGROUND.log") -ErrorAction SilentlyContinue
+    Check "the background run received the original arguments" ($bgLog -match "-MaxTurns must be at least 1 \(got: 0\)")
+    $r = Invoke-Handoff -WorkDir $fxBg -Arguments @("status")
+    Check "status reports the finished background run and its exit code" ($r.Out -match "Background:\s+last run loop finished .* exit 1")
+    $r = Invoke-Handoff -WorkDir $fxBg -Arguments @("doctor")
+    Check "background run files do not make the tree look dirty" ($r.Out -match "Git working tree clean after local coordination exclusions")
+}
+
+# Without -Yes nothing can confirm a detached run.
+$fxBgNoYes = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$env:HANDOFF_RUN_MODE = "background"
+try {
+    $r = Invoke-Handoff -WorkDir $fxBgNoYes -Arguments @("cycle")
+} finally {
+    $env:HANDOFF_RUN_MODE = "foreground"
+}
+Check "an agent-window run without -Yes is not started" (($r.Code -eq 2) -and ($r.Out -match "cannot ask for confirmation"))
+Check "an unstarted background run leaves no marker" (-not (Test-Path (Join-Path $fxBgNoYes "HANDOFF_BACKGROUND.json")))
+
+# Codex marks every command it runs with CODEX_CI; that alone must be recognised.
+$savedClaudeCode = $env:CLAUDECODE
+$savedCodexCi = $env:CODEX_CI
+try {
+    [System.Environment]::SetEnvironmentVariable("HANDOFF_RUN_MODE", $null, "Process")
+    [System.Environment]::SetEnvironmentVariable("CLAUDECODE", $null, "Process")
+    $env:CODEX_CI = "1"
+    $r = Invoke-Handoff -WorkDir $fxBgNoYes -Arguments @("loop")
+} finally {
+    $env:HANDOFF_RUN_MODE = "foreground"
+    [System.Environment]::SetEnvironmentVariable("CLAUDECODE", $savedClaudeCode, "Process")
+    [System.Environment]::SetEnvironmentVariable("CODEX_CI", $savedCodexCi, "Process")
+}
+Check "a Codex shell is detected from CODEX_CI" ($r.Out -match "Codex, CODEX_CI environment variable")
+
+# A person's terminal, or the foreground override, keeps the old behaviour.
+$r = Invoke-Handoff -WorkDir $fxBgNoYes -Arguments @("loop", "-MaxTurns", "0", "-Yes")
+Check "a foreground loop runs in place, as before" (($r.Out -match "loop: blocked") -and ($r.Out -notmatch "started in the background"))
+
+# One run at a time: a live run refuses a second long command and stop ends it.
+$fxBgLive = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$sleeper = Start-Process -FilePath $PwshExe -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 60") -WindowStyle Hidden -PassThru
+try {
+    Start-Sleep -Milliseconds 500
+    $liveMarker = [ordered]@{ processId = $sleeper.Id; startTicks = $sleeper.StartTime.ToUniversalTime().Ticks; command = "loop"; startedUtc = "2026-09-16T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = $null; exitCode = $null }
+    [System.IO.File]::WriteAllText((Join-Path $fxBgLive "HANDOFF_BACKGROUND.json"), ($liveMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $fxBgLive -Arguments @("review-run", "-Yes")
+    Check "a second long command is refused while a background run is alive" (($r.Code -eq 1) -and ($r.Out -match "a background run is already in progress"))
+    $r = Invoke-Handoff -WorkDir $fxBgLive -Arguments @("work")
+    Check "work shows the live background run" ($r.Out -match "Background:\s+YES - loop")
+    $r = Invoke-Handoff -WorkDir $fxBgLive -Arguments @("stop")
+    Check "stop terminates the background run" ($r.Out -match "Stopping the background run")
+    Start-Sleep -Milliseconds 500
+    Check "the background process is actually gone" ($null -eq (Get-Process -Id $sleeper.Id -ErrorAction SilentlyContinue))
+    $stopped = Get-Content -Raw -LiteralPath (Join-Path $fxBgLive "HANDOFF_BACKGROUND.json") | ConvertFrom-Json
+    Check "a stopped run is recorded as stopped" ([string]$stopped.exitCode -eq "stopped")
+} finally {
+    try { Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue } catch { }
+}
+[System.Environment]::SetEnvironmentVariable("HANDOFF_BACKGROUND_NO_NOTIFY", $null, "Process")
+
+$bgSnippet = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/gitignore-snippet.txt")
+Check "the gitignore snippet ignores the background marker and log" (($bgSnippet -match "(?m)^/HANDOFF_BACKGROUND\.json$") -and ($bgSnippet -match "(?m)^/HANDOFF_BACKGROUND\.log$"))
+$bgMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
+Check "MASTER.md describes the background launch instead of asking for restraint" (($bgMaster -match "END YOUR TURN NOW") -and ($bgMaster -notmatch "longest wait your tool"))
+Check "the background log is scanned for credentials like every other capture" ($handoffSrc -match '"HANDOFF_BACKGROUND\.log", "AI_HANDOFF\.md"')
 
 # release was unreachable by following the tool's own instructions: user-next always
 # pointed at commit-approved, and release then failed on an empty git status.

@@ -34,6 +34,9 @@ param(
 
 if ($CopyPrompt) { $Clip = $true }
 
+# v3.11.0: kept so a background run can be relaunched with exactly the arguments given.
+$ScriptBoundParameters = @{} + $PSBoundParameters
+
 # v3.10.1: an Implementer turn that edits several files routinely needs more than three
 # minutes. At 180 seconds a real turn was killed mid-edit and left partial work that took
 # a review and a correction round to repair. cycle and loop default to 600 seconds; an
@@ -601,11 +604,15 @@ $LegacyImplementerCommandName = "CLAUDE_IMPLEMENTER_COMMAND.md"
 # Marker written while an automated turn is in flight (v3.4.2). Local and gitignored.
 $RunMarkerName = "HANDOFF_RUN.json"
 
+# Marker and output of a run started in the background from an agent window (v3.11.0).
+$BackgroundMarkerName = "HANDOFF_BACKGROUND.json"
+$BackgroundLogName = "HANDOFF_BACKGROUND.log"
+
 # Local protocol files exempt from the clean-tree guard - they are expected to
 # change between turns and must never be committed.
 # v3.5.0: the legacy vendor-named captures stay on this list. They are still readable,
 # so an install that carries them must not trip the clean-tree guard on their account.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $BackgroundMarkerName, $BackgroundLogName, $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
 # v3.6.0: the protocol's own configuration change was blocking the protocol.
 #
 # A role swap edits .ai/roles/ROLE_ASSIGNMENT.md, and that file is tracked by design -
@@ -858,7 +865,7 @@ function Invoke-CredentialLeakGate {
         $ReviewJsonlName, $ReviewLastName, $MasterJsonlName, $MasterLastName,
         "CODEX_REVIEW.jsonl", "CODEX_REVIEW_LAST.md", "CODEX_MASTER.jsonl", "CODEX_MASTER_LAST.md",
         "CLAUDE_IMPLEMENTER.jsonl", "CLAUDE_IMPLEMENTER_LAST.md", "CLAUDE_IMPLEMENTER_COMMAND.md",
-        "HANDOFF_LOOP.log", "AI_HANDOFF.md", "NEXT_TURN.md"
+        "HANDOFF_LOOP.log", "HANDOFF_BACKGROUND.log", "AI_HANDOFF.md", "NEXT_TURN.md"
     ) | Select-Object -Unique
 
     $findings = [System.Collections.Generic.List[object]]::new()
@@ -1373,6 +1380,23 @@ function Get-RunMarkerState {
 }
 
 function Invoke-Stop {
+    $bg = Get-BackgroundRunState
+    if ($bg.Alive) {
+        Write-Host ""
+        Write-Host "Stopping the background run."
+        Write-Host "  Command:    $($bg.Command)"
+        Write-Host "  Process:    $($bg.ProcessId)"
+        Write-Host "  Started:    $($bg.StartedUtc) UTC"
+        Stop-ProcessTree -ProcessId $bg.ProcessId
+        Set-BackgroundRunFinished -ExitCode "stopped"
+        Clear-RunMarker
+        Write-Host ""
+        Write-Host "stop: complete. The background run and its turn were terminated."
+        Write-Host "AI_HANDOFF.md was not changed, and no git, deploy, database or secret action was run."
+        Write-Host "The run stopped mid-flight, so re-read AI_HANDOFF.md and git status before continuing."
+        Write-Host ""
+        return
+    }
     $state = Get-RunMarkerState
     Write-Host ""
     if (-not $state.Present) {
@@ -1401,6 +1425,277 @@ function Invoke-Stop {
     Write-Host "AI_HANDOFF.md was not changed, and no git, deploy, database or secret action was run."
     Write-Host "The turn stopped mid-flight, so re-read AI_HANDOFF.md and git status before continuing."
     Write-Host ""
+}
+
+# --- Background runs (v3.11.0) ---
+#
+# v3.10.1 told the Master window, in MASTER.md and NEXT_TURN.md, not to check on a
+# running loop again and again. The next real run read that instruction and did it
+# anyway: it started loop with a one-second wait, then checked every minute. 23 of the
+# window's 44 calls were such checks, each resending 50-80k tokens, and a five-hour
+# usage window went from 17% to 98% in 19 minutes. An instruction is not a boundary.
+#
+# So the boundary is now in the command. When cycle, loop, review-run or master-run is
+# started from an agent's shell, it relaunches itself as a detached process and returns
+# at once. There is nothing left to wait on, so there is nothing to check. The agent is
+# told to end its turn; Windows shows a notification when the run finishes.
+$BackgroundCommands = @("cycle", "run-next", "loop", "review-run", "master-run")
+
+function Get-AgentShell {
+    $result = @{ IsAgent = $false; Agent = ""; Reason = "" }
+    $mode = [string]$env:HANDOFF_RUN_MODE
+    if ($mode -eq "foreground") { $result.Reason = "HANDOFF_RUN_MODE=foreground"; return $result }
+    if ($mode -eq "background") {
+        $result.IsAgent = $true; $result.Agent = "agent"; $result.Reason = "HANDOFF_RUN_MODE=background"
+        return $result
+    }
+    if ($env:CLAUDECODE -eq "1") {
+        $result.IsAgent = $true; $result.Agent = "Claude Code"; $result.Reason = "CLAUDECODE environment variable"
+        return $result
+    }
+    # Codex sets CODEX_CI on every command it runs (with PAGER=cat and friends).
+    foreach ($name in @("CODEX_CI", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")) {
+        if (-not [string]::IsNullOrEmpty([System.Environment]::GetEnvironmentVariable($name))) {
+            $result.IsAgent = $true; $result.Agent = "Codex"; $result.Reason = "$name environment variable"
+            return $result
+        }
+    }
+    # Environment variables are not guaranteed across agent versions, so also look at who
+    # started this shell. A person's terminal has no codex or claude process above it.
+    if ($env:OS -eq "Windows_NT") {
+        try {
+            $table = @{}
+            foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate -ErrorAction Stop)) {
+                $table[[int]$p.ProcessId] = $p
+            }
+            $current = $table[[int]$PID]
+            $depth = 0
+            while ($null -ne $current -and $depth -lt 16) {
+                $parentId = [int]$current.ParentProcessId
+                if ($parentId -le 0 -or $parentId -eq [int]$current.ProcessId) { break }
+                $parent = $table[$parentId]
+                if ($null -eq $parent) { break }
+                # A parent younger than its child is a recycled id, not our ancestor.
+                if ($parent.CreationDate -and $current.CreationDate -and $parent.CreationDate -gt $current.CreationDate) { break }
+                $parentName = [string]$parent.Name
+                if ($parentName -match '^codex(-code-mode-host)?\.exe$') {
+                    $result.IsAgent = $true; $result.Agent = "Codex"; $result.Reason = "started by $parentName"
+                    return $result
+                }
+                if ($parentName -match '^claude\.exe$') {
+                    $result.IsAgent = $true; $result.Agent = "Claude Code"; $result.Reason = "started by $parentName"
+                    return $result
+                }
+                $current = $parent
+                $depth++
+            }
+        } catch { }
+    }
+    return $result
+}
+
+function Get-BackgroundRunState {
+    $result = @{ Present = $false; Alive = $false; Finished = $false; ProcessId = 0; StartTicks = 0; Command = ""; StartedUtc = ""; FinishedUtc = ""; ExitCode = $null }
+    $path = Join-Path (Get-Location) $BackgroundMarkerName
+    if (-not (Test-Path -LiteralPath $path)) { return $result }
+    $result.Present = $true
+    try {
+        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $result.ProcessId = [int]$data.processId
+        if ($null -ne $data.startTicks) { $result.StartTicks = [int64]$data.startTicks }
+        $result.Command = [string]$data.command
+        $result.StartedUtc = [string]$data.startedUtc
+        if ($data.finishedUtc) { $result.FinishedUtc = [string]$data.finishedUtc; $result.Finished = $true }
+        if ($null -ne $data.exitCode) { $result.ExitCode = $data.exitCode }
+    } catch {
+        return $result
+    }
+    if ($result.Finished) { return $result }
+    # Same identity rule as the turn marker: id plus start time, or it is not ours.
+    if ($result.StartTicks -gt 0) {
+        try {
+            $running = Get-Process -Id $result.ProcessId -ErrorAction Stop
+            $result.Alive = ($running.StartTime.ToUniversalTime().Ticks -eq $result.StartTicks)
+        } catch { $result.Alive = $false }
+    }
+    return $result
+}
+
+function Set-BackgroundRunFinished {
+    param($ExitCode)
+    try {
+        $markerPath = Join-Path (Get-Location) $BackgroundMarkerName
+        $data = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+        $marker = [ordered]@{ processId = $data.processId; startTicks = $data.startTicks; command = $data.command; startedUtc = $data.startedUtc; log = $data.log; finishedUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); exitCode = $ExitCode }
+        [System.IO.File]::WriteAllText($markerPath, ($marker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
+function ConvertTo-PowerShellLiteral {
+    param($Value)
+    $text = [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    return "'" + $text.Replace("'", "''") + "'"
+}
+
+function Get-BackgroundArgumentText {
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add((ConvertTo-PowerShellLiteral $Command))
+    foreach ($key in $ScriptBoundParameters.Keys) {
+        if ($key -eq "Command") { continue }
+        $value = $ScriptBoundParameters[$key]
+        if ($value -is [System.Management.Automation.SwitchParameter]) {
+            if ($value.IsPresent) { $parts.Add("-$key") }
+        } elseif ($null -ne $value) {
+            $parts.Add("-$key")
+            $parts.Add((ConvertTo-PowerShellLiteral $value))
+        }
+    }
+    return ($parts -join " ")
+}
+
+function Write-BackgroundAgentInstruction {
+    Write-Host "AGENT: END YOUR TURN NOW."
+    Write-Host "  Do not run status, wait, sleep, or read the log to see whether it finished."
+    Write-Host "  Every check resends this whole conversation and spends the user's usage window;"
+    Write-Host "  one Master window spent 23 of its 44 calls on such checks and ran out in 24 minutes."
+    Write-Host "  Tell the user in one line: the run is in progress, Windows shows a notification when"
+    Write-Host "  it ends, and then a NEW window continues from 'handoff.ps1 work'."
+}
+
+function Start-BackgroundRun {
+    param([hashtable]$Agent)
+    if (-not $Yes) {
+        Write-Host ""
+        Write-Host "$($Command): not started."
+        Write-Host "Reason:      run from an agent window ($($Agent.Agent), $($Agent.Reason)) without -Yes."
+        Write-Host "             A background run cannot ask for confirmation. Ask the user, then run it again with -Yes."
+        Write-Host ""
+        exit 2
+    }
+
+    $workDir = (Get-Location).Path
+    $markerPath = Join-Path $workDir $BackgroundMarkerName
+    $logPath = Join-Path $workDir $BackgroundLogName
+    foreach ($old in @($markerPath, $logPath)) {
+        if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
+    }
+
+    $hostExe = $null
+    try { $hostExe = (Get-Process -Id $PID).Path } catch { }
+    if ([string]::IsNullOrWhiteSpace($hostExe)) { $hostExe = "powershell.exe" }
+
+    # The detached process does not inherit this shell's environment, so the launcher
+    # carries PATH and the protocol's own model and CLI settings explicitly. Nothing else
+    # is copied: no token or key is ever written to the launcher file.
+    $envLines = [System.Collections.Generic.List[string]]::new()
+    $envLines.Add('$env:Path = ' + (ConvertTo-PowerShellLiteral $env:Path))
+    foreach ($item in @(Get-ChildItem Env: | Where-Object { ($_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODEL_') -or ($_.Name -eq 'CODEX_CLI') -or ($_.Name -eq 'HANDOFF_BACKGROUND_NO_NOTIFY') })) {
+        $envLines.Add('$env:' + $item.Name + ' = ' + (ConvertTo-PowerShellLiteral $item.Value))
+    }
+
+    $launcherPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-background-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    $launcher = @"
+`$ErrorActionPreference = 'Continue'
+$($envLines -join "`r`n")
+[System.Environment]::SetEnvironmentVariable('HANDOFF_RUN_MODE', `$null, 'Process')
+Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $workDir)
+`$markerPath = $(ConvertTo-PowerShellLiteral $markerPath)
+`$logPath = $(ConvertTo-PowerShellLiteral $logPath)
+`$utf8 = New-Object System.Text.UTF8Encoding(`$false)
+`$started = (Get-Process -Id `$PID).StartTime.ToUniversalTime()
+`$marker = [ordered]@{ processId = `$PID; startTicks = `$started.Ticks; command = $(ConvertTo-PowerShellLiteral $Command); startedUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); log = $(ConvertTo-PowerShellLiteral $BackgroundLogName); finishedUtc = `$null; exitCode = `$null }
+[System.IO.File]::WriteAllText(`$markerPath, (`$marker | ConvertTo-Json), `$utf8)
+`$code = 0
+try {
+    & $(ConvertTo-PowerShellLiteral $PSCommandPath) $(Get-BackgroundArgumentText) *>&1 | ForEach-Object { "`$_" } | Out-File -LiteralPath `$logPath -Encoding utf8
+    if (`$null -ne `$LASTEXITCODE) { `$code = `$LASTEXITCODE }
+} catch {
+    Add-Content -LiteralPath `$logPath -Value ("Background run failed: " + `$_.Exception.Message) -Encoding utf8
+    `$code = 1
+}
+`$marker.finishedUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+`$marker.exitCode = `$code
+[System.IO.File]::WriteAllText(`$markerPath, (`$marker | ConvertTo-Json), `$utf8)
+Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
+if (-not `$env:HANDOFF_BACKGROUND_NO_NOTIFY) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        `$icon = New-Object System.Windows.Forms.NotifyIcon
+        `$icon.Icon = [System.Drawing.SystemIcons]::Information
+        `$icon.Visible = `$true
+        `$icon.ShowBalloonTip(15000, ('Handoff $Command finished (exit ' + `$code + ')'), ($(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir)) + ': open a new window and run handoff.ps1 work.'), [System.Windows.Forms.ToolTipIcon]::Info)
+        Start-Sleep -Seconds 15
+        `$icon.Dispose()
+    } catch { }
+}
+"@
+    [System.IO.File]::WriteAllText($launcherPath, $launcher, (New-Object System.Text.UTF8Encoding($true)))
+
+    $launched = $false
+    # Created through WMI, the run is not a child of this shell: an agent tool that kills
+    # its command's process tree or job when the call returns cannot take the run with it.
+    if ($env:OS -eq "Windows_NT") {
+        try {
+            $commandLine = "`"$hostExe`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcherPath`""
+            $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine; CurrentDirectory = $workDir } -ErrorAction Stop
+            if ($created.ReturnValue -eq 0) { $launched = $true }
+        } catch { }
+    }
+    if (-not $launched) {
+        try {
+            Start-Process -FilePath $hostExe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", "`"$launcherPath`"") -WorkingDirectory $workDir -WindowStyle Hidden | Out-Null
+            $launched = $true
+        } catch { }
+    }
+
+    # The launcher writes the marker itself, so the recorded id and start time are the run's own.
+    $state = $null
+    if ($launched) {
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline) {
+            $state = Get-BackgroundRunState
+            if ($state.Present -and $state.ProcessId -gt 0) { break }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    if ($null -eq $state -or -not $state.Present) {
+        Remove-Item -LiteralPath $launcherPath -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+        Write-Host "$($Command): could not start in the background."
+        Write-Host "Reason:      the detached process did not start. Nothing ran; AI_HANDOFF.md is unchanged."
+        Write-Host "Next step:   ask the user to run it in their own terminal:"
+        Write-Host "             .\scripts\handoff.ps1 $(Get-BackgroundArgumentText)"
+        Write-Host ""
+        exit 3
+    }
+
+    Write-Host ""
+    Write-Host "$($Command): started in the background. This command does not wait for it."
+    Write-Host "  Detected:  $($Agent.Agent) ($($Agent.Reason))"
+    Write-Host "  Process:   $($state.ProcessId)"
+    Write-Host "  Started:   $($state.StartedUtc) UTC"
+    Write-Host "  Output:    $BackgroundLogName (HANDOFF_LOOP.log, captures and NEXT_TURN.md are written as usual)"
+    Write-Host "  Stop it:   .\scripts\handoff.ps1 stop"
+    Write-Host ""
+    Write-BackgroundAgentInstruction
+    Write-Host ""
+    Write-Host "A person at a terminal who prefers to watch it run: set HANDOFF_RUN_MODE=foreground."
+    Write-Host ""
+    exit 0
+}
+
+function Write-BackgroundStatusLine {
+    $bg = Get-BackgroundRunState
+    if (-not $bg.Present) { return }
+    if ($bg.Alive) {
+        Write-Host "Background:   YES - $($bg.Command), process $($bg.ProcessId), started $($bg.StartedUtc) UTC, output $BackgroundLogName."
+        Write-Host "              A notification appears when it ends. From an agent window, end the turn instead of checking again."
+    } elseif ($bg.Finished) {
+        Write-Host "Background:   last run $($bg.Command) finished $($bg.FinishedUtc) UTC, exit $($bg.ExitCode). Output: $BackgroundLogName"
+    } else {
+        Write-Host "Background:   $($bg.Command) (process $($bg.ProcessId)) ended without recording a result. Read $BackgroundLogName."
+    }
 }
 
 # Run one Claude Code Implementer turn with the standard safety constraints.
@@ -2368,6 +2663,7 @@ function Invoke-Work {
     Write-Host "State:        $State"
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Current Task: $CurrentTask"
+    Write-BackgroundStatusLine
     Write-Host ""
 
     if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
@@ -3022,6 +3318,7 @@ function Invoke-Status {
     } else {
         Write-Host "Running:      no automated turn in flight"
     }
+    Write-BackgroundStatusLine
     Write-Host ""
 }
 
@@ -3051,7 +3348,8 @@ function Get-NextTurnModelLines {
     }
     # v3.10.1: one real window spent 35 of 116 calls checking on commands that were still
     # running, each check resending a context that had grown to 140k tokens.
-    $out.Add("One window, one protocol turn: run an automated command once with the longest wait your tool allows instead of checking on it repeatedly, and open a new window for the next task.")
+    # v3.11.0: the instruction alone did not stop it, so the commands now detach.
+    $out.Add("One window, one protocol turn: from an agent window, cycle, loop, review-run and master-run start in the background and return at once. End your turn then; do not check on the run. Open a new window for the next task.")
     return $out.ToArray()
 }
 
@@ -7100,6 +7398,26 @@ function Invoke-Loop {
 }
 
 # --- Dispatch ---
+
+if ($BackgroundCommands -contains $Command) {
+    $runningInBackground = Get-BackgroundRunState
+    # The background process runs this same dispatch; its own marker is not a conflict.
+    $isTheBackgroundRun = $runningInBackground.Alive -and ($runningInBackground.ProcessId -eq $PID)
+    if ($runningInBackground.Alive -and -not $isTheBackgroundRun) {
+        Write-Host ""
+        Write-Host "$($Command): not started - a background run is already in progress."
+        Write-Host "  Running:   $($runningInBackground.Command), process $($runningInBackground.ProcessId), started $($runningInBackground.StartedUtc) UTC"
+        Write-Host "  Output:    $BackgroundLogName"
+        Write-Host "  Stop it:   .\scripts\handoff.ps1 stop"
+        Write-Host ""
+        if ((Get-AgentShell).IsAgent) { Write-BackgroundAgentInstruction; Write-Host "" }
+        exit 1
+    }
+    if (-not $isTheBackgroundRun) {
+        $agentShell = Get-AgentShell
+        if ($agentShell.IsAgent) { Start-BackgroundRun -Agent $agentShell }
+    }
+}
 
 switch ($Command) {
     "work"         { Invoke-Work }
