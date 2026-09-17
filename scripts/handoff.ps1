@@ -1431,6 +1431,273 @@ function Invoke-Stop {
     Write-Host ""
 }
 
+# --- The plan, the next task, and what a stop means (v3.14.0) ---
+#
+# A Master that finishes a task and stops is not finished work, it is a queue with no
+# queue. In one measured session every task boundary became a question to the user, and
+# the Master looked for the next task in the user's personal notes, because AI_SEQUENCE.md
+# held nothing but its own template. The plan belongs in the project, and moving to the
+# next task belongs in a command: opening a task by hand left the previous task's Changed
+# Files in place, and the next Implementer turn was spent asking about it.
+function Add-SequenceTask {
+    param([string]$TaskText)
+    $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
+    if (-not (Test-Path -LiteralPath $seqPath)) {
+        return @{ Ok = $false; Error = "AI_SEQUENCE.md is missing. Reinstall the protocol templates, or create it from templates/AI_SEQUENCE.md." }
+    }
+    $seqLines = @(Get-Content -Path $seqPath)
+    $rows = @(Get-SequenceTaskRows -SeqLines $seqLines)
+    # The shipped template carries two placeholder rows. They are the file's instructions,
+    # not work, and the first real task replaces them instead of queueing behind them.
+    $placeholders = @($rows | Where-Object { $_.Task -match '^\[.*\]$' })
+    $realRows = @($rows | Where-Object { $_.Task -notmatch '^\[.*\]$' })
+    $nextNum = 1
+    foreach ($row in $realRows) { if ($row.Num -match '^\d+$' -and [int]$row.Num -ge $nextNum) { $nextNum = [int]$row.Num + 1 } }
+    $newRow = "| $nextNum | $TaskText | pending | - |"
+
+    $out = [System.Collections.Generic.List[string]]::new()
+    $inTasks = $false
+    $inserted = $false
+    foreach ($line in $seqLines) {
+        if ($line.TrimEnd() -eq "## Tasks") { $inTasks = $true; $out.Add($line); continue }
+        if ($inTasks -and $line -match '^##\s') {
+            if (-not $inserted) { $out.Add($newRow); $out.Add(""); $inserted = $true }
+            $inTasks = $false
+            $out.Add($line)
+            continue
+        }
+        if ($inTasks -and $line.Trim() -match '^\|') {
+            $cols = $line.Trim().Trim('|') -split '\|'
+            if ($cols.Count -ge 4 -and $placeholders.Count -gt 0 -and ($cols[1].Trim() -match '^\[.*\]$')) { continue }
+        }
+        if ($inTasks -and -not $inserted -and $line.Trim() -eq "" -and $out[$out.Count - 1].Trim() -match '^\|') {
+            $out.Add($newRow); $inserted = $true
+        }
+        $out.Add($line)
+    }
+    if (-not $inserted) { $out.Add($newRow) }
+    [System.IO.File]::WriteAllLines($seqPath, $out.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+    return @{ Ok = $true; Error = ""; Number = $nextNum; Task = $TaskText }
+}
+
+function Invoke-SequenceAdd {
+    if ([string]::IsNullOrWhiteSpace($NextTask)) {
+        Write-Host ""
+        Write-Host "sequence-add: blocked."
+        Write-Host "Reason:      -NextTask is required, for example:"
+        Write-Host "               .\scripts\handoff.ps1 sequence-add -NextTask `"Secure the image generation endpoint`""
+        Write-Host "The plan lives in AI_SEQUENCE.md so the Master can take the next task without asking."
+        Write-Host ""
+        exit 1
+    }
+    $added = Add-SequenceTask -TaskText $NextTask.Trim()
+    if (-not $added.Ok) {
+        Write-Host ""
+        Write-Host "sequence-add: blocked."
+        Write-Host "Reason:      $($added.Error)"
+        Write-Host ""
+        exit 1
+    }
+    Write-Host ""
+    Write-Host "sequence-add: task $($added.Number) added to AI_SEQUENCE.md as pending."
+    Write-Host "  $($added.Task)"
+    Write-Host ""
+    Write-Host "AI_SEQUENCE.md is local and gitignored. Open the next task with: .\scripts\handoff.ps1 task-next"
+    Write-Host ""
+}
+
+function Set-SequenceRowStatus {
+    param([string]$TaskText, [string]$Status, [string]$Checkpoint = "-")
+    $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
+    if (-not (Test-Path -LiteralPath $seqPath)) { return $false }
+    $seqLines = @(Get-Content -Path $seqPath)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $changed = $false
+    $inTasks = $false
+    foreach ($line in $seqLines) {
+        if ($line.TrimEnd() -eq "## Tasks") { $inTasks = $true; $out.Add($line); continue }
+        if ($inTasks -and $line -match '^##\s') { $inTasks = $false }
+        $emit = $line
+        if ($inTasks -and $line.Trim() -match '^\|') {
+            $cols = $line.Trim().Trim('|') -split '\|'
+            if ($cols.Count -ge 4) {
+                $num = $cols[0].Trim(); $task = $cols[1].Trim()
+                if ($num -ne '#' -and $num -notmatch '^[-: ]+$' -and $task -eq $TaskText) {
+                    $emit = "| $num | $task | $Status | $Checkpoint |"
+                    $changed = $true
+                }
+            }
+        }
+        $out.Add($emit)
+    }
+    if ($changed) { [System.IO.File]::WriteAllLines($seqPath, $out.ToArray(), (New-Object System.Text.UTF8Encoding($false))) }
+    return $changed
+}
+
+# Opening a task is one operation: archive the finished one, take the next from the plan,
+# reset the declared scope, and write the brief. Done by hand, the scope is what gets
+# forgotten - and the Implementer may not touch a file the handoff does not declare.
+function Invoke-TaskNext {
+    $closedStates = @("REVIEW_DONE", "WAITING_FOR_USER")
+    $currentIsInitial = ($CurrentTask -eq "Initial setup")
+    if (-not ($closedStates -contains $State) -and -not $currentIsInitial) {
+        Write-Host ""
+        Write-Host "task-next: blocked."
+        Write-Host "State:       $State / Waiting For: $WaitingFor"
+        Write-Host "Reason:      the current task is not finished. A task is finished at REVIEW_DONE (reviewed) or"
+        Write-Host "             WAITING_FOR_USER (handed to the user). Finish or resolve it before opening the next one."
+        Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
+        Write-Host ""
+        exit 1
+    }
+
+    $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
+    $rows = @()
+    if (Test-Path -LiteralPath $seqPath) { $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Path $seqPath)) }
+    $realRows = @($rows | Where-Object { $_.Task -notmatch '^\[.*\]$' })
+    $pending = @($realRows | Where-Object { $_.Status -eq 'pending' })
+
+    $taskText = ""
+    $fromSequence = $false
+    if (-not [string]::IsNullOrWhiteSpace($NextTask)) {
+        $taskText = $NextTask.Trim()
+    } elseif ($pending.Count -gt 0) {
+        $taskText = $pending[0].Task
+        $fromSequence = $true
+    } else {
+        Write-Host ""
+        Write-Host "task-next: nothing to open."
+        Write-Host "Reason:      AI_SEQUENCE.md has no pending task, and no -NextTask was given."
+        Write-Host "Stop category: Empty Plan - a user decision: only the user knows what the project does next."
+        Write-Host "Next step:   ask the user what comes next, then record it so the plan survives this window:"
+        Write-Host "               .\scripts\handoff.ps1 sequence-add -NextTask `"<the next task>`""
+        Write-Host "             Or open one task directly: .\scripts\handoff.ps1 task-next -NextTask `"<the task>`""
+        Write-Host ""
+        exit 3
+    }
+
+    Write-Host ""
+    Write-Host "Opening the next task."
+    Write-Host "  Finished:    $CurrentTask  ($State)"
+    Write-Host "  Next task:   $taskText"
+    Write-Host "  Source:      $(if ($fromSequence) { 'AI_SEQUENCE.md (pending row)' } else { '-NextTask' })"
+    Write-Host "  Changes:     archives AI_HANDOFF.md to .ai/handoff-history/, then rewrites Status, Current Task,"
+    Write-Host "               Changed Files (reset), Last Update and Next Recommended Step, and regenerates NEXT_TURN.md."
+    Write-Host "  Never:       no git, deploy, database or secret action; AI_SEQUENCE.md and AI_HANDOFF.md stay local."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; opening without an interactive prompt."
+    } else {
+        $confirm = Read-Host 'Type "yes" to open the next task, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            exit 2
+        }
+    }
+
+    $archive = Save-HandoffArchive -HandoffPath $HandoffFile -Label $CurrentTask
+    if (-not $archive.Ok) {
+        Write-Host ""
+        Write-Host "task-next: blocked."
+        Write-Host "Reason:      the finished task's handoff could not be archived: $($archive.Error)"
+        Write-Host "Nothing was changed."
+        Write-Host ""
+        exit 1
+    }
+
+    $today = (Get-Date).ToString("yyyy-MM-dd")
+    $working = @(Get-Content -Path $HandoffFile)
+    $statusBody = [System.Collections.Generic.List[string]]::new()
+    $statusBody.Add("- State: NEEDS_ANALYSIS")
+    $statusBody.Add("- Waiting For: Master")
+    $statusBody.Add("- Last Updated By: Task Next (local coordination via handoff.ps1 task-next)")
+    $statusBody.Add("- Last Updated At: $today")
+    $statusBody.Add("- Current Task: $taskText")
+    $statusBody.Add("- Model Profile: auto")
+    $statusResult = Set-HandoffSectionBody -Lines $working -Heading "Status" -NewBody $statusBody.ToArray()
+    if (-not $statusResult.Ok) {
+        Write-Host "task-next: blocked. AI_HANDOFF.md has no '## Status' section to rewrite. Nothing was changed."
+        exit 1
+    }
+    $working = $statusResult.Lines
+    foreach ($section in @(
+        @{ Heading = "Changed Files"; Body = @("- None yet") },
+        @{ Heading = "Last Update"; Body = @("- Actor: Task Next (local coordination via handoff.ps1 task-next)", "- Date: $today", "- Task: Opened this task$(if ($fromSequence) { ' from the AI_SEQUENCE.md plan' } else { '' }). The finished task's handoff was archived to .ai/handoff-history/.") },
+        @{ Heading = "Next Recommended Step"; Body = @("- Master: route this task through the Decision Router, assign the Task Actors, and dispatch it. Do not stop at this boundary; stop only for a user decision, an authorization, a plan change, or a real blocker.") }
+    )) {
+        $sectionResult = Set-HandoffSectionBody -Lines $working -Heading $section.Heading -NewBody $section.Body
+        if ($sectionResult.Ok) { $working = $sectionResult.Lines }
+    }
+    Set-Content -Path $HandoffFile -Value $working -Encoding utf8 -ErrorAction Stop
+
+    if ($fromSequence) {
+        [void](Set-SequenceRowStatus -TaskText $CurrentTask -Status "done" -Checkpoint "closed $today")
+        [void](Set-SequenceRowStatus -TaskText $taskText -Status "active")
+    }
+
+    $script:Lines = @(Get-Content -Path $HandoffFile)
+    $freshStatus = Read-HandoffState -Lines $script:Lines
+    $script:State = $freshStatus.State
+    $script:WaitingFor = $freshStatus.WaitingFor
+    $script:CurrentTask = $freshStatus.CurrentTask
+    Invoke-Next -Silent $true
+
+    Write-Host "task-next: opened."
+    Write-Host "  State:       NEEDS_ANALYSIS / Waiting For: Master"
+    Write-Host "  Current Task: $taskText"
+    Write-Host "  Archived:    $($archive.Path)"
+    Write-Host "  NEXT_TURN.md regenerated; Changed Files reset to 'None yet'."
+    Write-Host ""
+    $remaining = @($pending | Where-Object { $_.Task -ne $taskText })
+    if ($remaining.Count -gt 0) {
+        Write-Host "Still pending in the plan after this one: $($remaining.Count)"
+        foreach ($row in ($remaining | Select-Object -First 3)) { Write-Host "  $($row.Num). $($row.Task)" }
+        Write-Host ""
+    }
+    Write-Host "Next step: take this Master turn now - route the task and dispatch it. No git, deploy, database or secret action was run."
+    Write-Host ""
+}
+
+function Get-PendingSequenceTasks {
+    $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
+    if (-not (Test-Path -LiteralPath $seqPath)) { return @() }
+    $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Path $seqPath))
+    return @($rows | Where-Object { $_.Status -eq 'pending' -and $_.Task -notmatch '^\[.*\]$' })
+}
+
+# What the user sees while an automated turn runs. Until now the only signal was a
+# notification at the end, so the user asked "is it still going?" and the agent guessed.
+function Get-TurnOutputText {
+    $text = ""
+    foreach ($name in @($ClaudeImplementerLastName, $ClaudeImplementerJsonlName, $LegacyImplementerLastName, $ReviewLastName, $MasterLastName)) {
+        $path = Join-Path (Get-Location) $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try {
+            $content = Get-Content -LiteralPath $path -Tail 40 -ErrorAction Stop
+            $text += ($content -join "`n") + "`n"
+        } catch { }
+    }
+    return $text
+}
+
+function Write-ProviderQuotaStop {
+    param([string]$CommandLabel, [string]$Tool, [string]$Output)
+    if ([string]::IsNullOrWhiteSpace($Output)) { return $false }
+    if ($Output -notmatch '(?i)usage limit|rate[_ ]limit|quota exceeded|out of credits|insufficient_quota|429') { return $false }
+    $resumeHint = ""
+    if ($Output -match '(?i)try again at ([0-9:apm ]{4,12})') { $resumeHint = $Matches[1].Trim() }
+    Write-Host ""
+    Write-Host "$($CommandLabel): stopped - the $Tool account has no usage left."
+    Write-Host "Stop category: Provider Quota - not a protocol failure and not a user decision about the work."
+    if ($resumeHint -ne "") { Write-Host "Resumes:     $resumeHint (as reported by the provider)." }
+    Write-Host "What this means: the turn did not run. AI_HANDOFF.md is unchanged, and no work was lost."
+    Write-Host "Next step:   tell the user plainly that $Tool is out of usage and the work cannot continue until it"
+    Write-Host "             resets. The options are waiting, a cheaper model profile for this task, or swapping the"
+    Write-Host "             role to the other tool with 'handoff.ps1 start' after the user approves the swap."
+    Write-Host ""
+    return $true
+}
+
 # --- Database authorization, generated-brief check and waiting (v3.13.0) ---
 #
 # Three defects found in one real session, all of them the protocol's fault:
@@ -1850,6 +2117,95 @@ function Start-BackgroundRun {
         $envLines.Add('$env:' + $item.Name + ' = ' + (ConvertTo-PowerShellLiteral $item.Value))
     }
 
+    # v3.14.0: while a run is in flight the user could see nothing at all, so they asked
+    # the agent "is it still going?" - the question the background run was meant to remove.
+    # A small always-on-top window reports the run and closes itself when it ends.
+    $statusScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-status-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    $statusScript = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+`$markerPath = $(ConvertTo-PowerShellLiteral $markerPath)
+`$label = $(ConvertTo-PowerShellLiteral $Command)
+`$project = $(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir))
+`$task = $(ConvertTo-PowerShellLiteral $(if ($CurrentTask.Length -gt 52) { $CurrentTask.Substring(0, 49) + "..." } else { $CurrentTask }))
+`$form = New-Object System.Windows.Forms.Form
+`$form.Text = 'HANDOFF'
+`$form.FormBorderStyle = 'FixedToolWindow'
+`$form.TopMost = `$true
+`$form.ShowInTaskbar = `$false
+`$form.Size = New-Object System.Drawing.Size(340, 124)
+`$form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27)
+`$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+`$form.StartPosition = 'Manual'
+`$form.Location = New-Object System.Drawing.Point((`$screen.Right - 356), (`$screen.Top + 16))
+`$title = New-Object System.Windows.Forms.Label
+`$title.AutoSize = `$false
+`$title.Size = New-Object System.Drawing.Size(316, 22)
+`$title.Location = New-Object System.Drawing.Point(12, 8)
+`$title.ForeColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
+`$title.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+`$title.Text = "`$project  -  `$label"
+`$detail = New-Object System.Windows.Forms.Label
+`$detail.AutoSize = `$false
+`$detail.Size = New-Object System.Drawing.Size(316, 22)
+`$detail.Location = New-Object System.Drawing.Point(12, 60)
+`$detail.ForeColor = [System.Drawing.Color]::FromArgb(163, 230, 53)
+`$detail.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+`$detail.Text = 'running  00:00'
+`$taskLabel = New-Object System.Windows.Forms.Label
+`$taskLabel.AutoSize = `$false
+`$taskLabel.Size = New-Object System.Drawing.Size(316, 20)
+`$taskLabel.Location = New-Object System.Drawing.Point(12, 32)
+`$taskLabel.ForeColor = [System.Drawing.Color]::FromArgb(161, 161, 170)
+`$taskLabel.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+`$taskLabel.Text = `$task
+`$form.Controls.Add(`$title)
+`$form.Controls.Add(`$taskLabel)
+`$form.Controls.Add(`$detail)
+`$script:startedAt = Get-Date
+`$script:closeAt = `$null
+`$timer = New-Object System.Windows.Forms.Timer
+`$timer.Interval = 1000
+`$timer.Add_Tick({
+    if (`$script:closeAt) {
+        if ((Get-Date) -ge `$script:closeAt) { `$timer.Stop(); `$form.Close() }
+        return
+    }
+    `$elapsed = (Get-Date) - `$script:startedAt
+    `$detail.Text = 'running  ' + ('{0:mm\:ss}' -f `$elapsed)
+    `$finished = `$false
+    `$exitText = ''
+    if (Test-Path -LiteralPath `$markerPath) {
+        try {
+            `$data = Get-Content -Raw -LiteralPath `$markerPath | ConvertFrom-Json
+            if (`$data.finishedUtc) { `$finished = `$true; `$exitText = [string]`$data.exitCode }
+        } catch { }
+    } else {
+        `$finished = `$true; `$exitText = 'no marker'
+    }
+    if (`$finished) {
+        if (`$exitText -eq '0') {
+            `$detail.ForeColor = [System.Drawing.Color]::FromArgb(163, 230, 53)
+            `$detail.Text = 'finished  exit 0  -  run: handoff.ps1 work'
+            `$script:closeAt = (Get-Date).AddSeconds(20)
+        } else {
+            # A failure waits for the user. Twenty seconds is nothing if they are in another
+            # window, and a run that failed is exactly the one they must not miss.
+            `$detail.ForeColor = [System.Drawing.Color]::FromArgb(248, 113, 113)
+            `$detail.Text = "finished  exit `$exitText  -  see HANDOFF_BACKGROUND.log"
+            `$form.Text = 'HANDOFF - failed'
+            `$title.ForeColor = [System.Drawing.Color]::FromArgb(248, 113, 113)
+            `$timer.Stop()
+        }
+    }
+})
+`$timer.Start()
+[void]`$form.ShowDialog()
+Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
+"@
+    [System.IO.File]::WriteAllText($statusScriptPath, $statusScript, (New-Object System.Text.UTF8Encoding($true)))
+
     $launcherPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-background-" + [Guid]::NewGuid().ToString("N") + ".ps1")
     $launcher = @"
 `$ErrorActionPreference = 'Continue'
@@ -1862,6 +2218,22 @@ Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $workDir)
 `$started = (Get-Process -Id `$PID).StartTime.ToUniversalTime()
 `$marker = [ordered]@{ processId = `$PID; startTicks = `$started.Ticks; command = $(ConvertTo-PowerShellLiteral $Command); startedUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); log = $(ConvertTo-PowerShellLiteral $BackgroundLogName); finishedUtc = `$null; exitCode = `$null }
 [System.IO.File]::WriteAllText(`$markerPath, (`$marker | ConvertTo-Json), `$utf8)
+`$statusHost = Join-Path `$env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not `$env:HANDOFF_BACKGROUND_NO_WINDOW -and (Test-Path -LiteralPath `$statusHost)) {
+    try { Start-Process -FilePath `$statusHost -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', $(ConvertTo-PowerShellLiteral $statusScriptPath)) -WindowStyle Hidden | Out-Null } catch { }
+}
+if (-not `$env:HANDOFF_BACKGROUND_NO_NOTIFY) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        `$startIcon = New-Object System.Windows.Forms.NotifyIcon
+        `$startIcon.Icon = [System.Drawing.SystemIcons]::Information
+        `$startIcon.Visible = `$true
+        `$startIcon.ShowBalloonTip(6000, 'Handoff $Command started', ($(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir)) + ': running in the background. A small status window shows it.'), [System.Windows.Forms.ToolTipIcon]::Info)
+        Start-Sleep -Seconds 4
+        `$startIcon.Dispose()
+    } catch { }
+}
 `$code = 0
 try {
     & $(ConvertTo-PowerShellLiteral $PSCommandPath) $(Get-BackgroundArgumentText) *>&1 | ForEach-Object { "`$_" } | Out-File -LiteralPath `$logPath -Encoding utf8
@@ -1934,6 +2306,8 @@ if (-not `$env:HANDOFF_BACKGROUND_NO_NOTIFY) {
     Write-Host "  Started:   $($state.StartedUtc) UTC"
     Write-Host "  Output:    $BackgroundLogName (HANDOFF_LOOP.log, captures and NEXT_TURN.md are written as usual)"
     Write-Host "  Stop it:   .\scripts\handoff.ps1 stop"
+    Write-Host "  The user:  sees a notification now and a small status window with the elapsed time while it runs."
+    Write-Host "             (HANDOFF_BACKGROUND_NO_WINDOW=1 hides the window; HANDOFF_BACKGROUND_NO_NOTIFY=1 the notifications.)"
     Write-Host ""
     if (Test-SameToolIdentity -First $Agent.Agent -Second "Claude Code") {
         # Claude Code runs the command from an interactive session that can block and be
@@ -2935,6 +3309,17 @@ function Invoke-Work {
     Write-PushReminder
     Write-Host ""
     if (Write-NextTurnGeneratedWarning) { Write-Host "" }
+    if (@("REVIEW_DONE", "WAITING_FOR_USER") -contains $State) {
+        $workPending = @(Get-PendingSequenceTasks)
+        if ($workPending.Count -gt 0) {
+            Write-Host "Next in the plan: $($workPending[0].Task)"
+            Write-Host "                  Open it with: .\scripts\handoff.ps1 task-next   ($($workPending.Count) pending in AI_SEQUENCE.md)"
+        } else {
+            Write-Host "Next in the plan: AI_SEQUENCE.md has no pending task. Ask the user what comes next and record it:"
+            Write-Host "                  .\scripts\handoff.ps1 sequence-add -NextTask `"<the next task>`""
+        }
+        Write-Host ""
+    }
 
     if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
         Write-Host "Next action: start the first task from this fresh install."
@@ -2997,14 +3382,23 @@ function Invoke-Work {
                 # the documented primary path. Only the auto-loop case above was wrong:
                 # there the turn genuinely runs from here and `work` was still sending
                 # the operator to copy and paste.
-                Write-Host "Next action: open $actor and use the standard handoff prompt."
-                Write-Host ""
-                Write-Host "Run:"
-                Write-Host "  .\scripts\handoff.ps1 next -Clip"
+                # v3.14.0: lead with the command when there is one. The old order sent an
+                # agent Master to copy and paste a prompt for a turn the protocol can run
+                # end to end, and it improvised the turn by hand instead.
                 if ($workAdapter.Callable -and $workAdapter.NextStep) {
+                    Write-Host "Next action: run the $role turn from here; no copying needed."
                     Write-Host ""
-                    Write-Host "This role also has explicit commands for this state:"
+                    Write-Host "Run:"
                     Write-Host "  $($workAdapter.NextStep)"
+                    Write-Host ""
+                    Write-Host "Each command asks for confirmation (or takes -Yes) and writes its own local evidence."
+                    Write-Host "To take the turn manually in $actor instead:"
+                    Write-Host "  .\scripts\handoff.ps1 next -Clip"
+                } else {
+                    Write-Host "Next action: open $actor and use the standard handoff prompt."
+                    Write-Host ""
+                    Write-Host "Run:"
+                    Write-Host "  .\scripts\handoff.ps1 next -Clip"
                 }
             }
         }
@@ -7022,12 +7416,14 @@ function Invoke-Cycle {
         exit 4
     }
 
-    # Preflight: confirm Claude Code is available
-    Write-Host "Checking Claude Code availability..."
-    if (-not (Test-ClaudeAvailable)) {
-        Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
-        Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
-        exit 3
+    # Preflight: confirm the tool that will actually take this turn is available.
+    if (Test-SameToolIdentity -First $implementerTool -Second "Claude Code") {
+        Write-Host "Checking Claude Code availability..."
+        if (-not (Test-ClaudeAvailable)) {
+            Write-Host "Claude Code is not available. Check network or install globally: npm install -g @anthropic-ai/claude-code"
+            Write-Host "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+            exit 3
+        }
     }
 
     Write-Host ""
@@ -7069,7 +7465,7 @@ function Invoke-Cycle {
 
     Write-Host ""
     if ($claudeExit -eq 0) {
-        Write-Host "Claude Code turn complete (exit 0)."
+        Write-Host "$implementerTool turn complete (exit 0)."
         Write-Host "Tests and lint were not run - execute them manually before committing."
         Write-Host ""
 
@@ -7173,11 +7569,13 @@ function Invoke-Cycle {
         }
     } else {
         if ($claudeExit -eq 3) {
-            Write-Host "Claude Code runner failed before the turn could start (exit 3)."
-            Write-Host "AI_HANDOFF.md was not intentionally transitioned by handoff.ps1."
+            Write-Host "$implementerTool runner failed before the turn could start (exit 3)."
+            if (-not (Write-ProviderQuotaStop -CommandLabel $CommandLabel -Tool $implementerTool -Output (Get-TurnOutputText))) {
+                Write-Host "AI_HANDOFF.md was not intentionally transitioned by handoff.ps1."
+            }
             exit 3
         } elseif ($claudeExit -eq 4) {
-            Write-Host "Claude Code turn timed out (exit 4)."
+            Write-Host "$implementerTool turn timed out (exit 4)."
             $script:Lines       = Get-Content -Path $HandoffFile
             $freshStatus        = Read-HandoffState -Lines $script:Lines
             $script:State       = $freshStatus.State
@@ -7188,8 +7586,10 @@ function Invoke-Cycle {
             Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
             exit 4
         } else {
-            Write-Host "Claude Code exited with error (code: $claudeExit)."
-            Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+            Write-Host "$implementerTool exited with error (code: $claudeExit)."
+            if (-not (Write-ProviderQuotaStop -CommandLabel $CommandLabel -Tool $implementerTool -Output (Get-TurnOutputText))) {
+                Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+            }
             exit 5
         }
     }
@@ -7691,20 +8091,23 @@ function Invoke-Loop {
             if ($recoveredToReview) { continue }
 
             if ($claudeExit -eq 3) {
-                Write-Host "Claude Code runner failed before the turn could start (exit 3)."
-                Write-LoopLog "turn=$turnNo stop reason=claude-runner-start-failed exit=3"
+                Write-Host "$loopImplementerTool runner failed before the turn could start (exit 3)."
+                [void](Write-ProviderQuotaStop -CommandLabel "loop" -Tool $loopImplementerTool -Output (Get-TurnOutputText))
+                Write-LoopLog "turn=$turnNo stop reason=runner-start-failed exit=3"
                 exit 3
             } elseif ($claudeExit -eq 4) {
-                Write-Host "Claude Code turn timed out (exit 4)."
+                Write-Host "$loopImplementerTool turn timed out (exit 4)."
                 $loopProgress = Get-TurnProgress -PreState $preImplementerState -PostState $postStatus.State
                 Write-PartialProgressRepairGuidance -CommandLabel "loop" -Progress $loopProgress -StateText "$($postStatus.State) / Waiting For: $($postStatus.WaitingFor)" -Reason "timeout"
                 Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
                 Write-LoopLog "turn=$turnNo stop reason=claude-timeout exit=4"
                 exit 4
             } else {
-                Write-Host "Claude Code exited with error (code: $claudeExit)."
-                Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
-                Write-LoopLog "turn=$turnNo stop reason=claude-error exit=5"
+                Write-Host "$loopImplementerTool exited with error (code: $claudeExit)."
+                if (-not (Write-ProviderQuotaStop -CommandLabel "loop" -Tool $loopImplementerTool -Output (Get-TurnOutputText))) {
+                    Write-Host "AI_HANDOFF.md may be incomplete. Verify manually."
+                }
+                Write-LoopLog "turn=$turnNo stop reason=turn-error exit=5"
                 exit 5
             }
         }
@@ -7769,6 +8172,8 @@ switch ($Command) {
     "status"       { Invoke-Status }
     "stop"         { Invoke-Stop }
     "wait"         { Invoke-Wait }
+    "sequence-add" { Invoke-SequenceAdd }
+    "task-next"    { Invoke-TaskNext }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
     "next"         { Invoke-Next }
@@ -7798,6 +8203,12 @@ switch ($Command) {
             Write-Host "Commands:"
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
             Write-Host "  stop                      Stop an automated turn that is running now. No git, deploy, database or secret action."
+            Write-Host "  sequence-add -NextTask `"<task>`""
+            Write-Host "                            Append a pending task to the AI_SEQUENCE.md plan. Local; no git action."
+            Write-Host "  task-next [-NextTask `"<task>`"] [-Yes]"
+            Write-Host "                            Close the finished task and open the next one: archives AI_HANDOFF.md, takes the next"
+            Write-Host "                            pending task from AI_SEQUENCE.md (or -NextTask), resets Changed Files and regenerates"
+            Write-Host "                            NEXT_TURN.md. No git, deploy, database or secret action."
             Write-Host "  wait [-TimeoutSeconds N]  Block until the background run started from an agent window finishes, then print its"
             Write-Host "                            result and the last lines of its log. Default 1800 seconds. Changes nothing; a"
             Write-Host "                            timeout leaves the run going."

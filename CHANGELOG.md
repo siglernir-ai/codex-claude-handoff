@@ -1,3 +1,32 @@
+## 3.14.0 - The Work Continues
+
+- **A finished task became a question to the user, every time.** `AI_SEQUENCE.md` shipped as
+  a template and was never filled, so when a task closed there was nothing to move to; one
+  Master went looking for the next task in the user's personal notes outside the project.
+  `MASTER.md` also told it to stop at the task boundary, which was written for cost and read
+  as "stop working". The rule is now **end the window, not the work**, with an explicit list
+  of the only legitimate stops: a product decision, a deviation from the approved plan, an
+  action needing authorization, an empty plan, or a real blocker - each one named, with what
+  the user has to do.
+- **The plan lives in the project.** `handoff.ps1 sequence-add -NextTask "..."` appends a
+  pending task to `AI_SEQUENCE.md`, replacing the shipped placeholders on first use.
+  `handoff.ps1 task-next` closes the finished task and opens the next one in a single
+  guarded operation: it archives `AI_HANDOFF.md` to `.ai/handoff-history/`, writes the new
+  Status, **resets `Changed Files`**, marks the plan rows, and regenerates `NEXT_TURN.md`.
+  Opening a task by hand is what left the previous task's files declared, and the next
+  Implementer turn was spent asking about it. `work` shows the next pending task and the
+  command that opens it.
+- **A tool with no usage left is a named stop.** When a turn fails and the provider's
+  message reports a usage limit, `cycle` and `loop` print a `Provider Quota` stop with the
+  reset time when one is given, and say the turn did not run and nothing was lost.
+- **The output names the tool that actually ran.** "Checking Claude Code availability" and
+  "Claude Code turn complete" were printed for Codex turns too, and a Master reported the
+  wrong tool to its user. Every turn message now names the Implementer that took the turn.
+- **`work` leads with the command.** For a role whose turn the protocol can run end to end,
+  `work` now prints that command first and the copy-and-paste path second. The old order
+  sent an agent Master to paste a prompt for a turn it could have run, and it improvised the
+  turn by hand instead.
+
 ## 3.13.0 - Authorized Work, Generated Briefs, and Waiting
 
 Three defects from one real session, in which the roles had just been swapped so that

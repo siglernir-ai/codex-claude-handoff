@@ -529,7 +529,7 @@ $h = Get-Content -Raw -Path (Join-Path $fx "AI_HANDOFF.md")
 Check "start prepares AI_HANDOFF.md for a clean new task" (($r.Code -eq 0) -and ($r.Out -match "AI_HANDOFF.md prepared for Master analysis") -and ($h -match "State: NEEDS_ANALYSIS") -and ($h -match "Waiting For: Master") -and ($h -match "Current Task: New clean task") -and ($h -match "Implementer: TBD"))
 
 $r = Invoke-Handoff -WorkDir $fx -Arguments @("work")
-Check "work after start points to Codex Master" (($r.Code -eq 0) -and ($r.Out -match "NEEDS_ANALYSIS") -and ($r.Out -match "open Codex") -and ($r.Out -match "next -Clip"))
+Check "work after start leads with the Codex Master command and keeps the paste path" (($r.Code -eq 0) -and ($r.Out -match "NEEDS_ANALYSIS") -and ($r.Out -match "run the Master turn from here") -and ($r.Out -match "master-run") -and ($r.Out -match "To take the turn manually in Codex") -and ($r.Out -match "next -Clip"))
 
 $fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Completed old task"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
 Initialize-FixtureGitBaseline -Dir $fx
@@ -3975,6 +3975,127 @@ $masterDoc = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claud
 Check "MASTER.md tells the Master to drive the protocol through its commands" ($masterDoc -match "Drive the protocol through its commands")
 Check "MASTER.md records the database authorization line" ($masterDoc -match "- Authorized Operations: database")
 Check "MASTER.md forbids reviewing your own implementation" ($masterDoc -match "Never review what you implemented")
+
+
+# --- v3.14.0: the plan, the next task, named stops, and what the user sees ---
+Write-Host "[4D-4] The plan, task-next, named stops (v3.14.0)"
+
+$seqTemplate = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/AI_SEQUENCE.md")
+$planRoles = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+"@
+function New-PlanHandoff {
+    param([string]$State, [string]$WaitingFor, [string]$CurrentTask)
+    return (New-Handoff -State $State -WaitingFor $WaitingFor -CurrentTask $CurrentTask) -replace "- Implementer: Claude Code", "- Implementer: Codex" -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+}
+
+# The plan lives in the project. A Master with an empty plan went looking for the next
+# task in the user's personal notes outside the repository.
+$planFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$r = Invoke-Handoff -WorkDir $planFx -Arguments @("sequence-add", "-NextTask", "Secure the image generation endpoint")
+Check "sequence-add appends a pending task" (($r.Code -eq 0) -and ($r.Out -match "task 1 added to AI_SEQUENCE.md as pending"))
+$seqText = Get-Content -Raw -Path (Join-Path $planFx "AI_SEQUENCE.md")
+Check "the shipped placeholders are replaced, not queued behind" (($seqText -match "\| 1 \| Secure the image generation endpoint \| pending \|") -and ($seqText -notmatch "\[one-line task description\]"))
+$null = Invoke-Handoff -WorkDir $planFx -Arguments @("sequence-add", "-NextTask", "Store approved visuals in Supabase Storage")
+$seqText = Get-Content -Raw -Path (Join-Path $planFx "AI_SEQUENCE.md")
+Check "a second task is numbered after the first" ($seqText -match "\| 2 \| Store approved visuals in Supabase Storage \| pending \|")
+$r = Invoke-Handoff -WorkDir $planFx -Arguments @("sequence-add")
+Check "sequence-add without a task is refused" (($r.Code -eq 1) -and ($r.Out -match "-NextTask is required"))
+
+# work must show the next task instead of leaving the boundary silent.
+$r = Invoke-Handoff -WorkDir $planFx -Arguments @("work")
+Check "work names the next task in the plan" ($r.Out -match "Next in the plan: Secure the image generation endpoint")
+Check "work names the command that opens it" ($r.Out -match "task-next")
+
+# task-next closes the finished task and opens the next one in one guarded operation.
+$r = Invoke-Handoff -WorkDir $planFx -Arguments @("task-next", "-Yes")
+Check "task-next opens the next pending task" (($r.Code -eq 0) -and ($r.Out -match "task-next: opened") -and ($r.Out -match "Current Task: Secure the image generation endpoint"))
+$planHandoff = Get-Content -Raw -Path (Join-Path $planFx "AI_HANDOFF.md")
+Check "the new task starts at the Master's routing turn" (($planHandoff -match "(?m)^- State: NEEDS_ANALYSIS") -and ($planHandoff -match "(?m)^- Waiting For: Master"))
+Check "the declared scope is reset for the new task" ($planHandoff -match "(?ms)## Changed Files\s*\n- None yet")
+Check "the finished handoff is archived" ((Get-ChildItem -Path (Join-Path $planFx ".ai/handoff-history") -Filter "*AI_HANDOFF.md" -ErrorAction SilentlyContinue).Count -ge 1)
+$seqText = Get-Content -Raw -Path (Join-Path $planFx "AI_SEQUENCE.md")
+Check "the opened task is marked active in the plan" ($seqText -match "\| 1 \| Secure the image generation endpoint \| active \|")
+Check "the brief is regenerated for the new task" ((Get-Content -Raw -Path (Join-Path $planFx "NEXT_TURN.md")) -match "Secure the image generation endpoint")
+Check "task-next runs no git, deploy, database or secret action" ($r.Out -match "No git, deploy, database or secret action was run")
+
+# A task that is not finished must not be closed by moving on.
+$r = Invoke-Handoff -WorkDir $planFx -Arguments @("task-next", "-Yes")
+Check "task-next refuses while the current task is unfinished" (($r.Code -eq 1) -and ($r.Out -match "the current task is not finished"))
+
+# An empty plan is a user decision, not a silent stop.
+$emptyFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$r = Invoke-Handoff -WorkDir $emptyFx -Arguments @("task-next", "-Yes")
+Check "an empty plan stops with a named category" (($r.Code -eq 3) -and ($r.Out -match "Stop category: Empty Plan"))
+Check "the empty plan stop says how to record the next task" ($r.Out -match "sequence-add -NextTask")
+$r = Invoke-Handoff -WorkDir $emptyFx -Arguments @("work")
+Check "work asks for the next task when the plan is empty" ($r.Out -match "AI_SEQUENCE.md has no pending task")
+$r = Invoke-Handoff -WorkDir $emptyFx -Arguments @("task-next", "-NextTask", "Ad-hoc task the user just asked for", "-Yes")
+Check "task-next also opens a task given directly" (($r.Code -eq 0) -and ((Get-Content -Raw -Path (Join-Path $emptyFx "AI_HANDOFF.md")) -match "Ad-hoc task the user just asked for"))
+
+# The output must name the tool that actually took the turn.
+$v314Src = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "turn completion names the implementer, not always Claude Code" (($v314Src -match '\$implementerTool turn complete \(exit 0\)') -and ($v314Src -notmatch '"Claude Code turn complete \(exit 0\)\."'))
+Check "the loop's failure messages name the implementer" (($v314Src -match '\$loopImplementerTool exited with error') -and ($v314Src -match '\$loopImplementerTool turn timed out'))
+Check "Claude Code availability is only probed for a Claude Code turn" ($v314Src -match 'if \(Test-SameToolIdentity -First \$implementerTool -Second "Claude Code"\) \{\s*\r?\n\s*Write-Host "Checking Claude Code availability')
+
+# A tool with no usage left is a named stop, not a generic error.
+$quotaFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-PlanHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Quota probe"); ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $quotaFx
+Set-Content -LiteralPath (Join-Path $quotaFx "IMPLEMENTER_LAST.md") -Value "You've hit your usage limit. Upgrade to Pro or try again at 5:13 PM." -Encoding utf8
+$quotaCodex = Join-Path $FixtureRoot "fake-codex-quota.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo You've hit your usage limit. Try again at 5:13 PM.
+exit /b 1
+:done
+'@ | Set-Content -Path $quotaCodex -Encoding ascii
+$prevQuotaCli = $env:CODEX_CLI
+$env:CODEX_CLI = $quotaCodex
+try {
+    $r = Invoke-Handoff -WorkDir $quotaFx -Arguments @("cycle", "-Yes")
+} finally {
+    if ($null -eq $prevQuotaCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevQuotaCli }
+}
+Check "a usage limit is reported as a Provider Quota stop" ($r.Out -match "Stop category: Provider Quota")
+Check "the quota stop names the tool that is out" ($r.Out -match "the Codex account has no usage left")
+Check "the quota stop reports the reset time the provider gave" ($r.Out -match "Resumes:\s+5:13 PM")
+Check "the quota stop says no work was lost" ($r.Out -match "the turn did not run")
+
+# work leads with the command for a role the protocol can run end to end.
+$reviewLeadFx = New-ReviewApplyFixture -Capture "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: v1.3.0 - Review Apply Test`nREASON: fixture"
+$r = Invoke-Handoff -WorkDir $reviewLeadFx -Arguments @("work")
+Check "work leads with the runnable command for the Reviewer turn" ($r.Out -match "Next action: run the Reviewer turn from here")
+Check "the manual paste is offered second, not first" ($r.Out -match "To take the turn manually in")
+
+# What the user sees while a run is in flight.
+Check "a status window is written for the background run" (($v314Src -match "handoff-status-") -and ($v314Src -match "TopMost = ") -and ($v314Src -match "running  00:00"))
+Check "the status window can be switched off" ($v314Src -match "HANDOFF_BACKGROUND_NO_WINDOW")
+Check "the run also announces itself when it starts" ($v314Src -match 'Handoff \$Command started')
+Check "the launch message tells the agent what the user will see" ($v314Src -match "sees a notification now and a small status window")
+
+$planMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
+Check "MASTER.md says to end the window, not the work" ($planMaster -match "End the window, not the work")
+Check "MASTER.md lists the only legitimate stops" (($planMaster -match "Stop only for these, and say which one it is") -and ($planMaster -match "empty plan"))
+Check "MASTER.md tells the Master to name a quota stop" ($planMaster -match "When a tool runs out of usage, say so plainly")
 
 # --- Summary ---
 Write-Host ""

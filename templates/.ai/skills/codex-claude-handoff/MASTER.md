@@ -87,12 +87,29 @@ keeps its context small by rule (since v3.8.0):
 - **Never review what you implemented.** If an automated turn is blocked, the answer is to
   fix the dispatch or hand the work to the user, not to do the work yourself and then
   review it. `review-run` refuses when the actor recorded for the last turn is the Reviewer.
-- **Stop at the task boundary.** When a task reaches `REVIEW_DONE` or is committed,
-  write the next step into `AI_HANDOFF.md` and end the window; the next task starts in
-  a new one. After a commit, tell the user in one line how many local commits wait for
-  their push; `commit-approved` and `work` print the count (since v3.12.0). Never push. For a long unattended chain, give the user
-  `handoff.ps1 loop -IncludeMaster -IncludeReviewer` to run in a terminal, where every
-  turn is a fresh, small `codex exec` instead of a growing conversation.
+- **End the window, not the work (since v3.14.0).** A finished task is not a finished
+  plan. When a task reaches `REVIEW_DONE` or is committed, run `handoff.ps1 task-next`:
+  it archives the finished handoff, takes the next pending task from `AI_SEQUENCE.md`,
+  resets `Changed Files` and regenerates the brief. Then route and dispatch that task.
+  Do not ask the user whether to continue, and do not look for the next task outside the
+  project. The plan lives in `AI_SEQUENCE.md`; add to it with `handoff.ps1 sequence-add`
+  when the user decides what comes next. Ending the WINDOW at a task boundary is still
+  right - the next task starts in a fresh one - but the work continues.
+- **Stop only for these, and say which one it is.** A product decision or a trade-off only
+  the user can make; a deviation from the approved plan or specification; an action that
+  needs the user's authorization (database, deploy, push, secrets, commit); an empty plan;
+  or a real blocker such as a tool with no usage left. Name the stop category, say what
+  you need from the user in one line, and record it in `AI_HANDOFF.md`. Anything else is
+  not a stop: it is the next step.
+- **When a tool runs out of usage, say so plainly.** `cycle` and `loop` print a
+  `Provider Quota` stop with the reset time when the provider reports one. Tell the user
+  which tool is out and what the options are - wait, a cheaper profile, or a role swap
+  they approve. Never retry it in a loop.
+- After a commit, tell the user in one line how many local commits wait for their push;
+  `commit-approved` and `work` print the count (since v3.12.0). Never push. For a long
+  unattended chain, give the user `handoff.ps1 loop -IncludeMaster -IncludeReviewer` to
+  run in a terminal, where every turn is a fresh, small `codex exec` instead of a growing
+  conversation.
 - **Do not do the harness's work.** Do not install dependencies or run the project's
   builds yourself to unblock a review: `review-run` runs the project's `typecheck` and
   `test` scripts outside the sandbox and hands the Reviewer the result (since v3.10.1).
