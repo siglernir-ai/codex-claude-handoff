@@ -3830,6 +3830,152 @@ $pushSh = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
 Check "the Bash status carries the same reminder" ($pushSh -match '_push_reminder\(\)')
 
 
+
+# --- v3.13.0: authorized database work, generated briefs, waiting, self-review ---
+Write-Host "[4D-3] Database authorization, generated brief, wait, self-review (v3.13.0)"
+
+# A real session lost a turn here: the Master dispatched a user-approved database acceptance
+# matrix, and the Implementer turn's prompt forbids database access, so it refused.
+$dbRoles = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Claude Code |
+| Implementer | Codex |
+"@
+# A fake Codex CLI keeps these turns free: the gate is what is under test, not the agent.
+$fakeDbCodex = Join-Path $FixtureRoot "fake-codex-db-gate.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo turn ran> IMPLEMENTER_LAST.md
+:done
+'@ | Set-Content -Path $fakeDbCodex -Encoding ascii
+$prevDbCodexCli = $env:CODEX_CLI
+$env:CODEX_CLI = $fakeDbCodex
+try {
+$dbTask = "Run the database acceptance matrix against the project with disposable test data."
+$dbHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask $dbTask) -replace "- Implementer: Claude Code", "- Implementer: Codex" -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$dbFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $dbHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $dbRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $dbFx
+$r = Invoke-Handoff -WorkDir $dbFx -Arguments @("cycle", "-Yes")
+Check "a database task with no authorization is refused before the turn runs" (($r.Code -eq 2) -and ($r.Out -match "blocked before the turn was spent"))
+Check "the refusal names the line the user has to authorize" ($r.Out -match "- Authorized Operations: database")
+Check "the refusal is a user decision, not a protocol repair" ($r.Out -match "Stop category: Scope/Authorization")
+
+# Implementation that only writes a migration file must still run: this is not execution.
+$writeTask = "Write migration 009 adding the exercise_notes column; do not run it."
+$writeHandoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask $writeTask) -replace "- Implementer: Claude Code", "- Implementer: Codex" -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+$writeFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $writeHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $dbRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $writeFx
+$r = Invoke-Handoff -WorkDir $writeFx -Arguments @("cycle", "-Yes")
+Check "writing a migration file is not treated as database execution" ($r.Out -notmatch "blocked before the turn was spent")
+
+# With the authorization recorded, the gate passes and the prompt carries a bounded allowance.
+$dbAuthHandoff = $dbHandoff -replace "(?m)^- Current Task:", "- Authorized Operations: database`n- Current Task:"
+$dbAuthFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $dbAuthHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $dbRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $dbAuthFx
+$r = Invoke-Handoff -WorkDir $dbAuthFx -Arguments @("cycle", "-Yes")
+Check "an authorized database task passes the gate" ($r.Out -notmatch "blocked before the turn was spent")
+$dbSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the turn prompt forbids the database unless the handoff authorizes it" ($dbSrc -match 'Never access or mutate a database\. If the task cannot be completed without database access')
+Check "the authorized allowance is bounded to disposable data and cleanup" (($dbSrc -match "Use disposable test data only") -and ($dbSrc -match "never reset, restore, backfill or delete data you did not create") -and ($dbSrc -match "clean up everything you created"))
+Check "an authorized turn still may not open a credential file" ($dbSrc -match "Never open a credential file to do it")
+Check "both turn prompts read the same authorization" ((@($dbSrc -split "`r?`n" | Where-Object { $_ -match 'Get-DatabaseTurnPromptClause' }).Count -ge 3))
+} finally {
+    if ($null -eq $prevDbCodexCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevDbCodexCli }
+}
+
+# NEXT_TURN.md is generated. A Master that hand-writes it is working outside the protocol.
+$briefFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$null = Invoke-Handoff -WorkDir $briefFx -Arguments @("next")
+$briefText = Get-Content -Raw -Path (Join-Path $briefFx "NEXT_TURN.md")
+Check "next stamps the brief it generates" ($briefText -match '<!-- handoff-generated: handoff\.ps1 next; sha256=[0-9a-f]{64} -->')
+$r = Invoke-Handoff -WorkDir $briefFx -Arguments @("work")
+Check "a generated brief raises nothing in work" ($r.Out -notmatch "NEXT_TURN.md was")
+Add-Content -LiteralPath (Join-Path $briefFx "NEXT_TURN.md") -Value "hand-written addition"
+$r = Invoke-Handoff -WorkDir $briefFx -Arguments @("work")
+Check "work reports a brief edited after it was generated" ($r.Out -match "NEXT_TURN.md was edited after it was generated")
+Check "the report names the command that regenerates it" ($r.Out -match "handoff\.ps1 next")
+Set-Content -LiteralPath (Join-Path $briefFx "NEXT_TURN.md") -Value "# Next Turn Entry Brief`nhand-written by the Master" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $briefFx -Arguments @("doctor")
+Check "doctor warns about a hand-written brief" ($r.Out -match "NEXT_TURN.md was not generated by 'handoff\.ps1 next'")
+$null = Invoke-Handoff -WorkDir $briefFx -Arguments @("next")
+$r = Invoke-Handoff -WorkDir $briefFx -Arguments @("doctor")
+Check "regenerating the brief clears the warning" ($r.Out -match "NEXT_TURN.md carries a valid generated stamp")
+
+# A tool must not review work it performed itself, whatever the Task Actors table says.
+$selfCapture = @"
+VERDICT: APPROVED
+REVIEWER: Codex
+TASK: v1.3.0 - Review Apply Test
+REASON: fixture
+"@
+$selfFx = New-ReviewApplyFixture -Capture $selfCapture
+$selfHandoffPath = Join-Path $selfFx "AI_HANDOFF.md"
+$selfText = (Get-Content -Raw -LiteralPath $selfHandoffPath) -replace "(?m)^- Actor: Test?$", "- Actor: Codex (Reviewer) ran the work itself"
+Set-Content -LiteralPath $selfHandoffPath -Value $selfText -Encoding utf8
+$r = Invoke-Handoff -WorkDir $selfFx -Arguments @("review-check")
+Check "a reviewer that took the last turn itself is refused" ($r.Out -match "Self-review guard")
+Check "the refusal names the recorded Implementer" ($r.Out -match "recorded Implementer 'Claude Code'")
+$otherText = (Get-Content -Raw -LiteralPath $selfHandoffPath) -replace "(?m)^- Actor: Codex \(Reviewer\) ran the work itself?$", "- Actor: Claude Code (Implementer)"
+Set-Content -LiteralPath $selfHandoffPath -Value $otherText -Encoding utf8
+$r = Invoke-Handoff -WorkDir $selfFx -Arguments @("review-check")
+Check "a turn taken by the Implementer still reviews normally" ($r.Out -notmatch "Self-review guard")
+$verdictText = (Get-Content -Raw -LiteralPath $selfHandoffPath) -replace "(?m)^- Actor: Claude Code \(Implementer\)?$", "- Actor: Codex (Reviewer)`r`n- Verdict: BLOCKED"
+Set-Content -LiteralPath $selfHandoffPath -Value $verdictText -Encoding utf8
+$r = Invoke-Handoff -WorkDir $selfFx -Arguments @("review-check")
+Check "a recorded review verdict is not mistaken for self-review" ($r.Out -notmatch "Self-review guard")
+
+# wait: one blocking call instead of polling, and it never stops the run.
+$waitFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles }
+$r = Invoke-Handoff -WorkDir $waitFx -Arguments @("wait")
+Check "wait says plainly when there is nothing to wait for" (($r.Code -eq 1) -and ($r.Out -match "wait: nothing to wait for"))
+$finishedMarker = [ordered]@{ processId = 999999; startTicks = 1; command = "loop"; startedUtc = "2026-09-17T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = "2026-09-17T10:04:00Z"; exitCode = 0 }
+[System.IO.File]::WriteAllText((Join-Path $waitFx "HANDOFF_BACKGROUND.json"), ($finishedMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+Set-Content -LiteralPath (Join-Path $waitFx "HANDOFF_BACKGROUND.log") -Value "loop: turn 1 complete" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $waitFx -Arguments @("wait")
+Check "wait reports a finished run with its exit code" (($r.Code -eq 0) -and ($r.Out -match "wait: the background run has finished") -and ($r.Out -match "Exit code: 0"))
+Check "wait prints the end of the run's log" ($r.Out -match "loop: turn 1 complete")
+$failedMarker = [ordered]@{ processId = 999999; startTicks = 1; command = "loop"; startedUtc = "2026-09-17T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = "2026-09-17T10:04:00Z"; exitCode = 7 }
+[System.IO.File]::WriteAllText((Join-Path $waitFx "HANDOFF_BACKGROUND.json"), ($failedMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+$r = Invoke-Handoff -WorkDir $waitFx -Arguments @("wait")
+Check "a run that ended badly does not report success" (($r.Code -ne 0) -and ($r.Out -match "Exit code: 7"))
+$waitSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+$waitStart = $waitSrc.IndexOf("function Invoke-Wait")
+$waitBody = $waitSrc.Substring($waitStart, [Math]::Min(4000, $waitSrc.Length - $waitStart))
+$waitBody = $waitBody.Substring(0, $waitBody.IndexOf("`nfunction "))
+Check "wait never stops or clears the run it waits for" (($waitStart -ge 0) -and ($waitBody -notmatch "Stop-ProcessTree|Clear-RunMarker|Stop-Process"))
+
+# An interactive Claude Code Master waits by itself instead of handing the window back.
+$bgFxAgent = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $bgFxAgent
+$env:HANDOFF_BACKGROUND_NO_NOTIFY = "1"
+$savedClaudeForBg = $env:CLAUDECODE
+try {
+    [System.Environment]::SetEnvironmentVariable("HANDOFF_RUN_MODE", $null, "Process")
+    $env:CLAUDECODE = "1"
+    $r = Invoke-Handoff -WorkDir $bgFxAgent -Arguments @("loop", "-MaxTurns", "0", "-Yes")
+} finally {
+    $env:HANDOFF_RUN_MODE = "foreground"
+    [System.Environment]::SetEnvironmentVariable("CLAUDECODE", $savedClaudeForBg, "Process")
+}
+Check "a Claude Code agent is told to wait, not to end its turn" (($r.Out -match "WAIT FOR IT IN ONE BLOCKING CALL") -and ($r.Out -match "handoff\.ps1 wait"))
+Check "it is told not to hand the window back to the user" ($r.Out -match "do not ask the user to open a window")
+Check "a Claude Code agent is not told to end its turn" ($r.Out -notmatch "AGENT: END YOUR TURN NOW")
+$null = Wait-BackgroundFinished -Dir $bgFxAgent
+[System.Environment]::SetEnvironmentVariable("HANDOFF_BACKGROUND_NO_NOTIFY", $null, "Process")
+
+$masterDoc = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
+Check "MASTER.md tells the Master to drive the protocol through its commands" ($masterDoc -match "Drive the protocol through its commands")
+Check "MASTER.md records the database authorization line" ($masterDoc -match "- Authorized Operations: database")
+Check "MASTER.md forbids reviewing your own implementation" ($masterDoc -match "Never review what you implemented")
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

@@ -73,6 +73,20 @@ keeps its context small by rule (since v3.8.0):
   one line that it is running; Windows shows a notification when it ends, and a new
   window continues from `handoff.ps1 work`. v3.10.1 asked for this in words only, and
   the next window spent 23 of its 44 calls checking and used up the usage window.
+- **Drive the protocol through its commands (since v3.13.0).** `NEXT_TURN.md` is generated
+  by `handoff.ps1 next` and is stamped; hand-writing it puts the turn outside the protocol,
+  and `work` and `doctor` now say so. Use `next`, `cycle`, `loop`, `review-run`,
+  `review-apply` and `commit-approved` rather than editing the files they own. Editing
+  `AI_HANDOFF.md` directly is for what no command covers: the task description, decisions
+  and authorizations.
+- **Database work needs the authorization written down (since v3.13.0).** An automated
+  Implementer turn refuses to touch a database unless the `Status` section carries
+  `- Authorized Operations: database`, and `cycle` and `loop` refuse to spend a turn on a
+  task that reads as database execution without it. When the user authorizes such a task,
+  record that line with the task; when they have not, ask. Never widen it to other work.
+- **Never review what you implemented.** If an automated turn is blocked, the answer is to
+  fix the dispatch or hand the work to the user, not to do the work yourself and then
+  review it. `review-run` refuses when the actor recorded for the last turn is the Reviewer.
 - **Stop at the task boundary.** When a task reaches `REVIEW_DONE` or is committed,
   write the next step into `AI_HANDOFF.md` and end the window; the next task starts in
   a new one. After a commit, tell the user in one line how many local commits wait for

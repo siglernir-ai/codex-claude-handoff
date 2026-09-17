@@ -44,6 +44,10 @@ $ScriptBoundParameters = @{} + $PSBoundParameters
 if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds') -and (@('cycle', 'run-next', 'loop') -contains $Command)) {
     $TimeoutSeconds = 600
 }
+# v3.13.0: wait blocks on an already-running background run, so its ceiling is a whole run.
+if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds') -and $Command -eq 'wait') {
+    $TimeoutSeconds = 1800
+}
 
 # Some Windows hosts can expose both Path and PATH in the process environment. PowerShell's
 # Start-Process fails before launching children when those case-only duplicates exist.
@@ -1427,6 +1431,205 @@ function Invoke-Stop {
     Write-Host ""
 }
 
+# --- Database authorization, generated-brief check and waiting (v3.13.0) ---
+#
+# Three defects found in one real session, all of them the protocol's fault:
+#
+# 1. The Master dispatched an approved database acceptance matrix to an automated
+#    Implementer turn. That turn's prompt forbids database access unconditionally, so the
+#    Implementer correctly refused and the turn was spent on a task that could never run.
+#    A blanket prohibition cannot express "the user authorized exactly this". The handoff
+#    now carries the authorization, the prompt follows it, and a task that reads as
+#    database execution without it is refused BEFORE the turn is spent.
+# 2. The Master hand-wrote NEXT_TURN.md instead of generating it, so the brief was outside
+#    the protocol and nothing said so. The generated file is stamped and the stamp checked.
+# 3. A run started in the background told an interactive Claude Code Master to end its turn
+#    and ask the user to open a new window. Claude Code can wait by itself; `wait` blocks
+#    until the run finishes, so no window is handed back and nothing polls.
+$DatabaseOperationToken = "database"
+
+function Get-AuthorizedOperations {
+    $ops = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Status")) {
+        if ($line -match "^- Authorized Operations:\s*(.+)$") {
+            foreach ($part in ($Matches[1] -split ',')) {
+                $token = $part.Trim().ToLowerInvariant()
+                if ($token -ne "" -and $token -ne "none") { [void]$ops.Add($token) }
+            }
+        }
+    }
+    return $ops.ToArray()
+}
+
+# Match only text that reads as RUNNING something against a database: a database noun and
+# an execution verb in the same sentence. "Write migration 009" is implementation and must
+# still run; "apply migration 009" and "run the database acceptance matrix" are execution.
+function Test-TaskNeedsDatabaseExecution {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    foreach ($sentence in ($Text -split '(?<=[\.;:!\?])\s+|\r?\n')) {
+        if ($sentence -notmatch '(?i)\b(database|db|supabase|sql|psql|migrations?|rpc)\b') { continue }
+        if ($sentence -match '(?i)\b(run|runs|running|execute|executes|executing|apply|applies|applying|push|pushes|pushing|seed|seeds|seeding|insert|inserts|inserting|query|queries|querying|connect|connects|connecting|acceptance matrix|repair|repairs|reset|resets|backfill|backfills)\b') {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-DatabaseAuthorizationGate {
+    param([string]$CommandLabel)
+    $authorized = @(Get-AuthorizedOperations)
+    if ($authorized -contains $DatabaseOperationToken) { return $true }
+    $taskText = "$CurrentTask`n" + ((Get-SectionLines -Lines $Lines -Heading "Next Recommended Step") -join "`n")
+    if (-not (Test-TaskNeedsDatabaseExecution -Text $taskText)) { return $true }
+    Write-Host ""
+    Write-Host "$($CommandLabel): blocked before the turn was spent."
+    Write-Host "Reason:      the task reads as database execution, and AI_HANDOFF.md does not authorize it."
+    Write-Host "             An automated Implementer turn is forbidden to touch a database unless the handoff"
+    Write-Host "             says the user authorized it, so this turn would refuse the work and end BLOCKED."
+    Write-Host "Task:        $CurrentTask"
+    Write-Host "Stop category: Scope/Authorization - a user decision, not a protocol repair."
+    Write-Host "Next step:   if the user has authorized database execution for THIS task, the Master adds this"
+    Write-Host "             line to the AI_HANDOFF.md Status section and runs the command again:"
+    Write-Host "               - Authorized Operations: database"
+    Write-Host "             If the task does not execute against a database, reword it so it does not read as"
+    Write-Host "             execution. If the user has not authorized it, ask them; never assume."
+    Write-Host ""
+    return $false
+}
+
+# The allowance is written into the turn prompt only when the handoff carries it, and it
+# stays narrow: disposable data, no reset or backfill, no schema change beyond the task,
+# cleanup, and exact recorded commands.
+function Get-DatabaseTurnPromptClause {
+    $authorized = @(Get-AuthorizedOperations)
+    if ($authorized -contains $DatabaseOperationToken) {
+        return "AI_HANDOFF.md Status authorizes database work for this task (Authorized Operations: database), so you MAY connect to the project's database and run exactly what the task requires. Use disposable test data only; never reset, restore, backfill or delete data you did not create; never change schema, roles, policies or secrets beyond what the task names; clean up everything you created; and record the exact commands you ran and their observed output in AI_HANDOFF.md. Never open a credential file to do it: use the connection the project's tooling already provides, and if none is available, stop and record a blocker."
+    }
+    return "Never access or mutate a database. If the task cannot be completed without database access, stop and record it in AI_HANDOFF.md as a blocker for the user; the user can authorize it by adding '- Authorized Operations: database' to the Status section."
+}
+
+# NEXT_TURN.md is generated by 'handoff.ps1 next'. A Master that hand-writes it is working
+# outside the protocol, and until now nothing said so.
+$NextTurnStampPrefix = "<!-- handoff-generated: handoff.ps1 next; sha256="
+
+function Get-TextSha256 {
+    param([string]$Text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Add-NextTurnStamp {
+    param([string]$Body)
+    return $Body + "`n`n" + $NextTurnStampPrefix + (Get-TextSha256 -Text $Body) + " -->"
+}
+
+function Test-NextTurnGenerated {
+    $result = @{ Present = $false; Stamped = $false; Valid = $false }
+    $path = Join-Path (Get-Location) "NEXT_TURN.md"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
+    $result.Present = $true
+    try { $text = [System.IO.File]::ReadAllText($path) } catch { return $result }
+    $normalized = $text.Replace("`r`n", "`n").TrimEnd("`n")
+    $index = $normalized.LastIndexOf($NextTurnStampPrefix)
+    if ($index -lt 0) { return $result }
+    $result.Stamped = $true
+    $trailer = $normalized.Substring($index)
+    if ($trailer -notmatch '^<!-- handoff-generated: handoff\.ps1 next; sha256=([0-9a-f]{64}) -->$') { return $result }
+    $body = $normalized.Substring(0, $index).TrimEnd("`n")
+    $result.Valid = ((Get-TextSha256 -Text $body) -eq $Matches[1])
+    return $result
+}
+
+function Write-NextTurnGeneratedWarning {
+    param([string]$Prefix = "WARNING: ")
+    $brief = Test-NextTurnGenerated
+    if (-not $brief.Present -or $brief.Valid) { return $false }
+    if ($brief.Stamped) {
+        Write-Host "$($Prefix)NEXT_TURN.md was edited after it was generated; its stamp no longer matches."
+    } else {
+        Write-Host "$($Prefix)NEXT_TURN.md was not generated by 'handoff.ps1 next'."
+    }
+    Write-Host "         The Master drives the protocol through its commands; this brief is generated from"
+    Write-Host "         AI_HANDOFF.md, never hand-written. Regenerate it: .\scripts\handoff.ps1 next"
+    return $true
+}
+
+# A tool must not review work it performed itself. The Task Actors table says who was
+# SUPPOSED to implement; AI_HANDOFF.md Last Update records who actually took the last turn.
+# Only the second one catches a Master that implemented the work and then reviewed it.
+function Test-LastUpdateIsReviewRecord {
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+        if ($line -match '^-\s*Verdict:\s*\S') { return $true }
+        if ($line -match '(?i)applied from the captured review verdict') { return $true }
+    }
+    return $false
+}
+
+function Get-LastUpdateActorTool {
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+        if ($line -match '^-\s*Actor:\s*(.+)$') {
+            $text = $Matches[1]
+            foreach ($candidate in @($Binding.Master, $Binding.Reviewer, $Binding.Implementer, "Claude Code", "Codex")) {
+                if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+                if ($text -match [regex]::Escape($candidate)) { return (Resolve-ToolIdentity -Tool $candidate).Display }
+            }
+            return ""
+        }
+    }
+    return ""
+}
+
+function Invoke-Wait {
+    $state = Get-BackgroundRunState
+    Write-Host ""
+    if (-not $state.Present) {
+        Write-Host "wait: nothing to wait for."
+        Write-Host "No background run is recorded in this project. Runs start from cycle, loop, review-run or master-run."
+        Write-Host ""
+        exit 1
+    }
+    if ($state.Alive) {
+        Write-Host "Waiting for the background run to finish. This blocks; it polls no model and costs nothing while it waits."
+        Write-Host "  Command:  $($state.Command)"
+        Write-Host "  Process:  $($state.ProcessId)"
+        Write-Host "  Started:  $($state.StartedUtc) UTC"
+        Write-Host "  Timeout:  $TimeoutSeconds seconds (-TimeoutSeconds changes it; the run keeps going if this times out)"
+        Write-Host ""
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        while ($state.Alive -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $state = Get-BackgroundRunState
+        }
+        if ($state.Alive) {
+            Write-Host "wait: still running after $TimeoutSeconds seconds."
+            Write-Host "The run was NOT stopped. Wait again with a longer -TimeoutSeconds, or stop it with: .\scripts\handoff.ps1 stop"
+            Write-Host ""
+            exit 4
+        }
+    }
+    $status = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
+    Write-Host "wait: the background run has finished."
+    Write-Host "  Command:   $($state.Command)"
+    Write-Host "  Finished:  $($state.FinishedUtc) UTC"
+    Write-Host "  Exit code: $($state.ExitCode)"
+    Write-Host "  State:     $($status.State) / Waiting For: $($status.WaitingFor)"
+    Write-Host ""
+    $logPath = Join-Path (Get-Location) $BackgroundLogName
+    if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+        Write-Host "Last lines of $($BackgroundLogName):"
+        foreach ($logLine in @(Get-Content -LiteralPath $logPath -Tail 25)) { Write-Host "  $logLine" }
+        Write-Host ""
+    }
+    Write-Host "Next step: read AI_HANDOFF.md for the turn's own record, then continue from '.\scripts\handoff.ps1 work'."
+    Write-Host ""
+    if ("$($state.ExitCode)" -eq "0") { exit 0 }
+    exit 5
+}
+
 # --- Push reminder (v3.12.0) ---
 #
 # The protocol never pushes: commit-approved makes a local commit and says so. But
@@ -1732,7 +1935,17 @@ if (-not `$env:HANDOFF_BACKGROUND_NO_NOTIFY) {
     Write-Host "  Output:    $BackgroundLogName (HANDOFF_LOOP.log, captures and NEXT_TURN.md are written as usual)"
     Write-Host "  Stop it:   .\scripts\handoff.ps1 stop"
     Write-Host ""
-    Write-BackgroundAgentInstruction
+    if (Test-SameToolIdentity -First $Agent.Agent -Second "Claude Code") {
+        # Claude Code runs the command from an interactive session that can block and be
+        # notified. Telling it to end the turn made it hand the window back to the user for
+        # something it can do itself, so it gets the blocking wait instead.
+        Write-Host "AGENT: WAIT FOR IT IN ONE BLOCKING CALL, then continue this turn:"
+        Write-Host "  .\scripts\handoff.ps1 wait"
+        Write-Host "  It returns when the run ends and prints the result. Do not poll status, do not read the"
+        Write-Host "  log in a loop, and do not ask the user to open a window or to check on it."
+    } else {
+        Write-BackgroundAgentInstruction
+    }
     Write-Host ""
     Write-Host "A person at a terminal who prefers to watch it run: set HANDOFF_RUN_MODE=foreground."
     Write-Host ""
@@ -1763,7 +1976,7 @@ function Invoke-ClaudeTurn {
 
     if (-not (Test-ModelTurnPreflight)) { return 1 }
 
-    $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available to talk to during this turn. Do NOT greet anyone, do NOT ask what to work on, do NOT ask for plugin choices, do NOT wait for input, and do NOT treat this as the start of an interactive session.`nRead NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: immediately either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. Do not stop to ask the operator.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nTreat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification: reason about previously supported input classes, and avoid broad transformations or coercion changes unless the task explicitly requires them.`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
+    $prompt = "You are running as the Implementer in a NON-INTERACTIVE, headless automation turn. There is no human available to talk to during this turn. Do NOT greet anyone, do NOT ask what to work on, do NOT ask for plugin choices, do NOT wait for input, and do NOT treat this as the start of an interactive session.`nRead NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state: immediately either complete the required Implementer action for the current state, or update AI_HANDOFF.md with a protocol-valid blocker or question. Do not stop to ask the operator.`nIf present, read CLAUDE_IMPLEMENTER_LAST.md, CLAUDE_IMPLEMENTER_COMMAND.md, CODEX_MASTER_LAST.md, CODEX_REVIEW_LAST.md, and HANDOFF_LOOP.log to reconstruct recent context before acting.`nRead .ai/skills/codex-claude-handoff/CAPABILITIES.md and .ai/skills/codex-claude-handoff/CLAUDE_EXECUTION_POLICY.md if present.`nTreat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification: reason about previously supported input classes, and avoid broad transformations or coercion changes unless the task explicitly requires them.`n" + (Get-DatabaseTurnPromptClause) + "`nAt the end of your response, include a concise Claude Execution Evidence block with: model policy requested; model requested via CLI if known; actual model observed or unknown/not exposed; model source; model confidence; model relevance; subagent evidence as used / not observed / unavailable; skills/capabilities consulted; and a short why / decisions / risks summary. Strip ANSI/control noise from model names. Do not invent evidence."
     $prompt += "`nModel routing for this turn: effective profile=$($script:ModelSelection.EffectiveProfile); resolved Claude model=$($script:ModelSelection.ClaudeModel); resolution source=$($script:ModelSelection.Source). Report these requested values as adapter evidence, but do not claim they prove the actual runtime model unless Claude Code exposes it directly."
     $systemPrompt = "You are a non-interactive, headless automation agent (the Claude Code Implementer). Never greet, never ask what to work on, never ask for plugin choices, and never wait for input. Read the requested local files exactly as written. Follow the AI_HANDOFF.md handoff state and perform the required action now; if you cannot act, update AI_HANDOFF.md with a protocol-valid blocker or question. Do not treat this as the start of an interactive session."
     $prompt += "`nBash is unavailable in this automated turn. Do NOT create temporary helper, capture, runner, or wrapper scripts to work around that restriction. Create or edit only files required by the approved task. If verification cannot run without Bash, record it as not run with the reason; never claim a command or test passed without observed output."
@@ -2193,7 +2406,8 @@ function Invoke-CodexImplementerTurn {
         "Read .ai/skills/codex-claude-handoff/CAPABILITIES.md if present. " +
         "Change ONLY the files listed under AI_HANDOFF.md Changed Files, plus AI_HANDOFF.md itself. The set of files you change is compared against that list after this turn, and an undeclared file fails the turn. " +
         "Treat every preservation or backward-compatibility clause in the task as strict. Existing tests are evidence, not an exhaustive specification. " +
-        "Never install dependencies, use the network, deploy, access or mutate a database, inspect or modify secrets or production configuration, or run git add, git commit, git push or git tag. Those are the user's decisions and are made outside this turn. " +
+        "Never install dependencies, use the network, deploy, inspect or modify secrets or production configuration, or run git add, git commit, git push or git tag. Those are the user's decisions and are made outside this turn. " +
+        (Get-DatabaseTurnPromptClause) + " " +
         "Never open files that hold credentials, such as .env, .env.local, .mcp.json or .codex/config.toml; if a service connection you need is missing, record it in AI_HANDOFF.md as a blocker for the user, and never write a key, token or password into any file or reply. " +
         "Never claim a command or test passed without observed output; if verification could not run, record it as not run with the reason."
     if ($readOnlyTurn) {
@@ -2720,6 +2934,7 @@ function Invoke-Work {
     Write-BackgroundStatusLine
     Write-PushReminder
     Write-Host ""
+    if (Write-NextTurnGeneratedWarning) { Write-Host "" }
 
     if ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup") {
         Write-Host "Next action: start the first task from this fresh install."
@@ -3361,6 +3576,15 @@ function Invoke-Doctor {
         Write-DoctorLine "INFO" "Codex CLI helper is not present in this script; skipping Codex CLI availability."
     }
 
+    $doctorBrief = Test-NextTurnGenerated
+    if ($doctorBrief.Present -and -not $doctorBrief.Valid) {
+        Write-DoctorLine "WARN" "NEXT_TURN.md was not generated by 'handoff.ps1 next', or was edited after it was generated."
+        Write-Host "      The brief is generated from AI_HANDOFF.md; a hand-written one is outside the protocol."
+        Write-Host "      Regenerate it: .\scripts\handoff.ps1 next"
+    } elseif ($doctorBrief.Present) {
+        Write-DoctorLine "OK" "NEXT_TURN.md carries a valid generated stamp."
+    }
+
     $doctorPush = @(Get-PushReminderLines)
     if ($doctorPush.Count -gt 0) {
         Write-DoctorLine "INFO" $doctorPush[0]
@@ -3530,7 +3754,7 @@ function Invoke-Next {
     # -ErrorAction Stop: write failures must be terminating so callers' try/catch
     # blocks fire and the workflow fails closed instead of reporting a handoff that
     # was never written.
-    Set-Content -Path $ntPath -Value ($ntLines -join "`n") -Encoding utf8 -ErrorAction Stop
+    Set-Content -Path $ntPath -Value (Add-NextTurnStamp -Body ($ntLines -join "`n")) -Encoding utf8 -ErrorAction Stop
 
     $pasteInstruction = "Read NEXT_TURN.md, then read AI_HANDOFF.md, and continue according to the handoff state."
 
@@ -4909,6 +5133,15 @@ function Get-ReviewPlan {
     if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
         $ok = $false
         $errors.Add("Independent-review invariant: the actual Reviewer must not equal the actual Implementer.")
+    }
+    # v3.13.0: Task Actors say who was SUPPOSED to implement. When an automated turn was
+    # blocked, a Master has been observed doing the work itself and then reviewing it - and
+    # the table still read Implementer: the other tool, so every actor check passed. Compare
+    # the Reviewer with the actor AI_HANDOFF.md records for the last turn as well.
+    $lastTurnActor = Get-LastUpdateActorTool
+    if ($lastTurnActor -ne "" -and -not (Test-LastUpdateIsReviewRecord) -and (Test-SameToolIdentity -First $lastTurnActor -Second $boundReviewer)) {
+        $ok = $false
+        $errors.Add("Self-review guard: AI_HANDOFF.md Last Update records '$lastTurnActor' as the actor of the last turn, and that is the Reviewer. Either this work was not done by the recorded Implementer '$($taskActors.Implementer)', or Last Update names the wrong actor. Correct the record, or have the other tool review it; a tool never reviews work it performed.")
     }
     if (-not $gitState.Ok) {
         $ok = $false
@@ -6807,6 +7040,8 @@ function Invoke-Cycle {
         Write-Host "WARNING: This state allows source file edits. Claude Code may modify approved source files."
     }
     Write-Host "         This tool does not commit, push, or deploy automatically."
+    if (-not (Test-DatabaseAuthorizationGate -CommandLabel $CommandLabel)) { exit 2 }
+
     Write-Host ""
     # Fail closed: only an explicit yes proceeds. -Yes is treated as explicit operator authorization for automation/tests.
     if ($Yes) {
@@ -7385,6 +7620,11 @@ function Invoke-Loop {
         $turnNo = $turnsRun + 1
         Write-Host ""
         Write-Host "loop: turn $turnNo of $MaxTurns - automated $loopImplementerTool Implementer turn (per-turn budget `$$BudgetUsd)..."
+        if (-not (Test-DatabaseAuthorizationGate -CommandLabel "loop")) {
+            Write-Host "Turns run:  $turnsRun  (authorized spend cap used: `$$authorized of `$$SessionBudgetUsd)"
+            Write-LoopLog "turn=$turnNo stop reason=database-not-authorized state=$($script:State) exit=2"
+            exit 2
+        }
         Write-LoopLog "turn=$turnNo action=automated-implementer-turn preState=$($script:State) preWaitingFor=$($script:WaitingFor) actor=$loopImplementerTool(Implementer) budget=$BudgetUsd"
         $authorized += $BudgetUsd
         $turnsRun    = $turnNo
@@ -7528,6 +7768,7 @@ switch ($Command) {
     "models"      { Invoke-Models }
     "status"       { Invoke-Status }
     "stop"         { Invoke-Stop }
+    "wait"         { Invoke-Wait }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
     "next"         { Invoke-Next }
@@ -7557,6 +7798,9 @@ switch ($Command) {
             Write-Host "Commands:"
             Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
             Write-Host "  stop                      Stop an automated turn that is running now. No git, deploy, database or secret action."
+            Write-Host "  wait [-TimeoutSeconds N]  Block until the background run started from an agent window finishes, then print its"
+            Write-Host "                            result and the last lines of its log. Default 1800 seconds. Changes nothing; a"
+            Write-Host "                            timeout leaves the run going."
             Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
             Write-Host "  models [-ModelProfile P] [-Model M] [-CodexModel M]"
             Write-Host "                            Show the effective capability profile and the Claude and Codex model resolution. Read-only."

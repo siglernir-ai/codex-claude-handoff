@@ -1,3 +1,33 @@
+## 3.13.0 - Authorized Work, Generated Briefs, and Waiting
+
+Three defects from one real session, in which the roles had just been swapped so that
+Claude Code was Master and Reviewer and Codex was Implementer.
+
+- **An approved database task could not be dispatched at all.** The automated Implementer
+  turn's prompt forbids database access unconditionally, so the Implementer correctly
+  refused work the user had authorized, and the turn was spent reaching `BLOCKED`. The
+  authorization now lives in the handoff: `- Authorized Operations: database` in the
+  `Status` section makes the turn's prompt allow exactly that work, bounded to disposable
+  data, no reset or backfill, no schema or policy change beyond the task, cleanup, and
+  recorded commands. Without that line, `cycle` and `loop` refuse a task that reads as
+  database execution **before** spending a turn, and say what the user has to authorize.
+  A task that merely writes a migration file still runs: the check needs a database noun
+  and an execution verb in the same sentence.
+- **A Master that hand-wrote `NEXT_TURN.md` looked like a Master that ran the protocol.**
+  `next` now stamps the brief it generates with a hash of its own content, and `work` and
+  `doctor` report a brief that was hand-written or edited afterwards. `MASTER.md` says
+  plainly that the protocol is driven through its commands.
+- **A background run told an interactive Master to hand the window back.** v3.11.0's
+  instruction fits a Codex window, whose tool call cannot wait minutes. Claude Code can:
+  the new `handoff.ps1 wait` blocks until the run finishes and prints its exit code, the
+  handoff state and the last lines of its log, and a Claude Code agent is now told to use
+  it instead of ending its turn. Nothing polls, and the user is not asked to check.
+- **A tool could review work it had performed itself.** When the automated turn was
+  blocked, the Master did the work in its own session; `Task Actors` still named the other
+  tool as Implementer, so every existing actor check passed. `review-run` and
+  `review-check` now also compare the Reviewer with the actor `AI_HANDOFF.md` records for
+  the last turn, and refuse a self-review.
+
 ## 3.12.0 - The Push Is Yours, and Now You See It
 
 - **Commits piled up unpushed.** The protocol never pushes, by design: `commit-approved`
