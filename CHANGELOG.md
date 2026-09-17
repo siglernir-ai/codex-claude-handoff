@@ -1,3 +1,14 @@
+## 3.14.1 - A Denial Is Not a Database
+
+- **The new database gate blocked a task that ruled the database out in its own words.** The
+  task read "Write migration SQL file 009 and update TypeScript source ... No database
+  access, no bucket creation, no migration apply - source files only", and the check matched
+  "migration apply" without seeing the "no" in front of it. A sentence carrying a negation no
+  longer counts as execution.
+- **An explicit declaration ends the guessing.** `- Authorized Operations: none` in the
+  Status section says this task needs no database; the gate steps aside and the turn prompt
+  still forbids database access. The refusal now names that line too.
+
 ## 3.14.0 - The Work Continues
 
 - **A finished task became a question to the user, every time.** `AI_SEQUENCE.md` shipped as

@@ -1728,6 +1728,9 @@ function Get-AuthorizedOperations {
     return $ops.ToArray()
 }
 
+# v3.14.1: a sentence that DENIES the execution is not execution. A real task said "No
+# database access, no bucket creation, no migration apply - source files only", and the
+# first version of this check blocked it on the very words it used to rule the work out.
 # Match only text that reads as RUNNING something against a database: a database noun and
 # an execution verb in the same sentence. "Write migration 009" is implementation and must
 # still run; "apply migration 009" and "run the database acceptance matrix" are execution.
@@ -1736,9 +1739,17 @@ function Test-TaskNeedsDatabaseExecution {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
     foreach ($sentence in ($Text -split '(?<=[\.;:!\?])\s+|\r?\n')) {
         if ($sentence -notmatch '(?i)\b(database|db|supabase|sql|psql|migrations?|rpc)\b') { continue }
+        if ($sentence -match "(?i)\b(no|not|never|without|don't|do not|avoid|refrain)\b") { continue }
         if ($sentence -match '(?i)\b(run|runs|running|execute|executes|executing|apply|applies|applying|push|pushes|pushing|seed|seeds|seeding|insert|inserts|inserting|query|queries|querying|connect|connects|connecting|acceptance matrix|repair|repairs|reset|resets|backfill|backfills)\b') {
             return $true
         }
+    }
+    return $false
+}
+
+function Test-AuthorizedOperationsDeclared {
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Status")) {
+        if ($line -match "^- Authorized Operations:\s*\S") { return $true }
     }
     return $false
 }
@@ -1747,6 +1758,10 @@ function Test-DatabaseAuthorizationGate {
     param([string]$CommandLabel)
     $authorized = @(Get-AuthorizedOperations)
     if ($authorized -contains $DatabaseOperationToken) { return $true }
+    # An explicit declaration is the Master's answer to this question. "- Authorized
+    # Operations: none" says this task needs none, the turn prompt still forbids it, and a
+    # guess about the task's wording has nothing left to add.
+    if (Test-AuthorizedOperationsDeclared) { return $true }
     $taskText = "$CurrentTask`n" + ((Get-SectionLines -Lines $Lines -Heading "Next Recommended Step") -join "`n")
     if (-not (Test-TaskNeedsDatabaseExecution -Text $taskText)) { return $true }
     Write-Host ""
@@ -1759,8 +1774,9 @@ function Test-DatabaseAuthorizationGate {
     Write-Host "Next step:   if the user has authorized database execution for THIS task, the Master adds this"
     Write-Host "             line to the AI_HANDOFF.md Status section and runs the command again:"
     Write-Host "               - Authorized Operations: database"
-    Write-Host "             If the task does not execute against a database, reword it so it does not read as"
-    Write-Host "             execution. If the user has not authorized it, ask them; never assume."
+    Write-Host "             If this task needs no database at all, say so once and the check steps aside:"
+    Write-Host "               - Authorized Operations: none"
+    Write-Host "             If the user has not authorized database work, ask them; never assume."
     Write-Host ""
     return $false
 }

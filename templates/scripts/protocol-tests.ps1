@@ -4092,6 +4092,20 @@ Check "the status window can be switched off" ($v314Src -match "HANDOFF_BACKGROU
 Check "the run also announces itself when it starts" ($v314Src -match 'Handoff \$Command started')
 Check "the launch message tells the agent what the user will see" ($v314Src -match "sees a notification now and a small status window")
 
+
+# v3.14.1: a task that rules the database out in its own words must still run.
+$denyTask = "Write migration SQL file 009 and update TypeScript source to support Storage paths. No database access, no bucket creation, no migration apply - source files only."
+$denyFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-PlanHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask $denyTask); ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $denyFx
+$r = Invoke-Handoff -WorkDir $denyFx -Arguments @("cycle")
+Check "a task that denies database work is not treated as database execution" ($r.Out -notmatch "blocked before the turn was spent")
+$declaredTask = "Run the database acceptance matrix against the project."
+$declaredHandoff = (New-PlanHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask $declaredTask) -replace "(?m)^- Current Task:", "- Authorized Operations: none`n- Current Task:"
+$declaredFx = New-Fixture -Files @{ "AI_HANDOFF.md" = $declaredHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $declaredFx
+$r = Invoke-Handoff -WorkDir $declaredFx -Arguments @("cycle")
+Check "an explicit 'Authorized Operations: none' ends the guessing" ($r.Out -notmatch "blocked before the turn was spent")
+
 $planMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
 Check "MASTER.md says to end the window, not the work" ($planMaster -match "End the window, not the work")
 Check "MASTER.md lists the only legitimate stops" (($planMaster -match "Stop only for these, and say which one it is") -and ($planMaster -match "empty plan"))
