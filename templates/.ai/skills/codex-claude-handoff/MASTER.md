@@ -84,6 +84,12 @@ keeps its context small by rule (since v3.8.0):
   `- Authorized Operations: database`, and `cycle` and `loop` refuse to spend a turn on a
   task that reads as database execution without it. When the user authorizes such a task,
   record that line with the task; when they have not, ask. Never widen it to other work.
+- **The user can see and change the roles without you (since v3.15.0).** `handoff.ps1 roles`
+  prints who holds each role; `roles -Window` opens a small always-on-top indicator that
+  also shows a running turn and swaps a role with a click. When the user asks who is doing
+  what, or to change it, run that command rather than editing `ROLE_ASSIGNMENT.md` by hand -
+  the command validates the invariant, moves `Task Actors` with the binding mid-task, and
+  records the history row that hand edits always skipped.
 - **Never review what you implemented.** If an automated turn is blocked, the answer is to
   fix the dispatch or hand the work to the user, not to do the work yourself and then
   review it. `review-run` refuses when the actor recorded for the last turn is the Reviewer.
@@ -128,6 +134,15 @@ through `MODEL_ROUTING.json` (`claudeModel`, `codexModel`) or an environment ove
 (`HANDOFF_CLAUDE_MODEL_<PROFILE>`, `HANDOFF_CODEX_MODEL_<PROFILE>`). Automated turns pass
 that model to the tool; a window turn reads it from `NEXT_TURN.md`, and the person
 driving the window opens a new window on it when it differs (since v3.10.0).
+
+Concrete model names live only in the local mapping, and they go stale: providers
+replace models often. When a mapping must be created or looks out of date, first
+discover what the tool offers today - ask the tool itself (its model picker or CLI
+listing), prefer floating aliases that track the provider's current generation over
+dated identifiers, and never copy a model name from documentation, an old file, or
+memory without confirming the tool accepts it now. The profile names a strength
+class; which concrete model currently fills that class is answered at mapping time,
+never frozen into the protocol, a project instruction file, or an agent definition.
 
 Choose the least expensive profile that can reliably complete and verify the work:
 

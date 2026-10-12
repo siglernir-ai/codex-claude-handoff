@@ -71,6 +71,24 @@ Run `.\scripts\handoff.ps1 models` to see the effective profile, concrete model,
 and resolution source. Updating a provider model requires changing one local
 mapping value, not editing the protocol.
 
+## Discovering Current Models
+
+Any concrete model name written down anywhere - a mapping value, a project file,
+this guide - goes stale, because providers replace models often. Before creating
+or trusting a concrete mapping:
+
+- Ask the tool what it offers today: the model picker in its UI, or its CLI model
+  listing.
+- Prefer floating aliases that always track the provider's current generation over
+  dated identifiers.
+- Never copy a model name from documentation, an old file, or memory without
+  confirming the tool accepts it now.
+- Treat an existing mapping as a hypothesis after a provider update; re-check it
+  with `handoff.ps1 models` and the tool's own listing.
+
+The stable part is the profile - the strength class the task needs. Which model
+currently fills that class is a fresh question every time.
+
 ## The Master's Own Cost
 
 What the Master costs depends on two things:
@@ -94,7 +112,8 @@ What the Master costs depends on two things:
    `NEXT_TURN.md` and `AI_HANDOFF.md` and loses nothing.
 2. **Fast mode (since v3.11.1, `doctor` warns about it).** Fast mode, which the Codex app
    stores as `service_tier = "priority"` in `config.toml`, answers about 1.5x sooner and
-   consumes usage at 2.5x the Standard rate on GPT-5.6 and GPT-5.5. It is the same model
+   consumes usage at 2.5x the Standard rate (measured September 2026 on the then-current
+   GPT-5.6 and GPT-5.5; check the provider's current pricing). It is the same model
    with the same reasoning, so the result is the same; only the wait is shorter. On a plan
    where the five-hour usage window runs out before the day does, Standard gets about 2.5x
    more work done per window. In one measured session a Master window on Fast went from 0%
