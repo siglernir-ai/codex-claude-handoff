@@ -175,6 +175,10 @@ function New-Handoff {
 - Last Updated At: 2026-06-14
 - Current Task: $CurrentTask
 
+## Last Update
+- Actor: Test (Implementer)
+- Date: 2026-06-14
+
 ## Task Actors
 - Implementer: Claude Code
 - Reviewer: Codex
@@ -4110,6 +4114,103 @@ $planMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-clau
 Check "MASTER.md says to end the window, not the work" ($planMaster -match "End the window, not the work")
 Check "MASTER.md lists the only legitimate stops" (($planMaster -match "Stop only for these, and say which one it is") -and ($planMaster -match "empty plan"))
 Check "MASTER.md tells the Master to name a quota stop" ($planMaster -match "When a tool runs out of usage, say so plainly")
+
+
+# --- v3.15.0: the roles command, the indicator, and attribution before review ---
+Write-Host "[4D-5] Roles command, indicator and attribution (v3.15.0)"
+
+$swapRolesFile = @"
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | Claude Code |
+| Reviewer | Codex |
+| Implementer | Claude Code |
+The User is always the approval point and is never one of these roles.
+
+## Role Swap History
+
+| Date | Previous Binding | New Binding | Approved By |
+|---|---|---|---|
+| 2026-09-01 | Master=Codex | Master=Claude Code | User |
+"@
+$rolesFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = ((New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -replace "- Implementer: Claude Code", "- Implementer: Claude Code" -replace "- Reviewer: Codex", "- Reviewer: Codex")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $swapRolesFile
+} -InitGit
+$r = Invoke-Handoff -WorkDir $rolesFx -Arguments @("roles")
+Check "roles prints who holds each role" (($r.Out -match "Master:\s+Claude Code") -and ($r.Out -match "Implementer:\s+Claude Code") -and ($r.Out -match "Reviewer:\s+Codex"))
+Check "roles states the rule that binds them" ($r.Out -match "the Reviewer is never the Implementer")
+
+# The invariant is enforced by the command, not by the window that calls it.
+$r = Invoke-Handoff -WorkDir $rolesFx -Arguments @("roles", "-SetRole", "Reviewer", "-SetTool", "Claude Code", "-Yes")
+Check "moving one of the pair exchanges instead of breaking the invariant" (($r.Code -eq 0) -and ($r.Out -match "Exchange:\s+Implementer takes Codex"))
+$exchanged = Get-Content -Raw -Path (Join-Path $rolesFx ".ai/roles/ROLE_ASSIGNMENT.md")
+Check "both roles moved together" (($exchanged -match "\| Reviewer \| Claude Code \|") -and ($exchanged -match "\| Implementer \| Codex \|"))
+# An exchange at a task boundary leaves the finished task's actors as they were - that
+# record is history - so the protocol asks for a new task before the next turn. Each
+# scenario below therefore gets its own fixture.
+$r = Invoke-Handoff -WorkDir $rolesFx -Arguments @("work")
+Check "after an exchange the protocol asks to open the next task" ($r.Out -match "Role drift|repair the handoff state|start")
+
+$legalFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task"); ".ai/roles/ROLE_ASSIGNMENT.md" = $swapRolesFile } -InitGit
+$r = Invoke-Handoff -WorkDir $legalFx -Arguments @("roles", "-SetRole", "Master", "-SetTool", "Codex", "-Yes")
+Check "a legal swap is applied" (($r.Code -eq 0) -and ($r.Out -match "roles: applied"))
+$swappedFile = Get-Content -Raw -Path (Join-Path $legalFx ".ai/roles/ROLE_ASSIGNMENT.md")
+Check "the binding table is rewritten" ($swappedFile -match "\| Master \| Codex \|")
+Check "the swap writes the history row that hand edits skipped" ($swappedFile -match "(?m)^\| \d{4}-\d{2}-\d{2} \| Master=Claude Code, Reviewer=Codex, Implementer=Claude Code \| Master=Codex, Reviewer=Codex, Implementer=Claude Code \| User \(handoff\.ps1 roles\) \|")
+$r = Invoke-Handoff -WorkDir $legalFx -Arguments @("roles", "-SetRole", "Master", "-SetTool", "Codex", "-Yes")
+Check "swapping a role to the tool it already holds changes nothing" ($r.Out -match "is already Codex")
+
+# A swap while a turn is in flight would let work land under a binding it never had.
+$rolesLiveFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User"); ".ai/roles/ROLE_ASSIGNMENT.md" = $swapRolesFile } -InitGit
+$rolesSleeper = Start-Process -FilePath $PwshExe -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 45") -WindowStyle Hidden -PassThru
+try {
+    Start-Sleep -Milliseconds 500
+    $liveMarker = [ordered]@{ processId = $rolesSleeper.Id; startTicks = $rolesSleeper.StartTime.ToUniversalTime().Ticks; command = "cycle"; startedUtc = "2026-09-20T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = $null; exitCode = $null }
+    [System.IO.File]::WriteAllText((Join-Path $rolesLiveFx "HANDOFF_BACKGROUND.json"), ($liveMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $rolesLiveFx -Arguments @("roles", "-SetRole", "Master", "-SetTool", "Codex", "-Yes")
+    Check "no role changes while a turn is running" (($r.Code -eq 1) -and ($r.Out -match "A turn is running now"))
+} finally {
+    try { Stop-Process -Id $rolesSleeper.Id -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+# Mid-task, the binding and the task's own actors must move together.
+$midFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "work in flight"); ".ai/roles/ROLE_ASSIGNMENT.md" = $swapRolesFile } -InitGit
+$r = Invoke-Handoff -WorkDir $midFx -Arguments @("roles", "-SetRole", "Implementer", "-SetTool", "Codex", "-Yes")
+Check "a mid-task swap says it moves Task Actors too" ($r.Out -match "Task Actors will be updated with the binding")
+$midHandoff = Get-Content -Raw -Path (Join-Path $midFx "AI_HANDOFF.md")
+Check "Task Actors follow the binding mid-task" ($midHandoff -match "(?m)^- Implementer: Codex?$")
+
+# The settings file and the window are per project, and the window owns no rules.
+$r = Invoke-Handoff -WorkDir $legalFx -Arguments @("roles", "-WindowOff")
+Check "the indicator can be switched off per project" (($r.Out -match "the indicator is off") -and (Test-Path (Join-Path $legalFx "HANDOFF_UI.json")))
+Check "the setting is remembered as data, not a guess" ((Get-Content -Raw -Path (Join-Path $legalFx "HANDOFF_UI.json")) -match '"rolesWindow":\s*false')
+$rolesSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the window shells out to the command for every swap" ($rolesSrc -match "handoff roles -SetRole")
+Check "the window disables the swap buttons while a turn runs" ($rolesSrc -match "a turn is running - roles are locked")
+Check "the window names the project it belongs to" ($rolesSrc -match "'HANDOFF - ' \+ ")
+Check "both windows carry the project's own colour" ((@($rolesSrc -split "`r?`n" | Where-Object { $_ -match '\$accentSeed = 0' }).Count -eq 2))
+Check "the indicator settings and marker are local coordination files" ($rolesSrc -match '"HANDOFF_UI\.json", "HANDOFF_UI_WINDOW\.json"')
+$installSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "install.ps1")
+Check "the installer asks once whether to show the indicator" (($installSrc -match "Show the roles indicator\? \[Y/n\]") -and ($installSrc -match "Windows only"))
+Check "the installer never asks twice for the same project" ($installSrc -match 'not \(Test-Path -LiteralPath \$uiSettingsPath\)')
+
+# A review of changes whose author is not recorded is not an independent review.
+$anonCapture = "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: v1.3.0 - Review Apply Test`nREASON: fixture"
+$anonFx = New-ReviewApplyFixture -Capture $anonCapture
+$anonPath = Join-Path $anonFx "AI_HANDOFF.md"
+$anonText = (Get-Content -Raw -LiteralPath $anonPath) -replace "(?m)^- Actor: Test\r?$", "- Date: 2026-09-20"
+Set-Content -LiteralPath $anonPath -Value $anonText -Encoding utf8
+$r = Invoke-Handoff -WorkDir $anonFx -Arguments @("review-check")
+Check "a review is refused when no actor is recorded for the changes" ($r.Out -match "does not record who took the turn")
+Check "the refusal says to name the actor, even if it was yourself" ($r.Out -match "including yourself, if you did it")
+
+$rolesMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
+Check "MASTER.md sends role questions to the command, not to a hand edit" ($rolesMaster -match "handoff\.ps1 roles")
 
 # --- Summary ---
 Write-Host ""

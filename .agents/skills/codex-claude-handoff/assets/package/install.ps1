@@ -2,6 +2,8 @@ param(
     [string]$Project = (Get-Location).Path,
     [switch]$Force,
     [switch]$AlwaysOn,
+    [switch]$RolesWindow,
+    [switch]$NoRolesWindow,
     [switch]$DisableAlwaysOn
 )
 
@@ -415,6 +417,33 @@ Write-Host ""
 Write-Host "codex-claude-handoff installed into:"
 Write-Host "  $targetRoot"
 Write-Host "Activation mode: $mode"
+# v3.15.0: the roles indicator. Not everyone works in a terminal, and who implements and
+# who reviews is the one thing a user must be able to see. Asked once, remembered per
+# project, and never asked where the window cannot exist.
+$uiSettingsPath = Join-Path $targetRoot "HANDOFF_UI.json"
+$uiEnabled = $null
+if ($RolesWindow) { $uiEnabled = $true }
+elseif ($NoRolesWindow) { $uiEnabled = $false }
+elseif ($env:OS -eq "Windows_NT" -and -not (Test-Path -LiteralPath $uiSettingsPath) -and -not [System.Console]::IsInputRedirected) {
+    Write-Host ""
+    Write-Host "Show a small always-on-top indicator with who holds each role (Master / Implementer /"
+    Write-Host "Reviewer), the current task and any running turn? It swaps a role with a click, under the"
+    Write-Host "same rules as the command. Windows only; you can change this later with:"
+    Write-Host "  .\scripts\handoff.ps1 roles -Window   /   roles -WindowOff"
+    $uiAnswer = Read-Host "Show the roles indicator? [Y/n]"
+    $uiEnabled = -not ($uiAnswer -and $uiAnswer.Trim().ToLowerInvariant().StartsWith("n"))
+}
+elseif (-not (Test-Path -LiteralPath $uiSettingsPath)) {
+    # Nobody to ask: decide nothing, and let 'work' offer it once instead.
+    Write-Host ""
+    Write-Host "Roles indicator: not set. Turn it on any time with: .\scripts\handoff.ps1 roles -Window"
+}
+if ($null -ne $uiEnabled) {
+    [System.IO.File]::WriteAllText($uiSettingsPath, ([ordered]@{ rolesWindow = [bool]$uiEnabled } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host ""
+    Write-Host "Roles indicator: $(if ($uiEnabled) { 'on - it opens with handoff.ps1 work, or now with: handoff.ps1 roles -Window' } else { 'off - turn it on any time with: handoff.ps1 roles -Window' })"
+}
+
 Write-Host ""
 Write-Host "Check the installation:"
 Write-Host "  cd `"$targetRoot`""

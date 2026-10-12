@@ -24,6 +24,8 @@
 /HANDOFF_RUN.json
 /HANDOFF_BACKGROUND.json
 /HANDOFF_BACKGROUND.log
+/HANDOFF_UI.json
+/HANDOFF_UI_WINDOW.json
 
 # Agent MCP configuration - holds API keys and access tokens in plain text.
 # This protocol requires Codex and Claude Code in the same repository, so their

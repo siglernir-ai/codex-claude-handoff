@@ -1,3 +1,30 @@
+## 3.15.0 - Who Holds Which Role, In Front of You
+
+- **The binding that decides everything lived in a Markdown table.** Who implements and who
+  reviews decides what may run and whose verdict counts, and the only way to see or change
+  it was to open `.ai/roles/ROLE_ASSIGNMENT.md` and edit a table by hand - which also meant
+  the Role Swap History row was skipped every single time.
+- **`handoff.ps1 roles`** prints who holds each role, the rule that binds them and the state.
+  **`roles -SetRole <role> -SetTool <tool>`** changes one role under the protocol's own
+  guards: it refuses while a turn is running, refuses any swap that would make the Reviewer
+  the Implementer, moves `Task Actors` with the binding when a task is in flight, and writes
+  the history row itself.
+- **`roles -Window`** opens a small always-on-top indicator (Windows): the project, the
+  current task, a running turn with its elapsed time, and the three roles with a swap button
+  each. While a turn runs the buttons are disabled, because that is the rule. The window owns
+  no rules - every swap shells out to the command above. `roles -WindowOff` closes it, and
+  the setting is remembered per project in `HANDOFF_UI.json` (local, gitignored).
+- **The installer asks once** whether to show the indicator, and `work` names it once for a
+  project that has never answered.
+- **A review needs to know whose work it is.** `review-run` and `review-check` now refuse
+  when `## Last Update` records no `- Actor:` for changes under review. A Master that
+  implemented the work itself must say so - and then the self-review guard from v3.13.0
+  applies. Anonymous changes were how three tasks reached review with no independent look.
+- **Which model fills a strength class is answered at mapping time.** The protocol never
+  shipped model names; now `MASTER.md` and `MODEL_GUIDANCE.md` also say how to find one:
+  ask the tool what it offers today, prefer floating aliases over dated identifiers, and
+  never trust a model name from an old file without confirming the tool still accepts it.
+
 ## 3.14.1 - A Denial Is Not a Database
 
 - **The new database gate blocked a task that ruled the database out in its own words.** The

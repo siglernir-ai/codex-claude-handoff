@@ -10,6 +10,8 @@ param(
     [string]$Commit,
     [string]$Tag,
     [string]$NextTask,
+    [string]$SetRole,
+    [string]$SetTool,
     [string]$SupersededVersions,
     [string]$ModelProfile,
     [string]$Model,
@@ -18,6 +20,8 @@ param(
     [switch]$Yes,
     [switch]$IncludeMaster,
     [switch]$IncludeReviewer,
+    [switch]$Window,
+    [switch]$WindowOff,
     [switch]$Clip,
     [switch]$CopyPrompt,  # backward-compatible alias for -Clip
     [switch]$CheckUpdates,
@@ -616,7 +620,7 @@ $BackgroundLogName = "HANDOFF_BACKGROUND.log"
 # change between turns and must never be committed.
 # v3.5.0: the legacy vendor-named captures stay on this list. They are still readable,
 # so an install that carries them must not trip the clean-tree guard on their account.
-$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $BackgroundMarkerName, $BackgroundLogName, $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
+$LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_REQUEST.md", "HANDOFF_LOOP.log", $RunMarkerName, $BackgroundMarkerName, $BackgroundLogName, "HANDOFF_UI.json", "HANDOFF_UI_WINDOW.json", $ReviewJsonlName, $ReviewLastName, $LegacyReviewJsonlName, $LegacyReviewLastName, $MasterJsonlName, $MasterLastName, $LegacyMasterJsonlName, $LegacyMasterLastName, $ClaudeImplementerJsonlName, $ClaudeImplementerLastName, $ClaudeImplementerCommandName, $LegacyImplementerJsonlName, $LegacyImplementerLastName, $LegacyImplementerCommandName)
 # v3.6.0: the protocol's own configuration change was blocking the protocol.
 #
 # A role swap edits .ai/roles/ROLE_ASSIGNMENT.md, and that file is tracked by design -
@@ -1431,6 +1435,493 @@ function Invoke-Stop {
     Write-Host ""
 }
 
+# --- The roles indicator and guarded role swaps (v3.15.0) ---
+#
+# Who holds which role decides what may run and who may review, and until now it lived in
+# a Markdown table the user had to open and edit by hand. A user who does not work in a
+# terminal had no way to see it at all. The rules stay in one place - this command - and
+# the window is only a view that calls it.
+$RolesUiSettingsName = "HANDOFF_UI.json"
+$KnownRoleTools = @("Claude Code", "Codex")
+
+function Get-RolesUiSetting {
+    $result = @{ Enabled = $false; Present = $false }
+    $path = Join-Path (Get-Location) $RolesUiSettingsName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
+    $result.Present = $true
+    try {
+        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $result.Enabled = [bool]$data.rolesWindow
+    } catch { }
+    return $result
+}
+
+function Set-RolesUiSetting {
+    param([bool]$Enabled)
+    $path = Join-Path (Get-Location) $RolesUiSettingsName
+    $body = [ordered]@{ rolesWindow = $Enabled }
+    [System.IO.File]::WriteAllText($path, ($body | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# A swap is refused, not merely discouraged, when it would break the invariant the whole
+# protocol rests on, or when a turn is in flight and could land under the new binding.
+function Test-RoleSwapAllowed {
+    param([string]$Role, [string]$Tool)
+    $result = @{ Ok = $true; Errors = [System.Collections.Generic.List[string]]::new(); MidTask = $false; ExchangeRole = ""; ExchangeTool = "" }
+    if (@("Master", "Reviewer", "Implementer") -notcontains $Role) {
+        $result.Ok = $false
+        $result.Errors.Add("-SetRole must be Master, Reviewer or Implementer (got: '$Role').")
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($Tool)) {
+        $result.Ok = $false
+        $result.Errors.Add("-SetTool is required, for example -SetTool `"Codex`".")
+        return $result
+    }
+    $proposed = @{ Master = $Binding.Master; Reviewer = $Binding.Reviewer; Implementer = $Binding.Implementer }
+    $proposed[$Role] = $Tool
+    if (Test-SameToolIdentity -First $proposed.Reviewer -Second $proposed.Implementer) {
+        if (@("Reviewer", "Implementer") -contains $Role) {
+            $other = if ($Role -eq "Reviewer") { "Implementer" } else { "Reviewer" }
+            $vacated = $Binding[$Role]
+            if (Test-SameToolIdentity -First $vacated -Second $Tool) {
+                $result.Ok = $false
+                $result.Errors.Add("Independent-review invariant: Reviewer and Implementer would both be '$Tool'.")
+            } else {
+                $result.ExchangeRole = $other
+                $result.ExchangeTool = $vacated
+            }
+        } else {
+            $result.Ok = $false
+            $result.Errors.Add("Independent-review invariant: Reviewer and Implementer would both be '$Tool'. A tool never reviews work it performed.")
+        }
+    }
+    $runState = Get-RunMarkerState
+    $bgState = Get-BackgroundRunState
+    if ($runState.Alive -or $bgState.Alive) {
+        $result.Ok = $false
+        $result.Errors.Add("A turn is running now. Wait for it ('handoff.ps1 wait') or stop it ('handoff.ps1 stop') before changing who holds a role.")
+    }
+    # Mid-task means the handoff already names actors for work in flight. The swap then has
+    # to move Task Actors with it, or the next command fails the role checkpoint.
+    if (@("REVIEW_DONE", "WAITING_FOR_USER", "NEEDS_ANALYSIS") -notcontains $State) { $result.MidTask = $true }
+    return $result
+}
+
+function Set-RoleBinding {
+    param([string]$Role, [string]$Tool, [bool]$AlsoTaskActors)
+    $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $rolesPath)) { return @{ Ok = $false; Error = "ROLE_ASSIGNMENT.md is missing." } }
+    $before = @{ Master = $Binding.Master; Reviewer = $Binding.Reviewer; Implementer = $Binding.Implementer }
+    $lines = @(Get-Content -Path $rolesPath)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $changed = $false
+    foreach ($line in $lines) {
+        $emit = $line
+        if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
+            if ($Matches[1] -eq $Role) { $emit = "| $Role | $Tool |"; $changed = $true }
+        }
+        $out.Add($emit)
+    }
+    if (-not $changed) { return @{ Ok = $false; Error = "No '| $Role | ... |' row found in ROLE_ASSIGNMENT.md." } }
+    # The history row is the record of who decided. It was skipped every time a swap was
+    # made by hand, so the file said what changed and never why.
+    $after = @{ Master = $before.Master; Reviewer = $before.Reviewer; Implementer = $before.Implementer }
+    $after[$Role] = $Tool
+    $historyRow = "| $((Get-Date).ToString('yyyy-MM-dd')) | Master=$($before.Master), Reviewer=$($before.Reviewer), Implementer=$($before.Implementer) | Master=$($after.Master), Reviewer=$($after.Reviewer), Implementer=$($after.Implementer) | User (handoff.ps1 roles) |"
+    $final = [System.Collections.Generic.List[string]]::new()
+    $inHistory = $false
+    $written = $false
+    foreach ($line in $out) {
+        if ($line.TrimEnd() -eq "## Role Swap History") { $inHistory = $true; $final.Add($line); continue }
+        if ($inHistory -and -not $written -and $line.Trim() -eq "" -and $final[$final.Count - 1].Trim() -match '^\|') {
+            $final.Add($historyRow); $written = $true
+        }
+        if ($inHistory -and -not $written -and $line -match '^##\s' -and $line.TrimEnd() -ne "## Role Swap History") {
+            $final.Add($historyRow); $written = $true
+        }
+        $final.Add($line)
+    }
+    if ($inHistory -and -not $written) { $final.Add($historyRow) }
+    [System.IO.File]::WriteAllLines($rolesPath, $final.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+
+    if ($AlsoTaskActors -and (Test-Path $HandoffFile)) {
+        $handoffLines = @(Get-Content -Path $HandoffFile)
+        $updated = [System.Collections.Generic.List[string]]::new()
+        $inActors = $false
+        foreach ($line in $handoffLines) {
+            $emit = $line
+            if ($line.TrimEnd() -eq "## Task Actors") { $inActors = $true; $updated.Add($emit); continue }
+            if ($inActors -and $line -match '^##\s') { $inActors = $false }
+            if ($inActors) {
+                if ($line -match '^-\s*Implementer:') { $emit = "- Implementer: $($after.Implementer)" }
+                elseif ($line -match '^-\s*Reviewer:') { $emit = "- Reviewer: $($after.Reviewer)" }
+            }
+            $updated.Add($emit)
+        }
+        Set-Content -Path $HandoffFile -Value $updated.ToArray() -Encoding utf8 -ErrorAction Stop
+    }
+    return @{ Ok = $true; Error = ""; Before = $before; After = $after }
+}
+
+function Write-RolesView {
+    Write-Host ""
+    Write-Host "Roles in this project"
+    Write-Host "  Master:      $($Binding.Master)   (decides the next task and routes it)"
+    Write-Host "  Implementer: $($Binding.Implementer)   (writes the code)"
+    Write-Host "  Reviewer:    $($Binding.Reviewer)   (checks it and gives the verdict)"
+    Write-Host ""
+    Write-Host "Rule:        the Reviewer is never the Implementer. Master and Reviewer may be the same tool."
+    Write-Host "State:       $State / Waiting For: $WaitingFor"
+    $ui = Get-RolesUiSetting
+    Write-Host "Indicator:   $(if ($ui.Enabled) { 'on - a small window shows this and swaps roles with a click' } else { 'off - turn it on with: handoff.ps1 roles -Window' })"
+    Write-Host ""
+    Write-Host "Change one role:"
+    Write-Host "  .\scripts\handoff.ps1 roles -SetRole Reviewer -SetTool `"Codex`""
+    Write-Host ""
+}
+
+function Invoke-Roles {
+    if ($WindowOff) {
+        Set-RolesUiSetting -Enabled $false
+        Stop-RolesWindow
+        Write-Host ""
+        Write-Host "roles: the indicator is off for this project. Turn it back on with: handoff.ps1 roles -Window"
+        Write-Host ""
+        return
+    }
+    if ($Window) {
+        Set-RolesUiSetting -Enabled $true
+        $started = Start-RolesWindow
+        Write-Host ""
+        if ($started) {
+            Write-Host "roles: the indicator is on. A small window shows who holds each role and swaps them with a click."
+        } else {
+            Write-Host "roles: the indicator is on for this project, but the window could not be started here (it needs Windows)."
+            Write-Host "       The same information is printed by: handoff.ps1 roles"
+        }
+        Write-RolesView
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($SetRole) -and [string]::IsNullOrWhiteSpace($SetTool)) {
+        Write-RolesView
+        return
+    }
+
+    $check = Test-RoleSwapAllowed -Role $SetRole -Tool $SetTool
+    if (-not $check.Ok) {
+        Write-Host ""
+        Write-Host "roles: blocked."
+        foreach ($err in $check.Errors) { Write-Host "Reason:      $err" }
+        Write-Host "Nothing was changed."
+        Write-Host ""
+        exit 1
+    }
+    $currentTool = $Binding[$SetRole]
+    if (Test-SameToolIdentity -First $currentTool -Second $SetTool) {
+        Write-Host ""
+        Write-Host "roles: $SetRole is already $SetTool. Nothing to change."
+        Write-Host ""
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Changing who holds a role."
+    Write-Host "  Role:        $SetRole"
+    Write-Host "  From:        $currentTool"
+    Write-Host "  To:          $SetTool"
+    if ($check.ExchangeRole -ne "") {
+        Write-Host "  Exchange:    $($check.ExchangeRole) takes $($check.ExchangeTool), because the Reviewer is never the Implementer."
+    }
+    if ($check.MidTask) {
+        Write-Host "  Task:        '$CurrentTask' is in flight ($State). Task Actors will be updated with the binding,"
+        Write-Host "               or the next command fails the role checkpoint."
+    }
+    Write-Host "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding + a history row)$(if ($check.MidTask) { ', and AI_HANDOFF.md Task Actors' })."
+    Write-Host "  Never:       no git, deploy, database or secret action; no turn is started."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; applying without an interactive prompt."
+    } else {
+        $confirm = Read-Host 'Type "yes" to change the role, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            exit 2
+        }
+    }
+    if ($check.ExchangeRole -ne "") {
+        $exchange = Set-RoleBinding -Role $check.ExchangeRole -Tool $check.ExchangeTool -AlsoTaskActors $false
+        if (-not $exchange.Ok) {
+            Write-Host ""
+            Write-Host "roles: blocked."
+            Write-Host "Reason:      $($exchange.Error)"
+            Write-Host ""
+            exit 1
+        }
+        $script:Binding = Get-RoleBinding
+    }
+    $applied = Set-RoleBinding -Role $SetRole -Tool $SetTool -AlsoTaskActors $check.MidTask
+    if (-not $applied.Ok) {
+        Write-Host ""
+        Write-Host "roles: blocked."
+        Write-Host "Reason:      $($applied.Error)"
+        Write-Host ""
+        exit 1
+    }
+    $script:Binding = Get-RoleBinding
+    Write-Host ""
+    Write-Host "roles: applied."
+    Write-Host "  Master:      $($applied.After.Master)"
+    Write-Host "  Implementer: $($applied.After.Implementer)"
+    Write-Host "  Reviewer:    $($applied.After.Reviewer)"
+    Write-Host ""
+    Write-Host "Recorded in the Role Swap History table. No turn was started and no git action was run."
+    Write-Host ""
+}
+
+# The indicator window. One window, two things to say: what is running, and who holds
+# which role. It owns no rules: a swap shells out to 'handoff.ps1 roles', which validates,
+# records the history row and refuses what must be refused.
+$RolesWindowMarkerName = "HANDOFF_UI_WINDOW.json"
+
+function Get-RolesWindowState {
+    $result = @{ Present = $false; Alive = $false; ProcessId = 0 }
+    $path = Join-Path (Get-Location) $RolesWindowMarkerName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
+    $result.Present = $true
+    try {
+        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $result.ProcessId = [int]$data.processId
+        $ticks = 0
+        if ($null -ne $data.startTicks) { $ticks = [int64]$data.startTicks }
+        if ($ticks -gt 0) {
+            $running = Get-Process -Id $result.ProcessId -ErrorAction Stop
+            $result.Alive = ($running.StartTime.ToUniversalTime().Ticks -eq $ticks)
+        }
+    } catch { $result.Alive = $false }
+    return $result
+}
+
+function Stop-RolesWindow {
+    $state = Get-RolesWindowState
+    if ($state.Alive) { try { Stop-Process -Id $state.ProcessId -Force -ErrorAction SilentlyContinue } catch { } }
+    $path = Join-Path (Get-Location) $RolesWindowMarkerName
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+}
+
+function Start-RolesWindow {
+    if ($env:OS -ne "Windows_NT") { return $false }
+    if ($env:HANDOFF_BACKGROUND_NO_WINDOW) { return $false }
+    $existing = Get-RolesWindowState
+    if ($existing.Alive) { return $true }   # one window, never two
+    Stop-RolesWindow
+
+    $workDir = (Get-Location).Path
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-roles-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    $body = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $workDir)
+`$handoff = $(ConvertTo-PowerShellLiteral $PSCommandPath)
+`$project = $(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir))
+`$markerPath = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $BackgroundMarkerName)
+`$rolesPath = Join-Path (Get-Location) '.ai/roles/ROLE_ASSIGNMENT.md'
+`$handoffPath = Join-Path (Get-Location) 'AI_HANDOFF.md'
+`$uiMarker = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $RolesWindowMarkerName)
+`$utf8 = New-Object System.Text.UTF8Encoding(`$false)
+`$started = (Get-Process -Id `$PID).StartTime.ToUniversalTime()
+[System.IO.File]::WriteAllText(`$uiMarker, ([ordered]@{ processId = `$PID; startTicks = `$started.Ticks } | ConvertTo-Json), `$utf8)
+
+function Read-Roles {
+    `$roles = [ordered]@{ Master = '?'; Implementer = '?'; Reviewer = '?' }
+    foreach (`$line in (Get-Content -LiteralPath `$rolesPath -ErrorAction SilentlyContinue)) {
+        if (`$line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') { `$roles[`$Matches[1]] = `$Matches[2].Trim() }
+    }
+    return `$roles
+}
+function Read-Status {
+    `$status = [ordered]@{ State = '?'; Task = '' }
+    `$inStatus = `$false
+    foreach (`$line in (Get-Content -LiteralPath `$handoffPath -ErrorAction SilentlyContinue)) {
+        if (`$line.TrimEnd() -eq '## Status') { `$inStatus = `$true; continue }
+        if (`$inStatus -and `$line -match '^##\s') { break }
+        if (`$inStatus -and `$line -match '^- State:\s*(.+)') { `$status.State = `$Matches[1].Trim() }
+        if (`$inStatus -and `$line -match '^- Current Task:\s*(.+)') { `$status.Task = `$Matches[1].Trim() }
+    }
+    return `$status
+}
+function Read-Run {
+    `$run = [ordered]@{ Alive = `$false; Command = ''; StartedUtc = ''; Finished = `$false; ExitCode = '' }
+    if (-not (Test-Path -LiteralPath `$markerPath)) { return `$run }
+    try {
+        `$data = Get-Content -Raw -LiteralPath `$markerPath | ConvertFrom-Json
+        `$run.Command = [string]`$data.command
+        `$run.StartedUtc = [string]`$data.startedUtc
+        if (`$data.finishedUtc) { `$run.Finished = `$true; `$run.ExitCode = [string]`$data.exitCode; return `$run }
+        `$ticks = 0
+        if (`$null -ne `$data.startTicks) { `$ticks = [int64]`$data.startTicks }
+        if (`$ticks -gt 0) {
+            `$p = Get-Process -Id ([int]`$data.processId) -ErrorAction Stop
+            `$run.Alive = (`$p.StartTime.ToUniversalTime().Ticks -eq `$ticks)
+        }
+    } catch { }
+    return `$run
+}
+
+`$form = New-Object System.Windows.Forms.Form
+`$form.Text = 'HANDOFF - ' + `$project
+`$form.FormBorderStyle = 'SizableToolWindow'
+`$form.TopMost = `$true
+`$form.ShowInTaskbar = `$false
+`$form.ClientSize = New-Object System.Drawing.Size(360, 218)
+`$form.MinimumSize = New-Object System.Drawing.Size(330, 230)
+`$form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27)
+`$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+`$form.StartPosition = 'Manual'
+`$stagger = 0
+foreach (`$ch in (Get-Location).Path.ToLowerInvariant().ToCharArray()) { `$stagger = (`$stagger * 17 + [int]`$ch) % 5 }
+`$form.Location = New-Object System.Drawing.Point((`$screen.Right - 384), (`$screen.Top + 16 + (`$stagger * 40)))
+
+function New-Text {
+    param(`$x, `$y, `$w, `$h, `$color, `$size, `$style)
+    `$l = New-Object System.Windows.Forms.Label
+    `$l.AutoSize = `$false
+    `$l.Size = New-Object System.Drawing.Size(`$w, `$h)
+    `$l.Location = New-Object System.Drawing.Point(`$x, `$y)
+    `$l.ForeColor = `$color
+    `$l.Font = New-Object System.Drawing.Font('Segoe UI', `$size, `$style)
+    return `$l
+}
+`$accentSeed = 0
+foreach (`$ch in (Get-Location).Path.ToLowerInvariant().ToCharArray()) { `$accentSeed = (`$accentSeed * 31 + [int]`$ch) % 360 }
+`$accent = [System.Drawing.Color]::FromArgb(
+    [int](127 + 100 * [Math]::Sin(`$accentSeed * [Math]::PI / 180)),
+    [int](127 + 100 * [Math]::Sin((`$accentSeed + 120) * [Math]::PI / 180)),
+    [int](127 + 100 * [Math]::Sin((`$accentSeed + 240) * [Math]::PI / 180)))
+`$white = [System.Drawing.Color]::FromArgb(250, 250, 250)
+`$grey  = [System.Drawing.Color]::FromArgb(161, 161, 170)
+`$green = [System.Drawing.Color]::FromArgb(163, 230, 53)
+`$red   = [System.Drawing.Color]::FromArgb(248, 113, 113)
+
+`$title = New-Text 12 8 336 22 `$white 10 ([System.Drawing.FontStyle]::Bold)
+`$title.Anchor = 'Top,Left,Right'
+`$title.Text = `$project
+`$title.ForeColor = `$accent
+`$tip = New-Object System.Windows.Forms.ToolTip
+`$tip.SetToolTip(`$title, (Get-Location).Path)
+`$stripe = New-Object System.Windows.Forms.Label
+`$stripe.Size = New-Object System.Drawing.Size(4, 62)
+`$stripe.Location = New-Object System.Drawing.Point(4, 8)
+`$stripe.BackColor = `$accent
+`$form.Controls.Add(`$stripe)
+`$taskLabel = New-Text 12 30 336 18 `$grey 9 ([System.Drawing.FontStyle]::Regular)
+`$taskLabel.Anchor = 'Top,Left,Right'
+`$runLabel = New-Text 12 50 336 20 `$green 10 ([System.Drawing.FontStyle]::Regular)
+`$runLabel.Anchor = 'Top,Left,Right'
+`$form.Controls.Add(`$title); `$form.Controls.Add(`$taskLabel); `$form.Controls.Add(`$runLabel)
+
+`$sep = New-Object System.Windows.Forms.Label
+`$sep.Size = New-Object System.Drawing.Size(336, 1)
+`$sep.Anchor = 'Top,Left,Right'
+`$sep.Location = New-Object System.Drawing.Point(12, 76)
+`$sep.BackColor = [System.Drawing.Color]::FromArgb(63, 63, 70)
+`$form.Controls.Add(`$sep)
+
+`$roleOrder = @('Master', 'Implementer', 'Reviewer')
+`$roleTitles = @{ Master = 'Master'; Implementer = 'Implementer'; Reviewer = 'Reviewer' }
+`$roleLabels = @{}
+`$roleButtons = @{}
+`$y = 86
+foreach (`$role in `$roleOrder) {
+    `$name = New-Text 12 `$y 96 20 `$grey 9 ([System.Drawing.FontStyle]::Regular)
+    `$name.Text = `$roleTitles[`$role]
+    `$value = New-Text 112 `$y 166 20 `$white 9 ([System.Drawing.FontStyle]::Regular)
+    `$value.Anchor = 'Top,Left,Right'
+    `$btn = New-Object System.Windows.Forms.Button
+    `$btn.Text = 'swap'
+    `$btn.Size = New-Object System.Drawing.Size(62, 22)
+    `$btn.Location = New-Object System.Drawing.Point(286, (`$y - 2))
+    `$btn.Anchor = 'Top,Right'
+    `$btn.FlatStyle = 'Flat'
+    `$btn.ForeColor = `$white
+    `$btn.BackColor = [System.Drawing.Color]::FromArgb(39, 39, 42)
+    `$btn.Tag = `$role
+    `$btn.Add_Click({
+        `$thisRole = `$this.Tag
+        `$current = (Read-Roles)[`$thisRole]
+        `$next = if (`$current -eq 'Codex') { 'Claude Code' } else { 'Codex' }
+        `$answer = [System.Windows.Forms.MessageBox]::Show(
+            ("Change " + `$thisRole + " from " + `$current + " to " + `$next + "?"),
+            'HANDOFF', 'YesNo', 'Question')
+        if (`$answer -ne 'Yes') { return }
+        `$out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$handoff roles -SetRole `$thisRole -SetTool `$next -Yes 2>&1 | Out-String
+        if (`$out -match 'roles: blocked') {
+            `$reason = (`$out -split "`r?`n" | Where-Object { `$_ -match 'Reason:' }) -join "`n"
+            [void][System.Windows.Forms.MessageBox]::Show(`$reason, 'HANDOFF - not changed', 'OK', 'Warning')
+        }
+    })
+    `$form.Controls.Add(`$name); `$form.Controls.Add(`$value); `$form.Controls.Add(`$btn)
+    `$roleLabels[`$role] = `$value
+    `$roleButtons[`$role] = `$btn
+    `$y += 26
+}
+
+`$hint = New-Text 12 (`$y + 6) 336 18 `$grey 8 ([System.Drawing.FontStyle]::Regular)
+`$hint.Anchor = 'Top,Left,Right'
+`$hint.Text = 'the reviewer is never the implementer'
+`$form.Controls.Add(`$hint)
+
+`$timer = New-Object System.Windows.Forms.Timer
+`$timer.Interval = 1000
+`$timer.Add_Tick({
+    if (-not (Test-Path -LiteralPath `$rolesPath) -or -not (Test-Path -LiteralPath `$handoffPath)) {
+        `$timer.Stop(); `$form.Close(); return
+    }
+    `$roles = Read-Roles
+    foreach (`$role in `$roleOrder) { `$roleLabels[`$role].Text = `$roles[`$role] }
+    `$status = Read-Status
+    `$task = `$status.Task
+    if (`$task.Length -gt 52) { `$task = `$task.Substring(0, 49) + '...' }
+    `$taskLabel.Text = `$task
+    `$run = Read-Run
+    if (`$run.Alive) {
+        `$elapsed = (Get-Date).ToUniversalTime() - ([datetime]::Parse(`$run.StartedUtc).ToUniversalTime())
+        `$runLabel.ForeColor = `$green
+        `$runLabel.Text = `$run.Command + '  running  ' + ('{0:mm\:ss}' -f `$elapsed)
+        foreach (`$role in `$roleOrder) { `$roleButtons[`$role].Enabled = `$false }
+        `$hint.Text = 'a turn is running - roles are locked'
+    } else {
+        foreach (`$role in `$roleOrder) { `$roleButtons[`$role].Enabled = `$true }
+        `$hint.Text = 'the reviewer is never the implementer'
+        if (`$run.Finished) {
+            if (`$run.ExitCode -eq '0') { `$runLabel.ForeColor = `$green; `$runLabel.Text = `$run.Command + '  finished  exit 0' }
+            else { `$runLabel.ForeColor = `$red; `$runLabel.Text = `$run.Command + '  finished  exit ' + `$run.ExitCode }
+        } else {
+            `$runLabel.ForeColor = `$grey
+            `$runLabel.Text = `$status.State
+        }
+    }
+})
+`$timer.Start()
+`$form.Add_FormClosed({ Remove-Item -LiteralPath `$uiMarker -Force -ErrorAction SilentlyContinue })
+[void]`$form.ShowDialog()
+Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
+"@
+    [System.IO.File]::WriteAllText($scriptPath, $body, (New-Object System.Text.UTF8Encoding($true)))
+    $statusHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $statusHost)) { return $false }
+    try {
+        Start-Process -FilePath $statusHost -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$scriptPath`"") -WindowStyle Hidden | Out-Null
+    } catch { return $false }
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-RolesWindowState).Alive) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
 # --- The plan, the next task, and what a stop means (v3.14.0) ---
 #
 # A Master that finishes a task and stops is not finished work, it is a queue with no
@@ -1852,6 +2343,13 @@ function Test-LastUpdateIsReviewRecord {
     return $false
 }
 
+function Test-LastUpdateHasActor {
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+        if ($line -match '^-\s*Actor:\s*\S') { return $true }
+    }
+    return $false
+}
+
 function Get-LastUpdateActorTool {
     foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
         if ($line -match '^-\s*Actor:\s*(.+)$') {
@@ -2129,7 +2627,7 @@ function Start-BackgroundRun {
     # is copied: no token or key is ever written to the launcher file.
     $envLines = [System.Collections.Generic.List[string]]::new()
     $envLines.Add('$env:Path = ' + (ConvertTo-PowerShellLiteral $env:Path))
-    foreach ($item in @(Get-ChildItem Env: | Where-Object { ($_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODEL_') -or ($_.Name -eq 'CODEX_CLI') -or ($_.Name -eq 'HANDOFF_BACKGROUND_NO_NOTIFY') })) {
+    foreach ($item in @(Get-ChildItem Env: | Where-Object { ($_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODEL_') -or ($_.Name -eq 'CODEX_CLI') -or ($_.Name -eq 'HANDOFF_BACKGROUND_NO_NOTIFY') -or ($_.Name -eq 'HANDOFF_BACKGROUND_NO_WINDOW') })) {
         $envLines.Add('$env:' + $item.Name + ' = ' + (ConvertTo-PowerShellLiteral $item.Value))
     }
 
@@ -2146,7 +2644,7 @@ Add-Type -AssemblyName System.Drawing
 `$project = $(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir))
 `$task = $(ConvertTo-PowerShellLiteral $(if ($CurrentTask.Length -gt 52) { $CurrentTask.Substring(0, 49) + "..." } else { $CurrentTask }))
 `$form = New-Object System.Windows.Forms.Form
-`$form.Text = 'HANDOFF'
+`$form.Text = 'HANDOFF - ' + `$project
 `$form.FormBorderStyle = 'FixedToolWindow'
 `$form.TopMost = `$true
 `$form.ShowInTaskbar = `$false
@@ -2154,13 +2652,27 @@ Add-Type -AssemblyName System.Drawing
 `$form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27)
 `$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 `$form.StartPosition = 'Manual'
-`$form.Location = New-Object System.Drawing.Point((`$screen.Right - 356), (`$screen.Top + 16))
+`$stagger = 0
+foreach (`$ch in (Get-Location).Path.ToLowerInvariant().ToCharArray()) { `$stagger = (`$stagger * 17 + [int]`$ch) % 5 }
+`$form.Location = New-Object System.Drawing.Point((`$screen.Right - 356), (`$screen.Top + 16 + (`$stagger * 40)))
 `$title = New-Object System.Windows.Forms.Label
 `$title.AutoSize = `$false
 `$title.Size = New-Object System.Drawing.Size(316, 22)
 `$title.Location = New-Object System.Drawing.Point(12, 8)
 `$title.ForeColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
 `$title.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+`$accentSeed = 0
+foreach (`$ch in (Get-Location).Path.ToLowerInvariant().ToCharArray()) { `$accentSeed = (`$accentSeed * 31 + [int]`$ch) % 360 }
+`$accent = [System.Drawing.Color]::FromArgb(
+    [int](127 + 100 * [Math]::Sin(`$accentSeed * [Math]::PI / 180)),
+    [int](127 + 100 * [Math]::Sin((`$accentSeed + 120) * [Math]::PI / 180)),
+    [int](127 + 100 * [Math]::Sin((`$accentSeed + 240) * [Math]::PI / 180)))
+`$stripe = New-Object System.Windows.Forms.Label
+`$stripe.Size = New-Object System.Drawing.Size(4, 62)
+`$stripe.Location = New-Object System.Drawing.Point(4, 8)
+`$stripe.BackColor = `$accent
+`$form.Controls.Add(`$stripe)
+`$title.ForeColor = `$accent
 `$title.Text = "`$project  -  `$label"
 `$detail = New-Object System.Windows.Forms.Label
 `$detail.AutoSize = `$false
@@ -2184,6 +2696,7 @@ Add-Type -AssemblyName System.Drawing
 `$timer = New-Object System.Windows.Forms.Timer
 `$timer.Interval = 1000
 `$timer.Add_Tick({
+    if (-not (Test-Path -LiteralPath (Split-Path -Parent `$markerPath))) { `$timer.Stop(); `$form.Close(); return }
     if (`$script:closeAt) {
         if ((Get-Date) -ge `$script:closeAt) { `$timer.Stop(); `$form.Close() }
         return
@@ -2210,9 +2723,9 @@ Add-Type -AssemblyName System.Drawing
             # window, and a run that failed is exactly the one they must not miss.
             `$detail.ForeColor = [System.Drawing.Color]::FromArgb(248, 113, 113)
             `$detail.Text = "finished  exit `$exitText  -  see HANDOFF_BACKGROUND.log"
-            `$form.Text = 'HANDOFF - failed'
+            `$form.Text = 'HANDOFF - failed - ' + `$project
+            `$script:closeAt = (Get-Date).AddMinutes(15)
             `$title.ForeColor = [System.Drawing.Color]::FromArgb(248, 113, 113)
-            `$timer.Stop()
         }
     }
 })
@@ -3325,6 +3838,14 @@ function Invoke-Work {
     Write-PushReminder
     Write-Host ""
     if (Write-NextTurnGeneratedWarning) { Write-Host "" }
+    $workUi = Get-RolesUiSetting
+    if (-not $workUi.Present) {
+        Write-Host "Roles:        Master=$($Binding.Master), Implementer=$($Binding.Implementer), Reviewer=$($Binding.Reviewer)"
+        Write-Host "              See them at a glance and swap with a click: .\scripts\handoff.ps1 roles -Window"
+        Write-Host ""
+    } elseif ($workUi.Enabled) {
+        [void](Start-RolesWindow)
+    }
     if (@("REVIEW_DONE", "WAITING_FOR_USER") -contains $State) {
         $workPending = @(Get-PendingSequenceTasks)
         if ($workPending.Count -gt 0) {
@@ -5548,6 +6069,13 @@ function Get-ReviewPlan {
     # blocked, a Master has been observed doing the work itself and then reviewing it - and
     # the table still read Implementer: the other tool, so every actor check passed. Compare
     # the Reviewer with the actor AI_HANDOFF.md records for the last turn as well.
+    # v3.15.0: a review of work whose author is not recorded cannot be an independent
+    # review - it is a review of an anonymous change. One Master implemented three tasks
+    # itself while Task Actors still named the other tool, and every actor check passed.
+    if ($reviewFiles.Count -gt 0 -and -not (Test-LastUpdateHasActor)) {
+        $ok = $false
+        $errors.Add("AI_HANDOFF.md '## Last Update' does not record who took the turn that produced these changes. Add '- Actor: <tool> (<role>)' naming who actually did the work - including yourself, if you did it. Independent review starts with knowing who to be independent of.")
+    }
     $lastTurnActor = Get-LastUpdateActorTool
     if ($lastTurnActor -ne "" -and -not (Test-LastUpdateIsReviewRecord) -and (Test-SameToolIdentity -First $lastTurnActor -Second $boundReviewer)) {
         $ok = $false
@@ -8192,6 +8720,7 @@ switch ($Command) {
     "task-next"    { Invoke-TaskNext }
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
+    "roles"        { Invoke-Roles }
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
@@ -8234,6 +8763,10 @@ switch ($Command) {
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
+            Write-Host "  roles [-Window] [-WindowOff] [-SetRole <role> -SetTool <tool>] [-Yes]"
+            Write-Host "                            Show who holds each role, or change one. -Window opens a small always-on-top"
+            Write-Host "                            indicator that also shows a running turn and swaps roles with a click (Windows)."
+            Write-Host "                            A swap is refused while a turn runs and whenever Reviewer would equal Implementer."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check [-Message `"<msg>`"]"
