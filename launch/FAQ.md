@@ -33,7 +33,9 @@ scope, evidence, and next actor across tool boundaries.
 Yes, with explicit user approval. Codex can implement while Claude Code leads or
 reviews when the installed adapters support that binding. The invariant does not
 change: Reviewer and Implementer must remain different, and unsupported automation
-falls back to an explicit turn instead of being guessed.
+falls back to an explicit turn instead of being guessed. Since v3.15.0 the
+`handoff.ps1 roles` command validates role swaps and records them in the history
+automatically, and `roles -Window` shows who holds which role (Windows).
 
 ## Is it fully autonomous?
 
@@ -90,7 +92,7 @@ Claude Code in the same repository.
 
 ## Is it production-ready?
 
-v3.3.1 is a public beta ready for supervised use on small, non-critical tasks. It
+v3.15.0 is a public beta ready for supervised use on small, non-critical tasks. It
 has extensive protocol tests and clean-install evidence, but it does not claim full
 unattended production autonomy.
 

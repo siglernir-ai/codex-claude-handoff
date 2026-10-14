@@ -107,40 +107,17 @@ and [MODEL_GUIDANCE.md](MODEL_GUIDANCE.md). Publication assets and the reproduci
 five-minute demo are maintained in [launch/](launch/README.md). Bug reports and
 pull requests should follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-v3.4.0 adds dynamic, name-agnostic model routing while retaining the public
-packaging hardening that makes every discoverable Skill frontmatter
-YAML-safe and retains regression coverage for nested release mirrors. v3.3.1
-sharpened public discovery and positioning: the Skill distinguishes
-bounded cross-agent collaboration from session-summary handoffs and parallel
-multi-model answers, surfaces independent review and correction plus fail-closed
-safety, and explains user-approved role flexibility without overstating adapter
-coverage or claiming fully autonomous dialogue. v3.3.0 made the discovered Skill self-contained,
-bundled an offline project installer, published Apache-2.0 licensing, and kept
-first-use setup behind explicit approval. v3.2.2 was the internal publication
-and workspace guidance release: it explains the
-recommended VS Code shared-window workflow without claiming a native VS Code extension.
-v3.2.1 added colleague onboarding,
-trust and safety notes, model-selection guidance, and package coverage for those
-publication docs. v3.1.11 makes PowerShell `-Force` and Bash `--force` updates safe for active projects:
-live handoff and sequence state are preserved, and customized current role bindings
-survive while managed role instructions refresh. v3.1.10 added a runtime
-role-synchronization checkpoint: every turn rereads the
-authoritative role binding and stops if the handoff contains stale actors. v3.1.9
-aligned the packaged beginner journey with Codex Desktop: the Windows quick
-start installs into the current PowerShell folder without a path variable, and both
-the installer and documentation direct users to `/skills`. v3.1.8 made activation
-and packaging safe for ordinary projects: installation is
-project-local and opt-in, existing root agent instructions are preserved, package-only
-test files are not copied into target repositories, and a pinned bootstrap supports a
-clean first-time install. v3.1.7 closed the manual investigation gap found by human acceptance: read-only
-`NEEDS_INVESTIGATION` turns now run through the same bounded Claude adapter, enforce a
-post-turn no-source-edit boundary, and use Claude Code `--safe-mode` so unrelated user
-plugins and hooks cannot interfere. v3.1.6 hardened independent review and Windows
-commands. v3.1.0 added one-command installation and beginner onboarding. v3.0.0 is the
-productized supervised, human-in-the-loop workflow release. It makes
-the local workflow easier to trust and operate, but it is not unattended autonomy:
-user authorization is still required for commits, pushes, tags, releases, deploys,
-database work, secrets, role swaps, and product decisions.
+Recent releases added validated role management with a live indicator window and
+required actor attribution for every review (v3.15.0), a task plan with named
+stops (`AI_SEQUENCE.md`, v3.14.0), database authorization gates (v3.13.x),
+background runs with a blocking `wait` (v3.11.x-3.13.0), profile-based model
+routing for both tools without hard-coded model names (v3.10.0), and key-file
+lockdown with post-turn leak alarms (v3.9.0). The full history is in
+[CHANGELOG.md](CHANGELOG.md).
+
+The workflow is supervised, not unattended autonomy: user authorization is still
+required for commits, pushes, tags, releases, deploys, database work, secrets,
+role swaps, and product decisions.
 
 ## Recommended VS Code Workflow
 
@@ -167,15 +144,18 @@ Default binding: Master = Codex, Reviewer = Codex, Implementer = Claude Code. Ro
 
 ### Switching roles
 
-Tell the current Master explicitly which binding you approve, for example:
+Since v3.15.0 roles are changed with a validated command instead of a hand edit:
 
-```text
-I approve this role swap: Master and Reviewer = Claude Code; Implementer = Codex.
-Update .ai/roles/ROLE_ASSIGNMENT.md and synchronize AI_HANDOFF.md in the same turn.
+```powershell
+.\scripts\handoff.ps1 roles                                  # show the current binding
+.\scripts\handoff.ps1 roles -SetRole Master -SetTool claude-code
+.\scripts\handoff.ps1 roles -Window                          # floating indicator with swap buttons (Windows)
 ```
 
-The Reviewer must remain different from the Implementer. Each later turn rereads
-the role table; stale Task Actors fail closed instead of silently using the old roles.
+The command refuses a swap while a turn is running, refuses any binding that would
+make the Reviewer the Implementer, moves `Task Actors` with the binding mid-task,
+and writes the Role Swap History row itself. Each later turn rereads the role
+table; stale Task Actors fail closed instead of silently using the old roles.
 
 ## Protocol Method
 

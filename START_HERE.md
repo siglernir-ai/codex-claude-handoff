@@ -14,10 +14,11 @@ something that commits, pushes or releases on its own.
 ## The safety model
 
 Three roles - **Master** routes, **Implementer** writes, **Reviewer** checks. The
-Reviewer is never the same tool as the Implementer, enforced in code. You are not one
+Reviewer is never the same tool as the Implementer; the protocol checks this on every
+turn and blocks the swap. You are not one
 of the three: you are the approval authority. Commit, push, tag, release, deploy,
 database changes and secrets all stop and wait for you, and commit and release each
-require you to type an exact authorization string. No flag turns that off.
+require you to type an exact authorization string. No documented flag turns that off.
 
 ## What installing does
 

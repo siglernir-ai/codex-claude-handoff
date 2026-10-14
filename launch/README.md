@@ -1,6 +1,6 @@
 # Launch Kit
 
-This directory contains publication material for `codex-claude-handoff` v3.3.1.
+This directory contains publication material for `codex-claude-handoff` v3.15.0.
 It is separate from the installable Skill and does not change runtime behavior.
 
 ## Launch position
@@ -40,7 +40,9 @@ conversation, a hidden chat bridge, or a native VS Code extension.
 
 [![Live codex-claude-handoff demo](assets/codex-claude-handoff-live-demo-poster.png)](assets/codex-claude-handoff-live-demo.mp4)
 
-The recording is based on a disposable repository and an actual v3.3.0 run. It
+Historical recording: it is based on a disposable repository and an actual
+v3.3.0 run, made before v3.15.0. The protocol has since advanced, and the
+supervised flow shown is unchanged. It
 shows Codex routing, Claude Code implementing, the exact-scope guard stopping a
 metadata mismatch, Codex reviewing after the coordination repair, and the workflow
 stopping at the user before commit. See `LIVE_DEMO_EVIDENCE.md` for the precise
@@ -54,7 +56,7 @@ Do not begin the broad launch until both of these checks pass:
 npx skills find codex-claude-handoff
 ```
 
-The skills.sh page must also show the v3.3.1 positioning and Skill text rather than the older
+The skills.sh page must also show the v3.15.0 positioning and Skill text rather than the older
 "Codex Adapter" copy:
 
 https://www.skills.sh/siglernir-ai/codex-claude-handoff/codex-claude-handoff

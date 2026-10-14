@@ -106,15 +106,17 @@ or secret changes until the user explicitly authorizes the relevant action.
 
 ## Optional: switch roles
 
-Ask the current Master in ordinary language and approve the exact assignment:
+Since v3.15.0 one validated command changes a role and records the swap:
 
-```text
-I approve this role swap: Master and Reviewer = Claude Code; Implementer = Codex.
-Update ROLE_ASSIGNMENT.md and synchronize AI_HANDOFF.md.
+```powershell
+.\scripts\handoff.ps1 roles                                  # show who holds each role
+.\scripts\handoff.ps1 roles -SetRole Master -SetTool claude-code
+.\scripts\handoff.ps1 roles -Window                          # floating role indicator (Windows)
 ```
 
-The Reviewer cannot also be the Implementer. Every later turn checks the current
-binding again and stops if the handoff still contains the old assignment.
+The Reviewer cannot also be the Implementer, and a swap is refused while a turn is
+running. Every later turn checks the current binding again and stops if the handoff
+still contains the old assignment.
 
 ## Optional always-on mode
 

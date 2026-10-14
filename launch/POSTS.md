@@ -5,10 +5,10 @@ GitHub and skills.sh URLs unchanged.
 
 ## Social card alt text
 
-Codex-Claude Handoff v3.3.1 public beta workflow: Codex routes and scopes, Claude
+Codex-Claude Handoff v3.15.0 public beta workflow: Codex routes and scopes, Claude
 Code investigates or implements, Codex reviews independently, and the user approves
-sensitive actions. The card notes 221 checks passed, Apache-2.0, and human-in-the-loop
-operation.
+sensitive actions. The card notes 707 protocol tests passed with 0 failures, Apache-2.0, and
+human-in-the-loop operation.
 
 ## LinkedIn - English
 
@@ -36,14 +36,15 @@ although those general dialogue states still require explicit turns today.
 
 Those are the default assignments, not hard-coded identities. With explicit user
 approval, Codex and Claude Code can exchange responsibilities while the
-Implementer and Reviewer must remain different.
+Implementer and Reviewer must remain different. The `roles` command validates
+the swap, and an optional on-screen indicator shows who holds which role.
 
 The tools coordinate through reviewable project-local files. There is no hosted
 orchestrator, hidden chat bridge, or claim of full unattended autonomy. VS Code is
 the recommended shared workspace, but this is not a VS Code extension.
 
-v3.3.1 is now available as a public beta under Apache-2.0. The release passed 220
-protocol checks, a clean public-tag install for both agents, and a bundled setup
+v3.15.0 is now available as a public beta under Apache-2.0. The release passed
+707 protocol tests (660 PowerShell + 47 Bash) with 0 failures, a clean public-tag install for both agents, and a bundled setup
 whose health check returned PASS.
 
 Demo: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
@@ -82,14 +83,15 @@ Claude Code לצמד הנדסי עם חלוקת אחריות:
 בשני הכיוונים, אך מצבי הדו-שיח הכלליים עדיין דורשים כיום צעדים מפורשים.
 
 אלה תפקידי ברירת המחדל, לא זהויות קשיחות. באישור מפורש אפשר להחליף אחריות בין
-Codex ל-Claude Code, אך ה-Reviewer וה-Implementer חייבים להישאר כלים שונים.
+Codex ל-Claude Code, אך ה-Reviewer וה-Implementer חייבים להישאר כלים שונים. הפקודה roles מאמתת את ההחלפה, וחלון חיווי אופציונלי
+מראה מי מחזיק באיזה תפקיד.
 
 התיאום נשמר בקבצים מקומיים וברורים בתוך הפרויקט. אין כאן שרת תיווך, גשר צ'אט נסתר
 או הבטחה לאוטומציה מלאה ללא בקרה. סביבת העבודה המומלצת היא VS Code, אבל זה אינו
 תוסף VS Code.
 
-גרסה v3.3.1 זמינה כעת כ-Public Beta ברישיון Apache-2.0. היא עברה 221 בדיקות
-פרוטוקול, התקנה נקייה מהגרסה הציבורית עבור שני הכלים ובדיקת תקינות שהסתיימה ב-PASS.
+גרסה v3.15.0 זמינה כעת כ-Public Beta ברישיון Apache-2.0. היא עברה 707 בדיקות
+פרוטוקול (660 ב-PowerShell ו-47 ב-Bash) ללא כשלונות, התקנה נקייה מהגרסה הציבורית עבור שני הכלים ובדיקת תקינות שהסתיימה ב-PASS.
 
 דמו: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
 
@@ -124,8 +126,8 @@ The handoff is only the transport. The differentiator is one live task with dura
 state, independent review, and a rejection/correction path rather than two
 disconnected answers. It uses local Markdown state plus bounded CLI adapters. It is deliberately not full
 unattended autonomy, and it is not a VS Code extension or hosted orchestration
-service. The current v3.3.1 public beta passed 221 protocol checks and a fresh
-public-tag install/doctor run.
+service. The current v3.15.0 public beta passed 707 protocol tests (660 PowerShell +
+47 Bash), 0 failures, and a fresh public-tag install/doctor run.
 
 Demo: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
 
@@ -160,8 +162,8 @@ push, release, deploy, database, and secret-sensitive work.
 This is not intended to replace Claude Code's own planning, skills, or subagents.
 It is a separation-of-duties layer for people who already use both products.
 
-v3.3.1 is a public beta, not a claim of full unattended autonomy. It passed 220
-protocol checks and a clean install/doctor acceptance from the public tag.
+v3.15.0 is a public beta, not a claim of full unattended autonomy. It passed 707
+protocol tests (660 PowerShell + 47 Bash), 0 failures, and a clean install/doctor acceptance from the public tag.
 
 Demo: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
 
@@ -198,7 +200,7 @@ challenges and reviews, and the user approves sensitive actions. State is stored
 in local Markdown files, the CLI turns are bounded and observable, and the
 workflow fails closed on no progress, timeouts, unexpected files, or stale roles.
 
-It is a v3.3.1 public beta under Apache-2.0. The most exercised environment is
+It is a v3.15.0 public beta under Apache-2.0. The most exercised environment is
 Windows + VS Code, although Bash helpers are included. I am especially interested
 in criticism of the architecture and in simpler ways to preserve independent
 review without adding too much ceremony.
@@ -209,7 +211,7 @@ review without adding too much ceremony.
 
 2. The flow is explicit: Codex routes -> Claude Code implements -> Codex reviews -> the user approves commit/release/deploy-sensitive actions. Shared state stays in local project files.
 
-3. v3.3.1 is a supervised public beta, not full unattended autonomy. 221 protocol checks passed, plus a clean public install and health check. Demo: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
+3. v3.15.0 is a supervised public beta, not full unattended autonomy. 707 protocol tests passed (660 PowerShell + 47 Bash), 0 failures, plus a clean public install and health check. Demo: https://github.com/siglernir-ai/codex-claude-handoff/blob/main/launch/assets/codex-claude-handoff-live-demo.mp4
 
 4. GitHub: https://github.com/siglernir-ai/codex-claude-handoff Install: `npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --agent codex claude-code --copy` Critical feedback welcome.
 

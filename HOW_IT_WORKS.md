@@ -34,9 +34,11 @@ The Implementer never approves its own work.
 
 ## Switching Roles
 
-Roles are not permanently tied to one tool. With explicit user approval, the current
-Master updates `.ai/roles/ROLE_ASSIGNMENT.md` and synchronizes the derived Task Actors
-in `AI_HANDOFF.md` in the same turn. The Reviewer must never equal the Implementer.
+Roles are not permanently tied to one tool. With explicit user approval, a role is
+changed with `handoff.ps1 roles -SetRole <role> -SetTool <tool>` (since v3.15.0),
+which validates the swap, moves the derived Task Actors in `AI_HANDOFF.md` with it,
+and writes the Role Swap History row. `roles -Window` shows a live indicator with
+one-click swaps (Windows). The Reviewer must never equal the Implementer.
 Every new turn rereads the role table and fails closed if the handoff is stale.
 
 ## Normal Flow

@@ -92,8 +92,8 @@ files unless your organization has already approved that support path.
 
 ## skills.sh Readiness
 
-v3.9.0 includes a self-contained public beta Skill in both common agent discovery
-locations. The Skill bundles the installer and protocol templates it needs, so
+The release includes a self-contained public beta Skill in both common agent discovery
+locations (since v3.9.0). The Skill bundles the installer and protocol templates it needs, so
 `skills add` no longer produces an adapter with missing project-local references.
 
 Recommended checks:

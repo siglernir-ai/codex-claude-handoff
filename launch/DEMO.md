@@ -16,7 +16,7 @@ performance on a large production change.
 - Use a disposable Git repository with a clean baseline commit.
 - Open the same repository folder in VS Code, Codex, and Claude Code.
 - Sign in to Claude Code before recording.
-- Install v3.3.0 for both agents and complete the bundled setup.
+- Install v3.15.0 for both agents and complete the bundled setup.
 - Run `doctor` and keep its `PASS` result visible briefly.
 - Set terminal zoom so the state and command output remain readable at 1080p.
 - Record the entire run. Cuts may remove waiting time, but never remove an error,
@@ -109,9 +109,13 @@ recording. Diagnose the failure, fix the product, and record a new complete run.
 
 ## Evidence already available
 
-The launch claim is also backed by the public v3.3.0 acceptance work:
+Current evidence for v3.15.0 (release run, 2026-10-12): 707 protocol tests
+(660 PowerShell + 47 Bash), 0 failures.
 
-- 221 protocol checks passed.
+Historical evidence: the launch claim was first backed by the public v3.3.0
+acceptance work. These numbers are from that older run and are not updated:
+
+- 221 protocol checks passed (v3.3.0 run).
 - A clean install from the public v3.3.0 tag installed the Skill for Codex and
   Claude Code.
 - Bundled setup completed and `handoff.ps1 doctor` returned `PASS`.

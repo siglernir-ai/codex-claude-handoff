@@ -1,3 +1,5 @@
+> Historical evidence: recorded on v3.3.0. The protocol is now v3.15.0; the supervised flow shown here is unchanged.
+
 # Live Demo Evidence
 
 This evidence supports the product's central claim: two coding agents can work on

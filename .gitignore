@@ -22,3 +22,9 @@
 /.ai/handoff-history/
 /dist/
 /HANDOFF_RUN.json
+/HANDOFF_BACKGROUND.json
+/HANDOFF_BACKGROUND.log
+/HANDOFF_UI.json
+/HANDOFF_UI_WINDOW.json
+/.mcp.json
+/.codex/config.toml

@@ -40,8 +40,8 @@ Install:
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --agent codex claude-code --copy
 ```
 
-The release passed 221 protocol checks and a clean public install/doctor
-acceptance. I would especially value one small non-critical test and a report of
+The v3.15.0 release passed 707 protocol tests (660 PowerShell + 47 Bash),
+0 failures, and a clean public install/doctor acceptance. I would especially value one small non-critical test and a report of
 the first confusing, slow, or unreliable step.
 
 ## Attachments
