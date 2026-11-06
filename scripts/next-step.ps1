@@ -8,7 +8,7 @@ if (-not (Test-Path $HandoffFile)) {
     exit 0
 }
 
-$Lines = Get-Content -Path $HandoffFile
+$Lines = Get-Content -Encoding UTF8 -Path $HandoffFile
 
 function Get-SectionLines {
     param([string[]]$Lines, [string]$Heading)
@@ -39,7 +39,7 @@ function Get-RoleBinding {
     $binding = @{ Master = "Codex"; Reviewer = "Codex"; Implementer = "Claude Code" }
     $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
     if (Test-Path $rolesFile) {
-        foreach ($line in (Get-Content -Path $rolesFile)) {
+        foreach ($line in (Get-Content -Encoding UTF8 -Path $rolesFile)) {
             if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
                 $binding[$Matches[1]] = $Matches[2].Trim()
             }

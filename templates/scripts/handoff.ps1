@@ -73,7 +73,7 @@ if (-not (Test-Path $HandoffFile) -and $Command -ne "doctor") {
 
 $Lines = @()
 if (Test-Path $HandoffFile) {
-    $Lines = Get-Content -Path $HandoffFile
+    $Lines = Get-Content -Encoding UTF8 -Path $HandoffFile
 }
 
 # --- Shared parser ---
@@ -181,7 +181,7 @@ function Resolve-ModelSelection {
     $config = $null
     if (Test-Path -LiteralPath $ModelRoutingFile) {
         try {
-            $config = Get-Content -Raw -LiteralPath $ModelRoutingFile | ConvertFrom-Json -ErrorAction Stop
+            $config = Get-Content -Encoding UTF8 -Raw -LiteralPath $ModelRoutingFile | ConvertFrom-Json -ErrorAction Stop
             if ($config.schemaVersion -ne 1) {
                 $errors.Add("MODEL_ROUTING.json schemaVersion must be 1.")
             }
@@ -464,7 +464,7 @@ function Get-RoleBinding {
     $binding = @{ Master = "Codex"; Reviewer = "Codex"; Implementer = "Claude Code" }
     $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
     if (Test-Path $rolesFile) {
-        foreach ($line in (Get-Content -Path $rolesFile)) {
+        foreach ($line in (Get-Content -Encoding UTF8 -Path $rolesFile)) {
             if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
                 $binding[$Matches[1]] = $Matches[2].Trim()
             }
@@ -842,7 +842,7 @@ function Get-CredentialRiskPaths {
                         $item = Get-Item -LiteralPath $full -ErrorAction Stop
                         if ($item.Length -le $maxBytes) {
                             $scanned++
-                            $text = Get-Content -Raw -LiteralPath $full -ErrorAction Stop
+                            $text = Get-Content -Encoding UTF8 -Raw -LiteralPath $full -ErrorAction Stop
                             foreach ($c in $contentPatterns) {
                                 if ($text -cmatch $c.Rx) { $reason = $c.Why; break }
                             }
@@ -881,7 +881,7 @@ function Invoke-CredentialLeakGate {
         $path = Join-Path (Get-Location) $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         try {
-            $content = [System.IO.File]::ReadAllText($path)
+            $content = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
         } catch {
             Write-Host "WARNING: ${CommandLabel}: could not read $name to check it for credentials: $_"
             continue
@@ -1357,7 +1357,7 @@ function Get-RunMarkerState {
     if (-not (Test-Path -LiteralPath $path)) { return $result }
     $result.Present = $true
     try {
-        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $path | ConvertFrom-Json
         $result.ProcessId  = [int]$data.processId
         if ($null -ne $data.startTicks) { $result.StartTicks = [int64]$data.startTicks }
         $result.Kind       = [string]$data.kind
@@ -1450,7 +1450,7 @@ function Get-RolesUiSetting {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
     $result.Present = $true
     try {
-        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $path | ConvertFrom-Json
         $result.Enabled = [bool]$data.rolesWindow
     } catch { }
     return $result
@@ -1513,7 +1513,7 @@ function Set-RoleBinding {
     $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
     if (-not (Test-Path -LiteralPath $rolesPath)) { return @{ Ok = $false; Error = "ROLE_ASSIGNMENT.md is missing." } }
     $before = @{ Master = $Binding.Master; Reviewer = $Binding.Reviewer; Implementer = $Binding.Implementer }
-    $lines = @(Get-Content -Path $rolesPath)
+    $lines = @(Get-Content -Encoding UTF8 -Path $rolesPath)
     $out = [System.Collections.Generic.List[string]]::new()
     $changed = $false
     foreach ($line in $lines) {
@@ -1546,7 +1546,7 @@ function Set-RoleBinding {
     [System.IO.File]::WriteAllLines($rolesPath, $final.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
 
     if ($AlsoTaskActors -and (Test-Path $HandoffFile)) {
-        $handoffLines = @(Get-Content -Path $HandoffFile)
+        $handoffLines = @(Get-Content -Encoding UTF8 -Path $HandoffFile)
         $updated = [System.Collections.Generic.List[string]]::new()
         $inActors = $false
         foreach ($line in $handoffLines) {
@@ -1690,7 +1690,7 @@ function Get-RolesWindowState {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
     $result.Present = $true
     try {
-        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $path | ConvertFrom-Json
         $result.ProcessId = [int]$data.processId
         $ticks = 0
         if ($null -ne $data.startTicks) { $ticks = [int64]$data.startTicks }
@@ -1735,7 +1735,7 @@ Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $workDir)
 
 function Read-Roles {
     `$roles = [ordered]@{ Master = '?'; Implementer = '?'; Reviewer = '?' }
-    foreach (`$line in (Get-Content -LiteralPath `$rolesPath -ErrorAction SilentlyContinue)) {
+    foreach (`$line in (Get-Content -Encoding UTF8 -LiteralPath `$rolesPath -ErrorAction SilentlyContinue)) {
         if (`$line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') { `$roles[`$Matches[1]] = `$Matches[2].Trim() }
     }
     return `$roles
@@ -1743,7 +1743,7 @@ function Read-Roles {
 function Read-Status {
     `$status = [ordered]@{ State = '?'; Task = '' }
     `$inStatus = `$false
-    foreach (`$line in (Get-Content -LiteralPath `$handoffPath -ErrorAction SilentlyContinue)) {
+    foreach (`$line in (Get-Content -Encoding UTF8 -LiteralPath `$handoffPath -ErrorAction SilentlyContinue)) {
         if (`$line.TrimEnd() -eq '## Status') { `$inStatus = `$true; continue }
         if (`$inStatus -and `$line -match '^##\s') { break }
         if (`$inStatus -and `$line -match '^- State:\s*(.+)') { `$status.State = `$Matches[1].Trim() }
@@ -1755,7 +1755,7 @@ function Read-Run {
     `$run = [ordered]@{ Alive = `$false; Command = ''; StartedUtc = ''; Finished = `$false; ExitCode = '' }
     if (-not (Test-Path -LiteralPath `$markerPath)) { return `$run }
     try {
-        `$data = Get-Content -Raw -LiteralPath `$markerPath | ConvertFrom-Json
+        `$data = Get-Content -Encoding UTF8 -Raw -LiteralPath `$markerPath | ConvertFrom-Json
         `$run.Command = [string]`$data.command
         `$run.StartedUtc = [string]`$data.startedUtc
         if (`$data.finishedUtc) { `$run.Finished = `$true; `$run.ExitCode = [string]`$data.exitCode; return `$run }
@@ -1936,7 +1936,7 @@ function Add-SequenceTask {
     if (-not (Test-Path -LiteralPath $seqPath)) {
         return @{ Ok = $false; Error = "AI_SEQUENCE.md is missing. Reinstall the protocol templates, or create it from templates/AI_SEQUENCE.md." }
     }
-    $seqLines = @(Get-Content -Path $seqPath)
+    $seqLines = @(Get-Content -Encoding UTF8 -Path $seqPath)
     $rows = @(Get-SequenceTaskRows -SeqLines $seqLines)
     # The shipped template carries two placeholder rows. They are the file's instructions,
     # not work, and the first real task replaces them instead of queueing behind them.
@@ -2001,7 +2001,7 @@ function Set-SequenceRowStatus {
     param([string]$TaskText, [string]$Status, [string]$Checkpoint = "-")
     $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
     if (-not (Test-Path -LiteralPath $seqPath)) { return $false }
-    $seqLines = @(Get-Content -Path $seqPath)
+    $seqLines = @(Get-Content -Encoding UTF8 -Path $seqPath)
     $out = [System.Collections.Generic.List[string]]::new()
     $changed = $false
     $inTasks = $false
@@ -2044,7 +2044,7 @@ function Invoke-TaskNext {
 
     $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
     $rows = @()
-    if (Test-Path -LiteralPath $seqPath) { $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Path $seqPath)) }
+    if (Test-Path -LiteralPath $seqPath) { $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Encoding UTF8 -Path $seqPath)) }
     $realRows = @($rows | Where-Object { $_.Task -notmatch '^\[.*\]$' })
     $pending = @($realRows | Where-Object { $_.Status -eq 'pending' })
 
@@ -2097,7 +2097,9 @@ function Invoke-TaskNext {
     }
 
     $today = (Get-Date).ToString("yyyy-MM-dd")
-    $working = @(Get-Content -Path $HandoffFile)
+    $working = @(Get-Content -Encoding UTF8 -Path $HandoffFile)
+    $compressed = Compress-HandoffForNextTask -Lines $working
+    $working = $compressed.Lines
     $statusBody = [System.Collections.Generic.List[string]]::new()
     $statusBody.Add("- State: NEEDS_ANALYSIS")
     $statusBody.Add("- Waiting For: Master")
@@ -2126,7 +2128,7 @@ function Invoke-TaskNext {
         [void](Set-SequenceRowStatus -TaskText $taskText -Status "active")
     }
 
-    $script:Lines = @(Get-Content -Path $HandoffFile)
+    $script:Lines = @(Get-Content -Encoding UTF8 -Path $HandoffFile)
     $freshStatus = Read-HandoffState -Lines $script:Lines
     $script:State = $freshStatus.State
     $script:WaitingFor = $freshStatus.WaitingFor
@@ -2138,6 +2140,7 @@ function Invoke-TaskNext {
     Write-Host "  Current Task: $taskText"
     Write-Host "  Archived:    $($archive.Path)"
     Write-Host "  NEXT_TURN.md regenerated; Changed Files reset to 'None yet'."
+    Write-Host "  Working copy compacted: $($compressed.Dropped) finished-task section(s) left only in the archive; Done, Verification and Plan reset."
     Write-Host ""
     $remaining = @($pending | Where-Object { $_.Task -ne $taskText })
     if ($remaining.Count -gt 0) {
@@ -2152,7 +2155,7 @@ function Invoke-TaskNext {
 function Get-PendingSequenceTasks {
     $seqPath = Join-Path (Get-Location) "AI_SEQUENCE.md"
     if (-not (Test-Path -LiteralPath $seqPath)) { return @() }
-    $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Path $seqPath))
+    $rows = @(Get-SequenceTaskRows -SeqLines @(Get-Content -Encoding UTF8 -Path $seqPath))
     return @($rows | Where-Object { $_.Status -eq 'pending' -and $_.Task -notmatch '^\[.*\]$' })
 }
 
@@ -2164,7 +2167,7 @@ function Get-TurnOutputText {
         $path = Join-Path (Get-Location) $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         try {
-            $content = Get-Content -LiteralPath $path -Tail 40 -ErrorAction Stop
+            $content = Get-Content -Encoding UTF8 -LiteralPath $path -Tail 40 -ErrorAction Stop
             $text += ($content -join "`n") + "`n"
         } catch { }
     }
@@ -2306,7 +2309,7 @@ function Test-NextTurnGenerated {
     $path = Join-Path (Get-Location) "NEXT_TURN.md"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $result }
     $result.Present = $true
-    try { $text = [System.IO.File]::ReadAllText($path) } catch { return $result }
+    try { $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) } catch { return $result }
     $normalized = $text.Replace("`r`n", "`n").TrimEnd("`n")
     $index = $normalized.LastIndexOf($NextTurnStampPrefix)
     if ($index -lt 0) { return $result }
@@ -2392,7 +2395,7 @@ function Invoke-Wait {
             exit 4
         }
     }
-    $status = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
+    $status = Read-HandoffState -Lines (Get-Content -Encoding UTF8 -Path $HandoffFile)
     Write-Host "wait: the background run has finished."
     Write-Host "  Command:   $($state.Command)"
     Write-Host "  Finished:  $($state.FinishedUtc) UTC"
@@ -2402,7 +2405,7 @@ function Invoke-Wait {
     $logPath = Join-Path (Get-Location) $BackgroundLogName
     if (Test-Path -LiteralPath $logPath -PathType Leaf) {
         Write-Host "Last lines of $($BackgroundLogName):"
-        foreach ($logLine in @(Get-Content -LiteralPath $logPath -Tail 25)) { Write-Host "  $logLine" }
+        foreach ($logLine in @(Get-Content -Encoding UTF8 -LiteralPath $logPath -Tail 25)) { Write-Host "  $logLine" }
         Write-Host ""
     }
     Write-Host "Next step: read AI_HANDOFF.md for the turn's own record, then continue from '.\scripts\handoff.ps1 work'."
@@ -2538,7 +2541,7 @@ function Get-BackgroundRunState {
     if (-not (Test-Path -LiteralPath $path)) { return $result }
     $result.Present = $true
     try {
-        $data = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $path | ConvertFrom-Json
         $result.ProcessId = [int]$data.processId
         if ($null -ne $data.startTicks) { $result.StartTicks = [int64]$data.startTicks }
         $result.Command = [string]$data.command
@@ -2563,7 +2566,7 @@ function Set-BackgroundRunFinished {
     param($ExitCode)
     try {
         $markerPath = Join-Path (Get-Location) $BackgroundMarkerName
-        $data = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $markerPath | ConvertFrom-Json
         $marker = [ordered]@{ processId = $data.processId; startTicks = $data.startTicks; command = $data.command; startedUtc = $data.startedUtc; log = $data.log; finishedUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); exitCode = $ExitCode }
         [System.IO.File]::WriteAllText($markerPath, ($marker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     } catch { }
@@ -2707,7 +2710,7 @@ foreach (`$ch in (Get-Location).Path.ToLowerInvariant().ToCharArray()) { `$accen
     `$exitText = ''
     if (Test-Path -LiteralPath `$markerPath) {
         try {
-            `$data = Get-Content -Raw -LiteralPath `$markerPath | ConvertFrom-Json
+            `$data = Get-Content -Encoding UTF8 -Raw -LiteralPath `$markerPath | ConvertFrom-Json
             if (`$data.finishedUtc) { `$finished = `$true; `$exitText = [string]`$data.exitCode }
         } catch { }
     } else {
@@ -2907,8 +2910,8 @@ param(
     [string]$ModelName
 )
 $ErrorActionPreference = "Continue"
-$prompt = (Get-Content -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
-$sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
+$prompt = (Get-Content -Encoding UTF8 -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
+$sysPrompt = Get-Content -Encoding UTF8 -Raw -LiteralPath $SystemPromptFile
 $argList = @(
     '--yes',
     '@anthropic-ai/claude-code',
@@ -2988,7 +2991,7 @@ try {
         $timedOut = $true
         $childPid = $null
         if (Test-Path $childPidFile) {
-            $childPidRaw = Get-Content -Raw -Path $childPidFile -ErrorAction SilentlyContinue
+            $childPidRaw = Get-Content -Encoding UTF8 -Raw -Path $childPidFile -ErrorAction SilentlyContinue
             $childPidText = if ($null -eq $childPidRaw) { "" } else { $childPidRaw.Trim() }
             if ($childPidText -match '^\d+$') { $childPid = [int]$childPidText }
         }
@@ -3003,9 +3006,9 @@ try {
     Clear-RunMarker
 
     $stdoutText = ""
-    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
     $stderrText = ""
-    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
     Write-ClaudeImplementerCapture -Prompt $prompt -StdoutText $stdoutText -StderrText $stderrText -ExitCode $claudeExit -TimedOut $timedOut
     Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $childPidFile, $runnerScript -Force -ErrorAction SilentlyContinue
 
@@ -3090,8 +3093,8 @@ param(
     [string]$ModelName
 )
 $ErrorActionPreference = "Continue"
-$prompt = (Get-Content -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
-$sysPrompt = Get-Content -Raw -LiteralPath $SystemPromptFile
+$prompt = (Get-Content -Encoding UTF8 -Raw -LiteralPath $PromptFile) -replace "(`r`n|`n|`r)", " "
+$sysPrompt = Get-Content -Encoding UTF8 -Raw -LiteralPath $SystemPromptFile
 $argList = @(
     '--yes',
     '@anthropic-ai/claude-code',
@@ -3169,9 +3172,9 @@ try {
     Clear-RunMarker
 
     $stdoutText = ""
-    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpOut) { $stdoutText = (Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
     $stderrText = ""
-    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
 
     Remove-Item $tmpOut, $tmpErr, $promptFile, $sysPromptFile, $runnerScript -Force -ErrorAction SilentlyContinue
 
@@ -3356,12 +3359,12 @@ function Invoke-CodexImplementerTurn {
     Clear-RunMarker
 
     $partial = ""
-    if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpOut) { $partial = (Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
     if (-not [string]::IsNullOrEmpty($partial)) {
         Add-Content -LiteralPath $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
     }
     $stderrText = ""
-    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+    if (Test-Path $tmpErr) { $stderrText = (Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
     Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
 
     if ($timedOut) {
@@ -3995,7 +3998,7 @@ function Invoke-ModelActivate {
     if (-not (Test-ModelRoutingInert)) { $before = "active" }
 
     try {
-        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $config = Get-Content -Encoding UTF8 -Raw -LiteralPath $configPath | ConvertFrom-Json
     } catch {
         Write-Host "Blocked: MODEL_ROUTING.json is not valid JSON and was left untouched."
         Write-Host "Reason: $($_.Exception.Message)"
@@ -4022,7 +4025,7 @@ function Invoke-ModelActivate {
         [System.IO.File]::WriteAllText($temp, ($config | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
         # Read it back before replacing the original: a file that cannot be parsed would
         # block every later command, so it must never become the live configuration.
-        $null = Get-Content -Raw -LiteralPath $temp | ConvertFrom-Json
+        $null = Get-Content -Encoding UTF8 -Raw -LiteralPath $temp | ConvertFrom-Json
         Move-Item -LiteralPath $temp -Destination $configPath -Force
     } catch {
         Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
@@ -4139,7 +4142,7 @@ function Test-ModelRoutingInert {
     $configPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json"
     if (-not (Test-Path -LiteralPath $configPath)) { return $false }
     try {
-        $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $config = Get-Content -Encoding UTF8 -Raw -LiteralPath $configPath | ConvertFrom-Json
     } catch {
         return $false
     }
@@ -4292,10 +4295,23 @@ function Invoke-Doctor {
         Write-DoctorLine "FAIL" "AI_HANDOFF.md is missing. Run the installer from the project root."
     }
 
+    $handoffHealth = Get-HandoffHealth -Path $HandoffFile
+    if ($handoffHealth.Exists) {
+        if ($handoffHealth.Mojibake -lt 0) {
+            Write-DoctorLine "FAIL" ("AI_HANDOFF.md is {0:N0} MB, too large to scan; a handoff this size is almost certainly double-encoded. Repair it before the next turn." -f ($handoffHealth.Bytes / 1MB))
+        } elseif ($handoffHealth.Mojibake -gt 0) {
+            Write-DoctorLine "FAIL" "AI_HANDOFF.md has $($handoffHealth.Mojibake) double-encoded character run(s); each save doubles them. Repair the text (restore the original characters) before the next turn."
+        } elseif ($handoffHealth.OverBudget) {
+            Write-DoctorLine "WARN" ("AI_HANDOFF.md is {0:N0} KB, over the {1:N0} KB budget; every turn reads it in full. The next task-next keeps only the standing sections." -f ($handoffHealth.Bytes / 1KB), ($HandoffSizeBudgetBytes / 1KB))
+        } else {
+            Write-DoctorLine "OK" ("AI_HANDOFF.md encoding is clean; size {0:N0} KB." -f ($handoffHealth.Bytes / 1KB))
+        }
+    }
+
     $versionPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/VERSION"
     $protocolVersion = $null
     if (Test-Path $versionPath) {
-        $protocolVersion = (Get-Content -Raw -Path $versionPath).Trim()
+        $protocolVersion = (Get-Content -Encoding UTF8 -Raw -Path $versionPath).Trim()
         if ($protocolVersion -match '^\d+\.\d+\.\d+$') {
             Write-DoctorLine "OK" "Protocol version: $protocolVersion"
         } else {
@@ -4462,7 +4478,7 @@ function Invoke-Doctor {
 
     $denyRulesPath = Join-Path (Get-Location) ".ai/skills/codex-claude-handoff/CREDENTIAL_READ_DENY.txt"
     if (Test-Path -LiteralPath $denyRulesPath -PathType Leaf) {
-        $denyRules = @(Get-Content -LiteralPath $denyRulesPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '^#' })
+        $denyRules = @(Get-Content -Encoding UTF8 -LiteralPath $denyRulesPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '^#' })
         $presentDeny = @()
         $claudeSettingsPath = Join-Path (Get-Location) ".claude/settings.json"
         if (Test-Path -LiteralPath $claudeSettingsPath -PathType Leaf) {
@@ -4692,6 +4708,7 @@ function Invoke-Next {
     if (-not $Silent) {
         Write-Host ""
         Write-Host "NEXT_TURN.md written."
+        Write-HandoffHealthNotice -Health (Get-HandoffHealth -Path $HandoffFile)
 
         if ($isMismatch) {
             Write-Host "WARNING: State $State expects Waiting For: $role ($expTool), but found: $WaitingFor."
@@ -5173,7 +5190,7 @@ function Test-ReleasePackage {
 
     if ($errors.Count -eq 0) {
         $text = ""
-        try { $text = (Get-Content -LiteralPath $sumPath -Raw).Trim() } catch { $text = "" }
+        try { $text = (Get-Content -Encoding UTF8 -LiteralPath $sumPath -Raw).Trim() } catch { $text = "" }
         if ($text -notmatch '^([0-9a-fA-F]{64})\s+(\S.*)$') {
             $errors.Add("Malformed checksum file dist/$zipName.sha256. Expected '<64-hex>  $zipName'.")
         } else {
@@ -5670,7 +5687,7 @@ function Get-SequencePlan {
     if (-not (Test-Path $seqPath)) {
         $ok = $false; $errors.Add("AI_SEQUENCE.md not found; the Sequence Owner must create it before advancing.")
     } else {
-        $seqLines = Get-Content -Path $seqPath
+        $seqLines = Get-Content -Encoding UTF8 -Path $seqPath
         $rows = Get-SequenceTaskRows -SeqLines $seqLines
         if ($rows.Count -eq 0) {
             $ok = $false; $errors.Add("AI_SEQUENCE.md has no parseable Tasks table rows.")
@@ -6289,7 +6306,7 @@ function Invoke-ProjectCheck {
             $code = -1
             $status = "TIMED OUT after ${CheckTimeoutSeconds}s"
         }
-        $text = [string](Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) + "`n" + [string](Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue)
+        $text = [string](Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) + "`n" + [string](Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue)
         $tail = ((@($text -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 6)) -join " | ") -replace '\s+', ' '
         if ($tail.Length -gt 600) { $tail = $tail.Substring($tail.Length - 600) }
         return @{ ExitCode = $code; Status = $status; Tail = $tail }
@@ -6565,11 +6582,11 @@ function Invoke-ReviewRun {
 
         # Preserve partial stdout (JSONL) and capture stderr for diagnostics, regardless of outcome.
         $partial = ""
-        if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+        if (Test-Path $tmpOut) { $partial = (Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
         if (-not [string]::IsNullOrEmpty($partial)) {
             Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
         }
-        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
         Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
     } else {
         # Claude Code holds the Reviewer role. Invoke-ClaudeReadOnlyCapture writes the final
@@ -6767,6 +6784,163 @@ function Get-VerdictFromCapture {
 # heading or EOF) with $NewBody, preserving the heading line and all other sections.
 # Returns @{ Ok = section found; Lines = rebuilt lines }. Fails closed (Ok=$false) when
 # the heading is absent so a malformed handoff is never silently rewritten.
+# v3.15.1: AI_HANDOFF.md is read on every turn, so its size is a per-turn cost. These
+# helpers keep it small: Compress-HandoffForNextTask drops the finished task's sections
+# from the working copy (task-next archives the full file first), and Get-HandoffHealth
+# reports double-encoded text (UTF-8 read as ANSI and written back) and an oversized file.
+$HandoffSizeBudgetBytes = 262144
+$HandoffKeepSections = @('Status', 'Last Update', 'Task Actors', 'Done', 'Changed Files', 'Verification',
+    'Dialogue / Open Questions', 'Open Issues', 'Risks / Notes', 'Next Recommended Step', 'Plan')
+$HandoffResetSections = @('Done', 'Verification', 'Plan')
+
+function Compress-HandoffForNextTask {
+    param([string[]]$Lines)
+    # One pass. A heading counts only outside a fenced block; a fence closes only on the
+    # same character repeated at least as many times as it opened with.
+    $out = [System.Collections.Generic.List[string]]::new()
+    $mode = 'keep'
+    $dropped = 0
+    $fenceChar = $null
+    $fenceLen = 0
+    foreach ($line in $Lines) {
+        $isHeading = $false
+        if ($null -eq $fenceChar) {
+            if ($line -match '^ {0,3}(`{3,})[^`]*$' -or $line -match '^ {0,3}(~{3,})') {
+                $fenceChar = $Matches[1][0]
+                $fenceLen = $Matches[1].Length
+            } elseif ($line -match '^##\s+(.+?)\s*$') {
+                $isHeading = $true
+                $heading = $Matches[1]
+            }
+        } elseif ($line -match '^ {0,3}(`{3,}|~{3,})\s*$' -and $Matches[1][0] -eq $fenceChar -and $Matches[1].Length -ge $fenceLen) {
+            $fenceChar = $null
+            $fenceLen = 0
+        }
+        if ($isHeading) {
+            if ($HandoffResetSections -contains $heading) {
+                $out.Add($line)
+                $out.Add("- None yet")
+                $out.Add("")
+                $mode = 'skip'
+            } elseif (($HandoffKeepSections -contains $heading) -or ($heading -like 'Session Authorization*')) {
+                $out.Add($line)
+                $mode = 'keep'
+            } else {
+                $dropped++
+                $mode = 'skip'
+            }
+            continue
+        }
+        if ($mode -eq 'keep') { $out.Add($line) }
+    }
+    return @{ Lines = $out.ToArray(); Dropped = $dropped }
+}
+
+function Get-HandoffHealth {
+    param([string]$Path)
+    $health = @{ Exists = $false; Bytes = 0; Mojibake = 0; OverBudget = $false }
+    if (-not (Test-Path -LiteralPath $Path)) { return $health }
+    $health.Exists = $true
+    $health.Bytes = (Get-Item -LiteralPath $Path).Length
+    $health.OverBudget = $health.Bytes -gt $HandoffSizeBudgetBytes
+    if ($health.Bytes -gt 64MB) { $health.Mojibake = -1; return $health }
+    $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    $health.Mojibake = Get-MojibakeRunCount -Text $text
+    return $health
+}
+
+# Text that was UTF-8, read as ANSI and saved back turns each multi-byte character into a
+# run of Windows-1252 characters whose 1252 bytes are valid UTF-8 again. A run counts when
+# its bytes hold a 3- or 4-byte sequence that rebuilds a typical character (see below), or
+# two valid 2-byte sequences in a row (a double-encoded Hebrew word). One stray 2-byte pair, as in legitimate
+# accented text, does not.
+function Get-MojibakeRunCount {
+    param([string]$Text)
+    # Windows PowerShell 5.1 misreads with the system ANSI code page: 1252 on most Western
+    # systems, 1255 on Hebrew Windows. Check both and the actual system code page. Correct
+    # Hebrew never matches: its 1255 bytes are lead bytes with no continuation bytes.
+    if ($null -eq $script:MojibakeCandidates) {
+        $script:MojibakeCandidates = [System.Collections.Generic.List[object]]::new()
+        foreach ($cp in @(1252, 1255, [System.Text.Encoding]::Default.CodePage) | Select-Object -Unique) {
+            try {
+                $enc = [System.Text.Encoding]::GetEncoding($cp, [System.Text.EncoderFallback]::ExceptionFallback, [System.Text.DecoderFallback]::ExceptionFallback)
+            } catch { continue }
+            $chars = [System.Text.StringBuilder]::new()
+            for ($b = 0x80; $b -le 0xFF; $b++) {
+                try { [void]$chars.Append([regex]::Escape($enc.GetString([byte[]]@($b)))) } catch { }
+            }
+            if ($chars.Length -gt 0) {
+                $script:MojibakeCandidates.Add(@{ Encoding = $enc; Pattern = ('[' + $chars.ToString().Replace(']', '\]') + ']{2,}') })
+            }
+        }
+    }
+    $count = 0
+    foreach ($candidate in $script:MojibakeCandidates) {
+        foreach ($m in [regex]::Matches($Text, $candidate.Pattern)) {
+            $bytes = [System.Collections.Generic.List[int]]::new()
+            foreach ($ch in $m.Value.ToCharArray()) {
+                try { $bytes.Add([int]($candidate.Encoding.GetBytes([string]$ch)[0])) } catch { $bytes.Add(-1) }
+            }
+            if (Test-MojibakeBytes -Bytes $bytes) { $count++ }
+        }
+    }
+    return $count
+}
+
+function Test-MojibakeBytes {
+    param([System.Collections.Generic.List[int]]$Bytes)
+    $i = 0
+    $previousPair = $false
+    while ($i -lt $Bytes.Count) {
+        $lead = $Bytes[$i]
+        $tail = 0
+        if ($lead -ge 0xC2 -and $lead -le 0xDF) { $tail = 1 }
+        elseif ($lead -ge 0xE0 -and $lead -le 0xEF) { $tail = 2 }
+        elseif ($lead -ge 0xF0 -and $lead -le 0xF4) { $tail = 3 }
+        $valid = ($tail -gt 0) -and (($i + $tail) -lt $Bytes.Count)
+        if ($valid) {
+            for ($k = 1; $k -le $tail; $k++) {
+                $c = $Bytes[$i + $k]
+                if ($c -lt 0x80 -or $c -gt 0xBF) { $valid = $false; break }
+            }
+        }
+        # A 3- or 4-byte sequence counts only when it rebuilds a character that corruption
+        # actually produces in these files: dashes, quotes, ellipsis, arrows, status symbols
+        # (check marks, crosses), euro, trade mark, emoji. Legitimate text can form other valid sequences by chance (an accented
+        # or Hebrew letter followed by an ellipsis and a closing quote rebuilds a fraction).
+        if ($valid -and $tail -ge 2) {
+            if ($tail -eq 2) {
+                $cp = (($lead -band 0x0F) -shl 12) -bor (($Bytes[$i + 1] -band 0x3F) -shl 6) -bor ($Bytes[$i + 2] -band 0x3F)
+            } else {
+                $cp = (($lead -band 0x07) -shl 18) -bor (($Bytes[$i + 1] -band 0x3F) -shl 12) -bor (($Bytes[$i + 2] -band 0x3F) -shl 6) -bor ($Bytes[$i + 3] -band 0x3F)
+            }
+            $typical = ($cp -ge 0x2010 -and $cp -le 0x203A) -or ($cp -ge 0x2190 -and $cp -le 0x21FF) -or ($cp -ge 0x2600 -and $cp -le 0x27BF) -or ($cp -ge 0x2B00 -and $cp -le 0x2BFF) -or ($cp -eq 0x20AC) -or ($cp -eq 0x2122) -or ($cp -ge 0x1F300 -and $cp -le 0x1FAFF)
+            if (-not $typical) { $valid = $false }
+        }
+        if ($valid) {
+            if ($tail -ge 2 -or $previousPair) { return $true }
+            $previousPair = $true
+            $i += $tail + 1
+            continue
+        }
+        $previousPair = $false
+        $i++
+    }
+    return $false
+}
+
+function Write-HandoffHealthNotice {
+    param([hashtable]$Health)
+    if ($Health.Mojibake -lt 0) {
+        Write-Host "WARNING: AI_HANDOFF.md is too large to scan; a handoff this size is almost certainly double-encoded. Repair it before the next turn."
+    } elseif ($Health.Mojibake -gt 0) {
+        Write-Host "WARNING: AI_HANDOFF.md has $($Health.Mojibake) double-encoded character run(s) (UTF-8 read as ANSI and saved back). Each such save doubles them. Repair the text before the next turn; from v3.15.1 handoff.ps1 itself reads as UTF-8 and no longer causes this."
+    }
+    if ($Health.OverBudget) {
+        Write-Host ("NOTE: AI_HANDOFF.md is {0:N0} KB (budget {1:N0} KB). Every turn reads it in full. task-next archives the finished task and keeps only the standing sections." -f ($Health.Bytes / 1KB), ($HandoffSizeBudgetBytes / 1KB))
+    }
+}
+
 function Set-HandoffSectionBody {
     param([string[]]$Lines, [string]$Heading, [string[]]$NewBody)
     $out = [System.Collections.Generic.List[string]]::new()
@@ -6910,7 +7084,7 @@ function Invoke-ReviewApply {
 
     # Section-preserving rewrite: Status, Last Update, and Next Recommended Step must all
     # exist or we fail closed without writing anything. Every other section is preserved.
-    $cur = Get-Content -Path $HandoffFile
+    $cur = Get-Content -Encoding UTF8 -Path $HandoffFile
     $r1 = Set-HandoffSectionBody -Lines $cur       -Heading "Status"               -NewBody $statusBody
     $r2 = Set-HandoffSectionBody -Lines $r1.Lines  -Heading "Last Update"          -NewBody $lastUpdateBody
     $r3 = Set-HandoffSectionBody -Lines $r2.Lines  -Heading "Next Recommended Step" -NewBody $nextStepBody
@@ -7200,11 +7374,11 @@ function Invoke-MasterRun {
         }
 
         $partial = ""
-        if (Test-Path $tmpOut) { $partial = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
+        if (Test-Path $tmpOut) { $partial = (Get-Content -Encoding UTF8 -Raw -Path $tmpOut -ErrorAction SilentlyContinue) }
         if (-not [string]::IsNullOrEmpty($partial)) {
             Set-Content -Path $jsonlPath -Value $partial -Encoding utf8 -ErrorAction SilentlyContinue
         }
-        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
+        if (Test-Path $tmpErr) { $stderrText = (Get-Content -Encoding UTF8 -Raw -Path $tmpErr -ErrorAction SilentlyContinue) }
         Remove-Item $tmpOut, $tmpErr, $promptFile -Force -ErrorAction SilentlyContinue
     } else {
         # Claude Code holds the Master role. The Master routes work; it must not perform
@@ -7583,7 +7757,7 @@ function Invoke-MasterApply {
         }
     }
 
-    $cur = Get-Content -Path $HandoffFile
+    $cur = Get-Content -Encoding UTF8 -Path $HandoffFile
     $r1 = Set-HandoffSectionBody -Lines $cur       -Heading "Status"                -NewBody $statusBody
     $r2 = Set-HandoffSectionBody -Lines $r1.Lines  -Heading "Last Update"           -NewBody $lastUpdateBody
     $r3 = Set-HandoffSectionBody -Lines $r2.Lines  -Heading "Task Actors"           -NewBody $taskActorsBody
@@ -7789,7 +7963,7 @@ function Invoke-InterruptedCorrectionRecovery {
         "  and approve or return focused changes. Do not rely on Automation Recovery as technical approval."
     )
 
-    $cur = Get-Content -Path $HandoffFile
+    $cur = Get-Content -Encoding UTF8 -Path $HandoffFile
     $r1 = Set-HandoffSectionBody -Lines $cur      -Heading "Status"                -NewBody $statusBody
     $r2 = Set-HandoffSectionBody -Lines $r1.Lines -Heading "Last Update"           -NewBody $lastUpdateBody
     $r3 = Set-HandoffSectionBody -Lines $r2.Lines -Heading "Next Recommended Step" -NewBody $nextStepBody
@@ -8014,7 +8188,7 @@ function Invoke-Cycle {
         Write-Host ""
 
         # Re-read AI_HANDOFF.md to get post-turn state (pre-run values are stale)
-        $script:Lines       = Get-Content -Path $HandoffFile
+        $script:Lines       = Get-Content -Encoding UTF8 -Path $HandoffFile
         $freshStatus        = Read-HandoffState -Lines $script:Lines
         $script:State       = $freshStatus.State
         $script:WaitingFor  = $freshStatus.WaitingFor
@@ -8120,7 +8294,7 @@ function Invoke-Cycle {
             exit 3
         } elseif ($claudeExit -eq 4) {
             Write-Host "$implementerTool turn timed out (exit 4)."
-            $script:Lines       = Get-Content -Path $HandoffFile
+            $script:Lines       = Get-Content -Encoding UTF8 -Path $HandoffFile
             $freshStatus        = Read-HandoffState -Lines $script:Lines
             $script:State       = $freshStatus.State
             $script:WaitingFor  = $freshStatus.WaitingFor
@@ -8282,7 +8456,7 @@ function Invoke-Loop {
 
     while ($true) {
         # Re-read handoff state and role binding every iteration
-        $script:Lines       = Get-Content -Path $HandoffFile
+        $script:Lines       = Get-Content -Encoding UTF8 -Path $HandoffFile
         $freshStatus        = Read-HandoffState -Lines $script:Lines
         $script:State       = $freshStatus.State
         $script:WaitingFor  = $freshStatus.WaitingFor
@@ -8586,7 +8760,7 @@ function Invoke-Loop {
         }
 
         if ($claudeExit -ne 0) {
-            $postLines = Get-Content -Path $HandoffFile
+            $postLines = Get-Content -Encoding UTF8 -Path $HandoffFile
             $postStatus = Read-HandoffState -Lines $postLines
             $script:Lines = $postLines
             $script:State = $postStatus.State
@@ -8621,7 +8795,7 @@ function Invoke-Loop {
                 $postFingerprint = if ($postExact) { Get-FileSetFingerprint -Files $postExpected } else { "" }
                 if ($postExact -and $postFingerprint -ne $preCorrectionFingerprint) {
                     if (Invoke-InterruptedCorrectionRecovery -Reason $interruptedReason -ExitCode $claudeExit) {
-                        $script:Lines = Get-Content -Path $HandoffFile
+                        $script:Lines = Get-Content -Encoding UTF8 -Path $HandoffFile
                         $freshRecoveryStatus = Read-HandoffState -Lines $script:Lines
                         $script:State = $freshRecoveryStatus.State
                         $script:WaitingFor = $freshRecoveryStatus.WaitingFor
@@ -8657,7 +8831,7 @@ function Invoke-Loop {
         }
 
         # Log the post-turn state; the next iteration re-reads and routes it
-        $postStatus = Read-HandoffState -Lines (Get-Content -Path $HandoffFile)
+        $postStatus = Read-HandoffState -Lines (Get-Content -Encoding UTF8 -Path $HandoffFile)
         Write-LoopLog "turn=$turnNo post state=$($postStatus.State) waitingFor=$($postStatus.WaitingFor)"
 
         # No-op / no-progress guard (v2.6.0): if the turn exited 0 but the handoff did not

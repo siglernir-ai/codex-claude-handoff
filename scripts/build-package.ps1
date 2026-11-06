@@ -11,7 +11,7 @@ if (-not $OutputDirectory) {
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 
 $versionPath = Join-Path $repoRoot ".ai\skills\codex-claude-handoff\VERSION"
-$version = (Get-Content -Raw -LiteralPath $versionPath).Trim()
+$version = (Get-Content -Encoding UTF8 -Raw -LiteralPath $versionPath).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
     throw "Invalid VERSION value: $version"
 }

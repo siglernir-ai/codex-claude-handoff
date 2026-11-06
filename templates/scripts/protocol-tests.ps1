@@ -4212,6 +4212,138 @@ Check "the refusal says to name the actor, even if it was yourself" ($r.Out -mat
 $rolesMaster = Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
 Check "MASTER.md sends role questions to the command, not to a hand edit" ($rolesMaster -match "handoff\.ps1 roles")
 
+Write-Host "[4D-6] Handoff stays UTF-8 and small (v3.15.1)"
+
+# Another tool saving AI_HANDOFF.md without a BOM made the next Get-Content read it as ANSI;
+# every save then doubled each non-ASCII character. A real project reached 1.2 GB this way.
+$dash = [string][char]0x2014
+$hebrew = -join ([char[]](0x05D1, 0x05D3, 0x05D9, 0x05E7, 0x05D4))
+$encFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$encPath = Join-Path $encFx "AI_HANDOFF.md"
+$encText = (Get-Content -Encoding UTF8 -Raw -LiteralPath $encPath).TrimEnd() + "`n`n## Session Authorization $dash standing`n- keep $hebrew $dash`n`n## Master Note $dash finished task`n- finished-task note $hebrew`n`n## Risks / Notes`n- standing risk $hebrew $dash`n"
+[System.IO.File]::WriteAllText($encPath, $encText, (New-Object System.Text.UTF8Encoding($false)))
+$null = Invoke-Handoff -WorkDir $encFx -Arguments @("sequence-add", "-NextTask", "Next encoded task")
+$r = Invoke-Handoff -WorkDir $encFx -Arguments @("task-next", "-Yes")
+$encAfter = [System.IO.File]::ReadAllText($encPath, [System.Text.Encoding]::UTF8)
+Check "task-next on a BOM-less UTF-8 handoff keeps non-ASCII text intact" (($r.Code -eq 0) -and ($encAfter.Contains("- standing risk $hebrew $dash")) -and ($encAfter.Contains("- keep $hebrew $dash")))
+Check "no double-encoded text after a read-write cycle" (-not ($encAfter -match '\u00C3[\u0080-\u00BF\u0192\u2020]|\u00E2\u20AC'))
+Check "task-next drops the finished task's own sections from the working copy" (-not $encAfter.Contains("finished-task note"))
+Check "task-next keeps standing Session Authorization sections" ($encAfter.Contains("## Session Authorization $dash standing"))
+Check "task-next reports the compaction" ($r.Out -match "Working copy compacted")
+$encArchive = Get-ChildItem -Path (Join-Path $encFx ".ai/handoff-history") -Filter "*AI_HANDOFF.md" | Select-Object -First 1
+Check "the dropped sections stay in the archive" ($encArchive -and ([System.IO.File]::ReadAllText($encArchive.FullName, [System.Text.Encoding]::UTF8).Contains("finished-task note $hebrew")))
+
+# doctor names double-encoded text instead of letting it grow.
+$mojiFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Moji task")
+} -InitGit
+$mojiPath = Join-Path $mojiFx "AI_HANDOFF.md"
+$moji = -join ([char[]](0x00C3, 0x00A2, 0x00E2, 0x20AC, 0x201D))
+Add-Content -LiteralPath $mojiPath -Value "- broken $moji text" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $mojiFx -Arguments @("doctor")
+Check "doctor reports double-encoded text in AI_HANDOFF.md" ($r.Out -match "double-encoded character run")
+
+# A heading inside a fenced block is text, not a section: compaction must keep it.
+$fenceFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$fencePath = Join-Path $fenceFx "AI_HANDOFF.md"
+$fenceText = (Get-Content -Encoding UTF8 -Raw -LiteralPath $fencePath).TrimEnd() + "`n`n## Session Authorization - fenced`n- rule before`n``````text`n## Example`n```````n- Never deploy production.`n"
+[System.IO.File]::WriteAllText($fencePath, $fenceText, (New-Object System.Text.UTF8Encoding($false)))
+$null = Invoke-Handoff -WorkDir $fenceFx -Arguments @("sequence-add", "-NextTask", "Fenced next task")
+$null = Invoke-Handoff -WorkDir $fenceFx -Arguments @("task-next", "-Yes")
+$fenceAfter = [System.IO.File]::ReadAllText($fencePath, [System.Text.Encoding]::UTF8)
+Check "compaction keeps a fenced heading and the lines after it" (($fenceAfter.Contains("## Example")) -and ($fenceAfter.Contains("- Never deploy production.")))
+
+# Legitimate accented text is not corruption; double-encoded Hebrew is.
+$legit = -join ([char[]](0x201C, 0x004D, 0x0041, 0x00C7, 0x00C3, 0x201D))
+$legitFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Legit task") } -InitGit
+Add-Content -LiteralPath (Join-Path $legitFx "AI_HANDOFF.md") -Value "- fruit $legit" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $legitFx -Arguments @("doctor")
+Check "doctor does not flag legitimate accented text" (-not ($r.Out -match "double-encoded character run"))
+$hebMoji = -join ([char[]](0x00D7, 0x2018, 0x00D7, 0x201C, 0x00D7, 0x2122))
+$hebFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Hebrew task") } -InitGit
+Add-Content -LiteralPath (Join-Path $hebFx "AI_HANDOFF.md") -Value "- word $hebMoji" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $hebFx -Arguments @("doctor")
+Check "doctor flags double-encoded Hebrew" ($r.Out -match "double-encoded character run")
+
+# Resets and nested fences follow the same rule: a fenced heading is text.
+$nestFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$nestPath = Join-Path $nestFx "AI_HANDOFF.md"
+$tick3 = '```'
+$tick4 = '````'
+$nestText = (Get-Content -Encoding UTF8 -Raw -LiteralPath $nestPath).TrimEnd() + "`n`n## Risks / Notes`n$tick3`n## Plan`n$tick3`n- keep risk after fenced plan`n`n## Session Authorization - nested`n$tick4`n$tick3`n## Example`n$tick3`n$tick4`n- Never push on Fridays.`n`n## Plan`n- old plan line`n"
+[System.IO.File]::WriteAllText($nestPath, $nestText, (New-Object System.Text.UTF8Encoding($false)))
+$null = Invoke-Handoff -WorkDir $nestFx -Arguments @("sequence-add", "-NextTask", "Nested next task")
+$null = Invoke-Handoff -WorkDir $nestFx -Arguments @("task-next", "-Yes")
+$nestAfter = [System.IO.File]::ReadAllText($nestPath, [System.Text.Encoding]::UTF8)
+Check "a fenced Plan heading is not reset and the lines after it stay" ($nestAfter.Contains("- keep risk after fenced plan"))
+Check "a longer fence holding a shorter one keeps its content" ($nestAfter.Contains("- Never push on Fridays."))
+Check "the real Plan section is reset" (($nestAfter -match "(?m)^## Plan\r?\n- None yet") -and (-not $nestAfter.Contains("- old plan line")))
+
+$quotedHeb = -join ([char[]](0x201C, 0x00D7, 0x2018, 0x00D7, 0x201C, 0x201D))
+$qFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Quoted task") } -InitGit
+Add-Content -LiteralPath (Join-Path $qFx "AI_HANDOFF.md") -Value "- quoted $quotedHeb" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $qFx -Arguments @("doctor")
+Check "doctor flags double-encoded Hebrew inside curly quotes" ($r.Out -match "double-encoded character run")
+
+# Inline code is not a fence; Hebrew misread through Windows-1255 is still corruption.
+$inlineFx = New-Fixture -Files @{
+    "AI_HANDOFF.md" = (New-PlanHandoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    ".ai/roles/ROLE_ASSIGNMENT.md" = $planRoles
+    "AI_SEQUENCE.md" = $seqTemplate
+} -InitGit
+$inlinePath = Join-Path $inlineFx "AI_HANDOFF.md"
+$inlineText = (Get-Content -Encoding UTF8 -Raw -LiteralPath $inlinePath).TrimEnd() + "`n`n## Done`n$tick3" + "npm test" + "$tick3`n`n## Session Authorization - after inline`n- Never deploy on inline.`n"
+[System.IO.File]::WriteAllText($inlinePath, $inlineText, (New-Object System.Text.UTF8Encoding($false)))
+$null = Invoke-Handoff -WorkDir $inlineFx -Arguments @("sequence-add", "-NextTask", "Inline next task")
+$null = Invoke-Handoff -WorkDir $inlineFx -Arguments @("task-next", "-Yes")
+Check "inline triple-backtick code does not open a fence" (([System.IO.File]::ReadAllText($inlinePath, [System.Text.Encoding]::UTF8)).Contains("- Never deploy on inline."))
+
+$heb1255 = [System.Text.Encoding]::GetEncoding(1255).GetString([System.Text.Encoding]::UTF8.GetBytes((-join ([char[]](0x05D1, 0x05D3, 0x05D9, 0x05E7, 0x05D4)))))
+$h55Fx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Cp1255 task") } -InitGit
+Add-Content -LiteralPath (Join-Path $h55Fx "AI_HANDOFF.md") -Value "- word $heb1255" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $h55Fx -Arguments @("doctor")
+Check "doctor flags Hebrew misread through Windows-1255" ($r.Out -match "double-encoded character run")
+
+$okHeb = -join ([char[]](0x05D1, 0x05D3, 0x05D9, 0x05E7, 0x05D4, 0x0020, 0x05E9, 0x05DC, 0x05D5, 0x05DD))
+$okFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Hebrew ok task") } -InitGit
+Add-Content -LiteralPath (Join-Path $okFx "AI_HANDOFF.md") -Value "- $okHeb" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $okFx -Arguments @("doctor")
+Check "doctor does not flag correct Hebrew" (-not ($r.Out -match "double-encoded character run"))
+
+$quotedOk = @((-join ([char[]](0x201C, 0x05D1, 0x05D3, 0x05D9, 0x05E7, 0x05D4, 0x2026, 0x201D))), (-join ([char[]](0x201C, 0x0063, 0x0061, 0x0066, 0x00E9, 0x2026, 0x201D))), (-join ([char[]](0x201C, 0x05D3, 0x05D9, 0x05E8, 0x05D5, 0x05D2, 0x2026, 0x201D))), (-join ([char[]](0x201C, 0x05D1, 0x05D0, 0x05D2, 0x2026, 0x201D))))
+$qokFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Quoted ok task") } -InitGit
+foreach ($q in $quotedOk) { Add-Content -LiteralPath (Join-Path $qokFx "AI_HANDOFF.md") -Value "- $q" -Encoding utf8 }
+$r = Invoke-Handoff -WorkDir $qokFx -Arguments @("doctor")
+Check "doctor does not flag quoted Hebrew or accented text ending in an ellipsis" (-not ($r.Out -match "double-encoded character run"))
+
+$symbols = -join ([char[]](0x2705, 0x0020, 0x274C, 0x0020, 0x2713))
+foreach ($symCp in @(1252, 1255)) {
+    $symMoji = [System.Text.Encoding]::GetEncoding($symCp).GetString([System.Text.Encoding]::UTF8.GetBytes($symbols))
+    $symFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Symbol task") } -InitGit
+    Add-Content -LiteralPath (Join-Path $symFx "AI_HANDOFF.md") -Value "- status $symMoji" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $symFx -Arguments @("doctor")
+    Check "doctor flags double-encoded status symbols through code page $symCp" ($r.Out -match "double-encoded character run")
+}
+$symOkFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "Symbol ok task") } -InitGit
+Add-Content -LiteralPath (Join-Path $symOkFx "AI_HANDOFF.md") -Value "- status $symbols" -Encoding utf8
+$r = Invoke-Handoff -WorkDir $symOkFx -Arguments @("doctor")
+Check "doctor does not flag correct status symbols" (-not ($r.Out -match "double-encoded character run"))
+
+$handoffSrc = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $ScriptDir "handoff.ps1")
+Check "handoff.ps1 never reads a file with Get-Content and no -Encoding" (-not ($handoffSrc -split "`n" | Where-Object { $_ -match 'Get-Content ' -and $_ -notmatch '-Encoding' }))
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

@@ -1,3 +1,19 @@
+## 3.15.1 - The Handoff File Stays Small
+
+- **A real project's `AI_HANDOFF.md` reached 1.2 GB.** Windows PowerShell 5.1 reads a file
+  with no BOM as ANSI. When Claude Code or Codex saved the handoff without a BOM, the next
+  `Get-Content` in `handoff.ps1` misread every non-ASCII character, and `Set-Content` wrote
+  the misread text back. Each such save doubled every em dash and Hebrew letter. Every read
+  in `handoff.ps1`, `next-step.ps1` and `build-package.ps1` now says `-Encoding UTF8`, so a
+  read-write cycle no longer changes the text, with or without a BOM.
+- **`task-next` keeps only the standing sections.** It archived the finished task and then
+  kept every dated note and every `Last Update (previous ...)` in the working copy, so the
+  file grew with every task and every turn read all of it. After archiving it now keeps the
+  template sections, `Plan` and any `Session Authorization ...` section; it resets `Done`,
+  `Verification` and `Plan` to `- None yet`. The full text stays in `.ai/handoff-history/`.
+- **`doctor` and `next` name the problem.** `doctor` fails on double-encoded text and warns
+  when the file is over 256 KB; `next` prints the same notice. Eight new protocol tests.
+
 ## 3.15.0 - Who Holds Which Role, In Front of You
 
 - **The binding that decides everything lived in a Markdown table.** Who implements and who
