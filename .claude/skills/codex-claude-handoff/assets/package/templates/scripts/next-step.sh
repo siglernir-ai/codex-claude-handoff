@@ -140,6 +140,31 @@ _after_text() {
 _parse_status
 _get_role_binding
 
+# v3.17.0: the review rule, read the way handoff.ps1 reads it (absent = separate-tool).
+# Only a valid, single fresh-context line counts; nothing here relaxes a gate.
+_canonical_tool() {
+    local key; key="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    case "$key" in
+        "codex"|"codex window"|"codex cli"|"codex desktop"|"openai codex") echo "codex" ;;
+        "claude code"|"claude-code"|"claudecode"|"claude code cli"|"claude code window") echo "claude-code" ;;
+        *) echo "" ;;
+    esac
+}
+SINGLE_VENDOR_LINE=""
+_ri_file="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
+if [ -f "$_ri_file" ]; then
+    # v3.17.0 (review fix): read without regard to case, as handoff.ps1 does.
+    _ri_lines="$(tr -d '\r' < "$_ri_file" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }')"
+    _ri_count="$(printf '%s' "$_ri_lines" | grep -c '^<' || true)"
+    _ri_values="${_ri_lines#<}"; _ri_values="${_ri_values%>}"
+    _ri_values="$(printf '%s' "$_ri_values" | tr '[:upper:]' '[:lower:]')"
+    _rc="$(_canonical_tool "$REVIEWER_TOOL")"
+    if [ "$_ri_count" -eq 1 ] && [ "$_ri_values" = "fresh-context" ] && [ -n "$_rc" ] && [ "$_rc" = "$(_canonical_tool "$IMPLEMENTER_TOOL")" ]; then
+        if [ "$_rc" = "codex" ]; then _rd="Codex"; else _rd="Claude Code"; fi
+        SINGLE_VENDOR_LINE="Single-vendor review: $_rd is both Implementer and Reviewer. It reviews in a separate read-only run started by the harness (review-run, then review-apply), never in the Implementer's context."
+    fi
+fi
+
 # Determine expected role and resolve mismatch
 EXP_ROLE=$(_expected_role "$STATE")
 EXP_TOOL=$(_resolve_actor "$EXP_ROLE")
@@ -161,6 +186,7 @@ echo "State:        $STATE"
 echo "Waiting For:  $WAITING_FOR"
 echo "Current Task: $CURRENT_TASK"
 echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
+[ -n "$SINGLE_VENDOR_LINE" ] && echo "Review:       $SINGLE_VENDOR_LINE"
 echo ""
 
 if $MISMATCH; then
@@ -310,6 +336,13 @@ $cf"
         echo "## Next Recommended Step (from AI_HANDOFF.md)"
         if [ -n "$next_step" ]; then echo "$next_step"; else echo "(none - see AI_HANDOFF.md)"; fi
         if [ -n "$key_context" ]; then echo ""; echo "## Key Context"; echo "$key_context"; fi
+        # v3.17.0: same section as handoff.ps1 next writes for a single-vendor Reviewer turn.
+        if ! $MISMATCH && [ "$ACTOR_ROLE" = "Reviewer" ] && [ -n "$SINGLE_VENDOR_LINE" ]; then
+            echo ""
+            echo "## Review Independence"
+            echo "$SINGLE_VENDOR_LINE"
+            echo "Take this turn with handoff.ps1 review-run, then handoff.ps1 review-apply. A verdict written by hand in this window is refused by commit-check, commit-approved and release-check."
+        fi
         if [ -n "$AFTER_LINE" ];  then echo ""; echo "## After You Finish"; echo "$AFTER_LINE"; fi
     } > "$nt_path"
 

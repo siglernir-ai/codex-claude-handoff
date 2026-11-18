@@ -12,6 +12,7 @@ param(
     [string]$NextTask,
     [string]$SetRole,
     [string]$SetTool,
+    [string]$ReviewIndependence,
     [string]$SupersededVersions,
     [string]$ModelProfile,
     [string]$Model,
@@ -505,10 +506,142 @@ function Resolve-Actor {
     return $Role
 }
 
+# --- v3.17.0: review independence ---
+#
+# The requirement was never "two vendors". It is "the Reviewer never shares a context with
+# the Implementer". By default that is enforced by binding the two roles to different tools
+# (separate-tool), and someone who has only one tool could not get a review at all. A
+# project may declare fresh-context instead: the same tool may then hold both roles, and
+# its verdict counts only when the harness produced it in a separate read-only process
+# (review-run, then review-apply). A verdict typed into a chat window cannot prove a clean
+# context, so commit and release refuse it. The setting is explicit and never implied: an
+# absent line is separate-tool, and any other value fails closed.
+$ReviewIndependenceValues = @("separate-tool", "fresh-context")
+
+function Get-ReviewIndependence {
+    $result = @{ Mode = "separate-tool"; Declared = $false; Ok = $true; Error = ""; Values = @() }
+    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $rolesFile)) { return $result }
+    $values = @()
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $rolesFile)) {
+        # v3.17.0 (review fix): a non-breaking space counts as a space, as the Bash readers do.
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:(.*)$') { $values += $Matches[1].Trim() }
+    }
+    if ($values.Count -eq 0) { return $result }
+    $result.Declared = $true
+    $result.Values = @($values | ForEach-Object { ([string]$_).ToLowerInvariant() })
+    if ($values.Count -gt 1) {
+        $result.Ok = $false
+        $result.Error = "ROLE_ASSIGNMENT.md declares 'Review Independence:' $($values.Count) times. Keep exactly one line: 'Review Independence: separate-tool' or 'Review Independence: fresh-context'."
+        return $result
+    }
+    $value = ([string]$values[0]).ToLowerInvariant()
+    if ($ReviewIndependenceValues -notcontains $value) {
+        $result.Ok = $false
+        $result.Error = "ROLE_ASSIGNMENT.md declares 'Review Independence: $($values[0])'. The value must be separate-tool or fresh-context."
+        return $result
+    }
+    $result.Mode = $value
+    return $result
+}
+
+# True only for a valid, declared fresh-context. An invalid line is never read as
+# fresh-context: it blocks at the role checkpoint and every gate keeps the strict rule.
+function Test-FreshContextReview {
+    return ($null -ne $script:ReviewIndependenceState -and $script:ReviewIndependenceState.Ok -and $script:ReviewIndependenceState.Mode -eq "fresh-context")
+}
+
+# True when fresh-context is active AND the two tools really are one tool. Only then does a
+# verdict have to come from the harness; two different tools behave as under separate-tool.
+function Test-SingleVendorReview {
+    param([string]$Reviewer, [string]$Implementer)
+    return ((Test-FreshContextReview) -and (Test-SameToolIdentity -First $Reviewer -Second $Implementer))
+}
+
+# v3.17.0 (review fix): at review, commit and release a task is single-vendor when EITHER
+# its Task Actors or the current binding put one tool in both roles. Reading Task Actors
+# alone let a placeholder (TBD) pass as "two different tools" and skip the harness check.
+function Test-SingleVendorTask {
+    param([hashtable]$TaskActors)
+    if (-not (Test-FreshContextReview)) { return $false }
+    if ((Test-SameToolIdentity -First $TaskActors.Reviewer -Second $TaskActors.Implementer)) { return $true }
+    return (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer)
+}
+
+# A single-vendor commit names the tools that implemented and reviewed. A placeholder or an
+# unknown actor cannot be tied to the harness verdict, so it is refused.
+function Get-SingleVendorActorErrors {
+    param([hashtable]$TaskActors)
+    $errors = [System.Collections.Generic.List[string]]::new()
+    foreach ($role in @("Implementer", "Reviewer")) {
+        $identity = Resolve-ToolIdentity -Tool $TaskActors[$role]
+        if (-not $identity.Ok -or $identity.Kind -ne "tool") {
+            $errors.Add("Single-vendor review: AI_HANDOFF.md Task Actors $role is '$($TaskActors[$role])', not a known tool. With one tool in both roles both actors must be named, so the verdict can be tied to the tool that reviewed.")
+        }
+    }
+    return ,$errors
+}
+
+# v3.17.0 (review fix): status, user-next and work must not offer a commit that
+# commit-check refuses. Returns the first reason, or "" when the gate would pass this check.
+# Called only at dispatch time, after every function in this file is defined.
+function Get-SingleVendorCommitBlock {
+    if ($State -ne "REVIEW_DONE") { return "" }
+    $actors = Get-TaskActors
+    if (-not (Test-SingleVendorTask -TaskActors $actors)) { return "" }
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    foreach ($e in (Get-SingleVendorActorErrors -TaskActors $actors)) { $reasons.Add($e) }
+    foreach ($e in (Test-HarnessReviewEvidence -Files @(Get-ReleaseChangedFiles) -RequireApproved -RequireApplied)) { $reasons.Add($e) }
+    if ($reasons.Count -eq 0) { return "" }
+    return $reasons[0]
+}
+
+function Write-SingleVendorCommitBlock {
+    param([string]$Reason)
+    Write-Host "Do this next: the review must come from the harness before this can be committed."
+    Write-Host "Reason:      $Reason"
+    Write-Host ""
+    Write-Host "Set State: READY_FOR_REVIEW / Waiting For: Reviewer in AI_HANDOFF.md, then run:"
+    Write-Host "  .\scripts\handoff.ps1 review-run"
+    Write-Host "  .\scripts\handoff.ps1 review-apply"
+    Write-Host "commit-check and commit-approved refuse this REVIEW_DONE until then."
+    Write-Host ""
+}
+
+function Get-SingleVendorReviewLine {
+    param([string]$Tool)
+    $display = (Resolve-ToolIdentity -Tool $Tool).Display
+    return "Single-vendor review: $display is both Implementer and Reviewer. It reviews in a separate read-only run started by the harness (review-run, then review-apply), never in the Implementer's context."
+}
+
+# v3.17.0: advisory, never a block. The long-standing default binding puts Master and
+# Reviewer on one tool, so the Reviewer checks code against a plan its own tool wrote.
+function Get-MasterReviewerAdvisoryLine {
+    $tools = @()
+    foreach ($role in @("Master", "Reviewer", "Implementer")) {
+        $identity = Resolve-ToolIdentity -Tool $Binding[$role]
+        if ($identity.Ok -and $identity.Kind -eq "tool" -and $tools -notcontains $identity.Canonical) { $tools += $identity.Canonical }
+    }
+    if ($tools.Count -lt 2) { return "" }
+    if (-not (Test-SameToolIdentity -First $Binding.Master -Second $Binding.Reviewer)) { return "" }
+    $display = (Resolve-ToolIdentity -Tool $Binding.Master).Display
+    return "Advisory: Master and Reviewer are both $display. A Reviewer from a different tool than the Master questions the plan as well as the code."
+}
+
+function Test-BrokenLineAsksFreshContext {
+    $present = @($script:ReviewIndependenceState.Values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($present.Count -eq 0) { return $false }
+    return (@($present | Where-Object { $_ -ne "fresh-context" }).Count -eq 0)
+}
+
 function Test-RoleCheckpoint {
     $errors = [System.Collections.Generic.List[string]]::new()
     $drifted = $false
     $driftErrors = 0
+    # v3.17.0 (review fix): count the errors that a valid Review Independence line could
+    # resolve, so 'roles -ReviewIndependence' may repair exactly that case and no other.
+    $modeErrors = 0
+    $sameToolErrors = 0
 
     # The bound identities must resolve before anything is compared. An
     # unrecognized tool in ROLE_ASSIGNMENT.md is rejected outright: guessing what
@@ -519,8 +652,17 @@ function Test-RoleCheckpoint {
             $errors.Add("Invalid role binding: $role='$($Binding[$role])'. $($bound.Reason)")
         }
     }
-    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) {
+    # v3.17.0: an unreadable Review Independence line is never guessed at. It fails here,
+    # so no role-dependent command runs under a rule nobody can state.
+    if (-not $script:ReviewIndependenceState.Ok) {
+        $errors.Add("Invalid review independence: $($script:ReviewIndependenceState.Error)")
+        $modeErrors++
+    }
+    # v3.17.0: under fresh-context one tool may hold both roles; its verdict then has to
+    # come from the harness, which commit-check and release-check verify.
+    if ((Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) -and -not (Test-FreshContextReview)) {
         $errors.Add("Invalid role binding: Reviewer and Implementer both resolve to the same tool ('$($Binding.Reviewer)' / '$($Binding.Implementer)'). An implementer cannot be the sole reviewer of its own work.")
+        $sameToolErrors++
     }
 
     $actors = @{ Implementer = ""; Reviewer = "" }
@@ -550,8 +692,9 @@ function Test-RoleCheckpoint {
 
     # The actual actors must also be two different tools, even when both match the
     # binding, because the binding itself can be edited between turns.
-    if (Test-SameToolIdentity -First $actors.Implementer -Second $actors.Reviewer) {
+    if ((Test-SameToolIdentity -First $actors.Implementer -Second $actors.Reviewer) -and -not (Test-FreshContextReview)) {
         $errors.Add("Independent-review invariant: Task Actors Implementer='$($actors.Implementer)' and Reviewer='$($actors.Reviewer)' resolve to the same tool.")
+        $sameToolErrors++
     }
 
     # DriftOnly means the ONLY problem is that Task Actors name different tools than
@@ -562,6 +705,10 @@ function Test-RoleCheckpoint {
         Errors = $errors
         Drifted = $drifted
         DriftOnly = ($drifted -and $driftErrors -eq $errors.Count)
+        # A one-tool binding is repairable only when the broken line already asks for
+        # fresh-context: every non-empty value it carries is fresh-context. A broken
+        # separate-tool line, or mixed values, is no way into fresh-context.
+        RepairableByMode = ($modeErrors -gt 0 -and ($errors.Count -eq ($modeErrors + $(if (Test-BrokenLineAsksFreshContext) { $sameToolErrors } else { 0 }))))
     }
 }
 
@@ -593,9 +740,23 @@ function Write-RoleCheckpointFailure {
         Write-Host ""
         Write-Host "  Do not hand-edit Task Actors on a finished task. That rewrites the audit"
         Write-Host "  record instead of retiring it."
+    } elseif (Test-FreshContextReview) {
+        Write-Host "  Correct .ai/roles/ROLE_ASSIGNMENT.md. Every bound tool must be a recognized identity."
     } else {
         Write-Host "  Correct .ai/roles/ROLE_ASSIGNMENT.md. Reviewer and Implementer must be two"
         Write-Host "  different known tools, and every bound tool must be a recognized identity."
+    }
+    # v3.17.0 (review fix): said whatever else went wrong, drift included.
+    if (-not $script:ReviewIndependenceState.Ok) {
+        Write-Host ""
+        Write-Host "  The 'Review Independence:' line must appear once and read separate-tool or fresh-context."
+        if ($Checkpoint.RepairableByMode) {
+            Write-Host "  Repair it with: .\scripts\handoff.ps1 roles -ReviewIndependence <separate-tool|fresh-context> -Yes"
+        } else {
+            Write-Host "  Repair it by hand in .ai/roles/ROLE_ASSIGNMENT.md: keep one line, for example"
+            Write-Host "  'Review Independence: separate-tool'. The roles command repairs it only when that"
+            Write-Host "  line, and the one-tool binding it would allow, are the only problems."
+        }
     }
     Write-Host ""
     Write-Host "No role-dependent action was performed."
@@ -1521,7 +1682,9 @@ function Test-RoleSwapAllowed {
     }
     $proposed = @{ Master = $Binding.Master; Reviewer = $Binding.Reviewer; Implementer = $Binding.Implementer }
     $proposed[$Role] = $Tool
-    if (Test-SameToolIdentity -First $proposed.Reviewer -Second $proposed.Implementer) {
+    # v3.17.0: under fresh-context one tool may hold both roles, so there is nothing to
+    # exchange and nothing to refuse; the verdict is checked at commit instead.
+    if ((Test-SameToolIdentity -First $proposed.Reviewer -Second $proposed.Implementer) -and -not (Test-FreshContextReview)) {
         if (@("Reviewer", "Implementer") -contains $Role) {
             $other = if ($Role -eq "Reviewer") { "Implementer" } else { "Reviewer" }
             $vacated = $Binding[$Role]
@@ -1549,6 +1712,40 @@ function Test-RoleSwapAllowed {
     return $result
 }
 
+# The history row is written into an existing '## Role Swap History' table, after its last
+# row. v3.17.0: the shipped ROLE_ASSIGNMENT.md has no such section, so on a fresh install
+# every swap printed "Recorded in the Role Swap History table" and recorded nothing. The
+# section is now created at the end of the file when it is missing. It is not added to the
+# template on purpose: the installer refreshes template sections on upgrade and carries
+# project-added ones across, so a history kept in the template would be wiped.
+function Add-RoleSwapHistoryRow {
+    param([System.Collections.Generic.List[string]]$Lines, [string]$Row)
+    $final = [System.Collections.Generic.List[string]]::new()
+    $inHistory = $false
+    $written = $false
+    foreach ($line in $Lines) {
+        if ($line.TrimEnd() -eq "## Role Swap History") { $inHistory = $true; $final.Add($line); continue }
+        if ($inHistory -and -not $written -and $line.Trim() -eq "" -and $final[$final.Count - 1].Trim() -match '^\|') {
+            $final.Add($Row); $written = $true
+        }
+        if ($inHistory -and -not $written -and $line -match '^##\s' -and $line.TrimEnd() -ne "## Role Swap History") {
+            $final.Add($Row); $written = $true
+        }
+        $final.Add($line)
+    }
+    if ($inHistory -and -not $written) { $final.Add($Row); $written = $true }
+    if (-not $inHistory) {
+        while ($final.Count -gt 0 -and $final[$final.Count - 1].Trim() -eq "") { $final.RemoveAt($final.Count - 1) }
+        $final.Add("")
+        $final.Add("## Role Swap History")
+        $final.Add("")
+        $final.Add("| Date | Before | After | Decided by |")
+        $final.Add("|---|---|---|---|")
+        $final.Add($Row)
+    }
+    return ,$final
+}
+
 function Set-RoleBinding {
     param([string]$Role, [string]$Tool, [bool]$AlsoTaskActors)
     $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
@@ -1570,20 +1767,7 @@ function Set-RoleBinding {
     $after = @{ Master = $before.Master; Reviewer = $before.Reviewer; Implementer = $before.Implementer }
     $after[$Role] = $Tool
     $historyRow = "| $((Get-Date).ToString('yyyy-MM-dd')) | Master=$($before.Master), Reviewer=$($before.Reviewer), Implementer=$($before.Implementer) | Master=$($after.Master), Reviewer=$($after.Reviewer), Implementer=$($after.Implementer) | User (handoff.ps1 roles) |"
-    $final = [System.Collections.Generic.List[string]]::new()
-    $inHistory = $false
-    $written = $false
-    foreach ($line in $out) {
-        if ($line.TrimEnd() -eq "## Role Swap History") { $inHistory = $true; $final.Add($line); continue }
-        if ($inHistory -and -not $written -and $line.Trim() -eq "" -and $final[$final.Count - 1].Trim() -match '^\|') {
-            $final.Add($historyRow); $written = $true
-        }
-        if ($inHistory -and -not $written -and $line -match '^##\s' -and $line.TrimEnd() -ne "## Role Swap History") {
-            $final.Add($historyRow); $written = $true
-        }
-        $final.Add($line)
-    }
-    if ($inHistory -and -not $written) { $final.Add($historyRow) }
+    $final = Add-RoleSwapHistoryRow -Lines $out -Row $historyRow
     [System.IO.File]::WriteAllLines($rolesPath, $final.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
 
     if ($AlsoTaskActors -and (Test-Path $HandoffFile)) {
@@ -1612,17 +1796,161 @@ function Write-RolesView {
     Write-Host "  Implementer: $($Binding.Implementer)   (writes the code)"
     Write-Host "  Reviewer:    $($Binding.Reviewer)   (checks it and gives the verdict)"
     Write-Host ""
-    Write-Host "Rule:        the Reviewer is never the Implementer. Master and Reviewer may be the same tool."
+    if (Test-FreshContextReview) {
+        Write-Host "Rule:        the Reviewer never shares a context with the Implementer. Review Independence: fresh-context -"
+        Write-Host "             the same tool may hold both roles, and then only a verdict from review-run counts."
+    } else {
+        Write-Host "Rule:        the Reviewer is never the Implementer. Master and Reviewer may be the same tool."
+    }
+    if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+        Write-Host "Review:      $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
+    $rolesAdvisory = Get-MasterReviewerAdvisoryLine
+    if ($rolesAdvisory -ne "") { Write-Host "Note:        $rolesAdvisory" }
     Write-Host "State:       $State / Waiting For: $WaitingFor"
     $ui = Get-RolesUiSetting
     Write-Host "Indicator:   $(if ($ui.Enabled) { 'on - a small window shows this and swaps roles with a click' } else { 'off - turn it on with: handoff.ps1 roles -Window' })"
     Write-Host ""
     Write-Host "Change one role:"
     Write-Host "  .\scripts\handoff.ps1 roles -SetRole Reviewer -SetTool `"Codex`""
+    Write-Host "Change review independence (separate-tool or fresh-context):"
+    Write-Host "  .\scripts\handoff.ps1 roles -ReviewIndependence $(if (Test-FreshContextReview) { 'separate-tool' } else { 'fresh-context' })"
+    Write-Host ""
+}
+
+# v3.17.0: -ReviewIndependence changes the review rule under the same guards as a role swap:
+# never while a turn runs, and never into a state the protocol would refuse to run under.
+function Test-ReviewIndependenceChangeAllowed {
+    param([string]$Value)
+    $result = @{ Ok = $true; Errors = [System.Collections.Generic.List[string]]::new(); Mode = "" }
+    $normalized = if ($null -eq $Value) { "" } else { $Value.Trim().ToLowerInvariant() }
+    if ($ReviewIndependenceValues -notcontains $normalized) {
+        $result.Ok = $false
+        $result.Errors.Add("-ReviewIndependence must be separate-tool or fresh-context (got: '$Value').")
+        return $result
+    }
+    $result.Mode = $normalized
+    if ($normalized -eq "fresh-context") {
+        $reviewerAdapter = Get-AdapterProfile -Role "Reviewer" -Tool $Binding.Reviewer
+        if (-not $reviewerAdapter.Callable) {
+            $result.Ok = $false
+            $result.Errors.Add("fresh-context needs a Reviewer the harness can start in its own read-only process, and '$($Binding.Reviewer)' has no callable Reviewer adapter. Bind the Reviewer to Codex or Claude Code first.")
+        }
+    } elseif (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) {
+        $result.Ok = $false
+        $result.Errors.Add("Reviewer and Implementer are both '$($Binding.Reviewer)', and separate-tool requires two different tools. Reassign a role first, for example: handoff.ps1 roles -SetRole Reviewer -SetTool `"<the other tool>`".")
+    }
+    $runState = Get-RunMarkerState
+    $bgState = Get-BackgroundRunState
+    if ($runState.Alive -or $bgState.Alive) {
+        $result.Ok = $false
+        $result.Errors.Add("A turn is running now. Wait for it ('handoff.ps1 wait') or stop it ('handoff.ps1 stop') before changing the review rule.")
+    }
+    return $result
+}
+
+function Set-ReviewIndependenceLine {
+    param([string]$Mode)
+    $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $rolesPath)) { return @{ Ok = $false; Error = "ROLE_ASSIGNMENT.md is missing." } }
+    $beforeMode = if ($script:ReviewIndependenceState.Ok) { $script:ReviewIndependenceState.Mode } else { "invalid" }
+    $lines = @(Get-Content -Encoding UTF8 -Path $rolesPath)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $replaced = $false
+    $lastRoleRow = -1
+    foreach ($line in $lines) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:') {
+            if (-not $replaced) { $out.Add("Review Independence: $Mode"); $replaced = $true }
+            continue
+        }
+        if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') { $lastRoleRow = $out.Count }
+        $out.Add($line)
+    }
+    if (-not $replaced) {
+        if ($lastRoleRow -lt 0) { return @{ Ok = $false; Error = "No role binding table found in ROLE_ASSIGNMENT.md to place the 'Review Independence:' line after." } }
+        $out.Insert($lastRoleRow + 1, "Review Independence: $Mode")
+        $out.Insert($lastRoleRow + 1, "")
+    }
+    $bindingText = "Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    $historyRow = "| $((Get-Date).ToString('yyyy-MM-dd')) | $bindingText, Review Independence=$beforeMode | $bindingText, Review Independence=$Mode | User (handoff.ps1 roles) |"
+    $final = Add-RoleSwapHistoryRow -Lines $out -Row $historyRow
+    [System.IO.File]::WriteAllLines($rolesPath, $final.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+    return @{ Ok = $true; Error = ""; Before = $beforeMode; After = $Mode }
+}
+
+function Invoke-ReviewIndependenceChange {
+    $check = Test-ReviewIndependenceChangeAllowed -Value $ReviewIndependence
+    if (-not $check.Ok) {
+        Write-Host ""
+        Write-Host "roles: blocked."
+        foreach ($err in $check.Errors) { Write-Host "Reason:      $err" }
+        Write-Host "Nothing was changed."
+        Write-Host ""
+        exit 1
+    }
+    $currentMode = if ($script:ReviewIndependenceState.Ok) { $script:ReviewIndependenceState.Mode } else { "invalid" }
+    if ($currentMode -eq $check.Mode) {
+        Write-Host ""
+        Write-Host "roles: Review Independence is already $($check.Mode). Nothing to change."
+        Write-Host ""
+        return
+    }
+    Write-Host ""
+    Write-Host "Changing the review rule."
+    Write-Host "  Review Independence: $currentMode -> $($check.Mode)"
+    if ($check.Mode -eq "fresh-context") {
+        Write-Host "  Meaning:     the Reviewer never shares a context with the Implementer. The same tool may"
+        Write-Host "               hold both roles; its verdict then counts only when review-run produced it in a"
+        Write-Host "               separate read-only process, and commit-check refuses a verdict written by hand."
+        Write-Host "  Weaker:      one vendor reviewing its own vendor's work misses what a second vendor would catch."
+        Write-Host "               Two tools remain the recommended setup."
+    } else {
+        Write-Host "  Meaning:     the Reviewer is never the same tool as the Implementer."
+    }
+    Write-Host "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (the Review Independence line + a history row)."
+    Write-Host "  Never:       no git, deploy, database or secret action; no turn is started."
+    Write-Host ""
+    if ($Yes) {
+        Write-Host "Confirmation: -Yes supplied; applying without an interactive prompt."
+    } else {
+        $confirm = Read-Host 'Type "yes" to change the review rule, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled."
+            exit 2
+        }
+    }
+    $applied = Set-ReviewIndependenceLine -Mode $check.Mode
+    if (-not $applied.Ok) {
+        Write-Host ""
+        Write-Host "roles: blocked."
+        Write-Host "Reason:      $($applied.Error)"
+        Write-Host ""
+        exit 1
+    }
+    $script:ReviewIndependenceState = Get-ReviewIndependence
+    Write-Host ""
+    Write-Host "roles: applied. Review Independence: $($applied.After)"
+    if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+        Write-Host "  $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
+    Write-Host ""
+    Write-Host "Recorded in the Role Swap History table. No turn was started and no git action was run."
     Write-Host ""
 }
 
 function Invoke-Roles {
+    if ($ScriptBoundParameters.ContainsKey('ReviewIndependence')) {
+        if (-not [string]::IsNullOrWhiteSpace($SetRole) -or -not [string]::IsNullOrWhiteSpace($SetTool)) {
+            Write-Host ""
+            Write-Host "roles: blocked."
+            Write-Host "Reason:      change one thing at a time - -ReviewIndependence cannot be combined with -SetRole or -SetTool."
+            Write-Host "Nothing was changed."
+            Write-Host ""
+            exit 1
+        }
+        Invoke-ReviewIndependenceChange
+        return
+    }
     if ($WindowOff) {
         Set-RolesUiSetting -Enabled $false
         Stop-RolesWindow
@@ -1715,6 +2043,9 @@ function Invoke-Roles {
     Write-Host "  Master:      $($applied.After.Master)"
     Write-Host "  Implementer: $($applied.After.Implementer)"
     Write-Host "  Reviewer:    $($applied.After.Reviewer)"
+    if (Test-SingleVendorReview -Reviewer $applied.After.Reviewer -Implementer $applied.After.Implementer) {
+        Write-Host "  $(Get-SingleVendorReviewLine -Tool $applied.After.Reviewer)"
+    }
     Write-Host ""
     Write-Host "Recorded in the Role Swap History table. No turn was started and no git action was run."
     Write-Host ""
@@ -1791,6 +2122,17 @@ function Read-Status {
         if (`$inStatus -and `$line -match '^- Current Task:\s*(.+)') { `$status.Task = `$Matches[1].Trim() }
     }
     return `$status
+}
+# v3.17.0: read-only. The window shows the review rule; it never changes it.
+function Get-RuleHint {
+    `$values = @()
+    foreach (`$line in (Get-Content -Encoding UTF8 -LiteralPath `$rolesPath -ErrorAction SilentlyContinue)) {
+        if (`$line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:(.*)`$') { `$values += `$Matches[1].Trim().ToLowerInvariant() }
+    }
+    if (`$values.Count -eq 0) { return 'the reviewer is never the implementer' }
+    if (`$values.Count -eq 1 -and `$values[0] -eq 'separate-tool') { return 'the reviewer is never the implementer' }
+    if (`$values.Count -eq 1 -and `$values[0] -eq 'fresh-context') { return 'review: fresh-context - harness-run verdict only' }
+    return 'review rule INVALID - every turn is blocked; see roles'
 }
 function Read-Run {
     `$run = [ordered]@{ Alive = `$false; Command = ''; StartedUtc = ''; Finished = `$false; ExitCode = '' }
@@ -1910,7 +2252,7 @@ foreach (`$role in `$roleOrder) {
 
 `$hint = New-Text 12 (`$y + 6) 336 18 `$grey 8 ([System.Drawing.FontStyle]::Regular)
 `$hint.Anchor = 'Top,Left,Right'
-`$hint.Text = 'the reviewer is never the implementer'
+`$hint.Text = (Get-RuleHint)
 `$form.Controls.Add(`$hint)
 
 `$timer = New-Object System.Windows.Forms.Timer
@@ -1934,7 +2276,7 @@ foreach (`$role in `$roleOrder) {
         `$hint.Text = 'a turn is running - roles are locked'
     } else {
         foreach (`$role in `$roleOrder) { `$roleButtons[`$role].Enabled = `$true }
-        `$hint.Text = 'the reviewer is never the implementer'
+        `$hint.Text = (Get-RuleHint)
         if (`$run.Finished) {
             if (`$run.ExitCode -eq '0') { `$runLabel.ForeColor = `$green; `$runLabel.Text = `$run.Command + '  finished  exit 0' }
             else { `$runLabel.ForeColor = `$red; `$runLabel.Text = `$run.Command + '  finished  exit ' + `$run.ExitCode }
@@ -2406,6 +2748,31 @@ function Get-LastUpdateActorTool {
         }
     }
     return ""
+}
+
+# v3.17.0 (review fix): an Implementer record is an Actor line naming the Implementer role
+# and no other role (the shipped templates teach '- Actor: Implementer', with no tool), or
+# the record the harness itself writes after an interrupted Implementer correction. A
+# review record left in Last Update is never one, whatever its Actor line says.
+function Test-LastUpdateIsImplementerRecord {
+    if (Test-LastUpdateIsReviewRecord) { return @{ Ok = $false; Why = "it is still the record of a review" } }
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+        if ($line -match '^-\s*Actor:\s*(.+)$') {
+            $text = $Matches[1].Trim()
+            if ($text -match '^Automation Recovery after interrupted') { return @{ Ok = $true; Why = "" } }
+            if (($text -match '(?i)\bImplementer\b') -and ($text -notmatch '(?i)\b(Master|Reviewer)\b')) { return @{ Ok = $true; Why = "" } }
+            return @{ Ok = $false; Why = "its Actor line is '$text'" }
+        }
+    }
+    return @{ Ok = $false; Why = "it has no '- Actor:' line" }
+}
+
+# The Last Update record review-apply writes. A hand-edited REVIEW_DONE does not carry it.
+function Test-LastUpdateIsReviewApplyRecord {
+    foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+        if ($line -match '(?i)applied from the captured review verdict via review-apply') { return $true }
+    }
+    return $false
 }
 
 function Invoke-Wait {
@@ -3431,6 +3798,32 @@ function Invoke-CodexImplementerTurn {
 # Dispatch the Implementer turn to whichever tool holds the role. Both branches return an
 # exit code with the same meaning, so every caller - cycle, loop, the no-op guard, the
 # exact-scope check - is unchanged and vendor-blind.
+# v3.17.0 (review fix): the role file is a local coordination file, exempt from the
+# clean-tree gate, and an Implementer turn is write-enabled. Without this check that turn
+# could flip Review Independence or the binding and then pass its own review.
+function Get-RoleFileHash {
+    $path = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "<absent>" }
+    try { return (Get-FileHash -Algorithm SHA256 -LiteralPath $path -ErrorAction Stop).Hash } catch { return "<unreadable>" }
+}
+
+function Assert-RoleFileUnchanged {
+    param([string]$Before, [string]$CommandLabel)
+    $after = Get-RoleFileHash
+    if ($after -ceq $Before) { return }
+    Write-Host ""
+    Write-Host "${CommandLabel}: blocked - the Implementer turn changed .ai/roles/ROLE_ASSIGNMENT.md."
+    Write-Host "Reason:      the role binding and Review Independence are the user's decision; an Implementer turn never edits them."
+    Write-Host "Stop category: Protocol Repair - inspect 'git diff -- .ai/roles/ROLE_ASSIGNMENT.md' and restore the file before continuing."
+    Write-Host "No review was run and nothing was committed."
+    Write-Host ""
+    if ($CommandLabel -eq "loop") { Write-LoopLog "stop reason=role-file-changed-by-implementer exit=6" }
+    # The same turn may also have leaked a credential. Report that too: the gate prints its
+    # own SECURITY STOP and exits 13, which outranks this stop.
+    Invoke-CredentialLeakGate -CommandLabel $CommandLabel
+    exit 6
+}
+
 function Invoke-ImplementerTurn {
     $implementerTool = Resolve-Actor -Role "Implementer" -Binding $script:Binding
     if (Test-SameToolIdentity -First $implementerTool -Second "Codex") {
@@ -3468,6 +3861,9 @@ function Get-AdapterProfile {
     $adapterIdentity = Resolve-ToolIdentity -Tool $Tool
     $isCodex  = ($adapterIdentity.Ok -and $adapterIdentity.Canonical -eq "codex")
     $isClaude = ($adapterIdentity.Ok -and $adapterIdentity.Canonical -eq "claude-code")
+    # v3.17.0: the safety text names the rule that is actually enforced.
+    $independenceRule = if (Test-FreshContextReview) { "Reviewer never shares a context with Implementer (Review Independence: fresh-context; one tool in both roles counts only through review-run + review-apply)" } else { "Reviewer != Implementer" }
+    $reviewerIndependenceRule = if (Test-FreshContextReview) { "the actual Reviewer must match the bound Reviewer; under Review Independence: fresh-context it may be the actual Implementer's tool, and its verdict then counts only from this harness-started run" } else { "the actual Reviewer must match the bound Reviewer and must not equal the actual Implementer" }
 
     if ($Role -eq "Implementer" -and ($isCodex -or $isClaude)) {
         # The Implementer is the only role Get-RolePermission grants write, and both tools
@@ -3483,7 +3879,7 @@ function Get-AdapterProfile {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $true; SupportedStates = @("READY_FOR_IMPLEMENTATION", "NEEDS_INVESTIGATION");
             Invocation = $invocation;
-            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); Reviewer != Implementer; clean tree except local handoff files; dynamic model profile resolves through local configuration and falls back to inherit; concrete high_reasoning routing requires -AllowModelEscalation; NEEDS_INVESTIGATION is source-read-only and checked after the turn; $toolLimits; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; declared scope enforced against git status after the turn; no commit/push/tag/deploy/db/secrets automation.";
+            SafetyLimits = "Explicit yes confirmation (interactive yes or -Yes); $independenceRule; clean tree except local handoff files; dynamic model profile resolves through local configuration and falls back to inherit; concrete high_reasoning routing requires -AllowModelEscalation; NEEDS_INVESTIGATION is source-read-only and checked after the turn; $toolLimits; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; declared scope enforced against git status after the turn; no commit/push/tag/deploy/db/secrets automation.";
             StopCategory = "Non-callable Actor"; UserAuthorizationRequired = "yes, before cycle or loop session";
             Reason = "READY_FOR_IMPLEMENTATION and read-only NEEDS_INVESTIGATION are automated for $($adapterIdentity.Display) in the Implementer role; planning and question turns remain manual.";
             NextStep = "Use handoff.ps1 cycle or loop for READY_FOR_IMPLEMENTATION or NEEDS_INVESTIGATION; use next + paste for other Implementer states."
@@ -3531,7 +3927,7 @@ function Get-AdapterProfile {
         return @{
             Role = $Role; Tool = $Tool; Callable = $true; AutoLoopEligible = $false; SupportedStates = @("READY_FOR_REVIEW");
             Invocation = "Capture: handoff.ps1 review-run ($runShape, explicit yes). Apply: handoff.ps1 review-apply (applies the captured verdict's local AI_HANDOFF.md transition, explicit yes).";
-            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; the actual Reviewer must match the bound Reviewer and must not equal the actual Implementer; Changed Files == git status; $toolLimits; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
+            SafetyLimits = "Explicit yes per command; READY_FOR_REVIEW only; $reviewerIndependenceRule; Changed Files == git status; $toolLimits; review-apply edits only AI_HANDOFF.md; not auto-run by loop/cycle by default; only PowerShell loop -IncludeReviewer may opt in; cycle never does; no commit/push/tag/deploy/db/secrets; no release action.";
             StopCategory = "Operator Manual Action"; UserAuthorizationRequired = "yes, explicit yes before review-run and review-apply; commit/release stay separate User authorizations";
             Reason = "review-run + review-apply complete the Reviewer's READY_FOR_REVIEW turn end-to-end for $($adapterIdentity.Display), read-only and fail-closed. Callable via explicit commands; PowerShell loop may include it only with -IncludeReviewer; cycle never does.";
             NextStep = "Run review-run to capture a verdict, then review-apply to set REVIEW_DONE (approved) or READY_FOR_IMPLEMENTATION (blocked)."
@@ -3631,13 +4027,18 @@ function Invoke-Adapters {
         }
     }
     Write-Host ""
-    Write-Host "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    if (Test-FreshContextReview) {
+        Write-Host "Swapping roles: handoff.ps1 roles -SetRole <role> -SetTool <tool>. Review Independence is fresh-context, so"
+        Write-Host "Reviewer and Implementer may be one tool; its verdict then counts only from review-run + review-apply."
+    } else {
+        Write-Host "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    }
     Write-Host ""
     Write-Host "Capability:  Approved commit executor"
     Write-Host "Callable:    yes (PowerShell only)"
     Write-Host "States:      REVIEW_DONE with Waiting For: User"
     Write-Host "Invocation:  commit-check [-Message `"<msg>`"]; commit-approved -Message `"<msg>`" -Authorize `"I_AUTHORIZE_COMMIT`""
-    Write-Host "Safety:      Exact user authorization token; Reviewer != Implementer; Changed Files == git status; commits only approved files; no push/tag/deploy/db/secrets."
+    Write-Host "Safety:      Exact user authorization token; $(if (Test-FreshContextReview) { 'Reviewer and Implementer differ, or one tool with a harness verdict (fresh-context)' } else { 'Reviewer != Implementer' }); Changed Files == git status; commits only approved files; no push/tag/deploy/db/secrets."
     Write-Host "Stop:        User Commit Authorization until token is supplied; Environment/Preflight when unavailable."
     Write-Host "User auth:   yes, exact token required for execution"
     Write-Host "Enable next: Use commit-check for dry run; use commit-approved only after independent review has set REVIEW_DONE."
@@ -3646,7 +4047,7 @@ function Invoke-Adapters {
     Write-Host "Callable:    yes (PowerShell only)"
     Write-Host "States:      REVIEW_DONE with Waiting For: User"
     Write-Host "Invocation:  release-check -Version vX.Y.Z; release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""
-    Write-Host "Safety:      Exact user authorization token; Reviewer != Implementer; Changed Files == git status; pre-release checks; commit before tag; no deploy/db/secrets/production-config actions."
+    Write-Host "Safety:      Exact user authorization token; $(if (Test-FreshContextReview) { 'Reviewer and Implementer differ, or one tool with a harness verdict (fresh-context)' } else { 'Reviewer != Implementer' }); Changed Files == git status; pre-release checks; commit before tag; no deploy/db/secrets/production-config actions."
     Write-Host "Stop:        User Release Authorization until token is supplied; Environment/Preflight when unavailable."
     Write-Host "User auth:   yes, exact token required for execution"
     Write-Host "Enable next: Use release-check for dry run; use release only after independent review has set REVIEW_DONE."
@@ -3682,6 +4083,7 @@ function Write-LoopLog {
 }
 
 $Binding = Get-RoleBinding
+$ReviewIndependenceState = Get-ReviewIndependence
 
 $HandoffStatus = Read-HandoffState -Lines $Lines
 $State         = $HandoffStatus.State
@@ -3710,9 +4112,27 @@ $RoleRecoveryAllowed = (
     $State -in @("REVIEW_DONE", "BLOCKED")
 )
 
-if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models') -and -not $RoleRecoveryAllowed) {
+# v3.17.0 (review fix): an invalid Review Independence line blocks every role-dependent
+# command, including roles. The one exception is the command that writes a valid line,
+# and only when that line is the whole problem: a one-tool binding counts, because
+# fresh-context would allow it and separate-tool is refused for it by the command itself.
+$ReviewIndependenceRepair = (
+    $Command -eq 'roles' -and
+    $ScriptBoundParameters.ContainsKey('ReviewIndependence') -and
+    [string]::IsNullOrWhiteSpace($SetRole) -and [string]::IsNullOrWhiteSpace($SetTool) -and
+    -not $RoleCheckpoint.Ok -and
+    $RoleCheckpoint.RepairableByMode
+)
+
+if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models') -and -not $RoleRecoveryAllowed -and -not $ReviewIndependenceRepair) {
     Write-RoleCheckpointFailure -Checkpoint $RoleCheckpoint
     exit 12
+}
+
+if ($ReviewIndependenceRepair) {
+    Write-Host ""
+    Write-Host "Role checkpoint: repairing the Review Independence line; no other role-dependent action runs."
+    foreach ($checkpointError in $RoleCheckpoint.Errors) { Write-Host "  $checkpointError" }
 }
 
 if ($RoleRecoveryAllowed -and -not $RoleCheckpoint.Ok) {
@@ -3830,6 +4250,8 @@ function Invoke-UserNext {
     }
 
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+        $userNextBlock = Get-SingleVendorCommitBlock
+        if ($userNextBlock -ne "") { Write-SingleVendorCommitBlock -Reason $userNextBlock; return }
         Write-Host "Do this next: approve the guarded local commit if you are satisfied with the review."
         Write-Host ""
         Write-Host "Command:"
@@ -3884,6 +4306,11 @@ function Invoke-Work {
     Write-PushReminder
     Write-Host ""
     if (Write-NextTurnGeneratedWarning) { Write-Host "" }
+    # v3.17.0: say it out loud when one tool reviews its own role's work.
+    if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+        Write-Host "Review:       $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+        Write-Host ""
+    }
     $workUi = Get-RolesUiSetting
     if (-not $workUi.Present) {
         Write-Host "Roles:        Master=$($Binding.Master), Implementer=$($Binding.Implementer), Reviewer=$($Binding.Reviewer)"
@@ -3916,6 +4343,8 @@ function Invoke-Work {
     }
 
     if ($State -eq "REVIEW_DONE" -and $WaitingFor -eq "User") {
+        $workCommitBlock = Get-SingleVendorCommitBlock
+        if ($workCommitBlock -ne "") { Write-SingleVendorCommitBlock -Reason $workCommitBlock; return }
         Write-Host "Next action: approve the guarded local commit if you are satisfied with the review."
         Write-Host ""
         Write-Host "Run:"
@@ -3975,8 +4404,13 @@ function Invoke-Work {
                     Write-Host "  $($workAdapter.NextStep)"
                     Write-Host ""
                     Write-Host "Each command asks for confirmation (or takes -Yes) and writes its own local evidence."
-                    Write-Host "To take the turn manually in $actor instead:"
-                    Write-Host "  .\scripts\handoff.ps1 next -Clip"
+                    if ($role -eq "Reviewer" -and (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer)) {
+                        # v3.17.0: a manual review would not count, so do not offer one as an equal path.
+                        Write-Host "A review taken by hand in $actor will not count: commit-check accepts only the review-run verdict."
+                    } else {
+                        Write-Host "To take the turn manually in $actor instead:"
+                        Write-Host "  .\scripts\handoff.ps1 next -Clip"
+                    }
                 } else {
                     Write-Host "Next action: open $actor and use the standard handoff prompt."
                     Write-Host ""
@@ -4402,6 +4836,16 @@ function Invoke-Doctor {
     } else {
         Write-DoctorLine "FAIL" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
     }
+    # v3.17.0: information, never a failure. An invalid Review Independence line fails
+    # through the role checkpoint below.
+    if (Test-FreshContextReview) {
+        Write-DoctorLine "INFO" "Review independence: fresh-context - the Reviewer never shares a context with the Implementer; the same tool may hold both roles."
+        if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+            Write-DoctorLine "INFO" (Get-SingleVendorReviewLine -Tool $Binding.Reviewer)
+        }
+    }
+    $doctorAdvisory = Get-MasterReviewerAdvisoryLine
+    if ($doctorAdvisory -ne "") { Write-DoctorLine "INFO" $doctorAdvisory }
     if ($RoleCheckpoint.Ok) {
         Write-DoctorLine "OK" "Role checkpoint: binding and derived Task Actors are synchronized."
     } else {
@@ -4620,8 +5064,16 @@ function Invoke-Status {
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
     Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+        Write-Host "Review:       $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
     Write-Host "Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status"
-    Write-Host "Commit:       $CommitStatus"
+    $statusCommitBlock = Get-SingleVendorCommitBlock
+    if ($statusCommitBlock -ne "") {
+        Write-Host "Commit:       Blocked - commit-check refuses this single-vendor REVIEW_DONE. $statusCommitBlock"
+    } else {
+        Write-Host "Commit:       $CommitStatus"
+    }
     $skillAdapter = Join-Path (Get-Location) ".agents/skills/codex-claude-handoff/SKILL.md"
     if (Test-Path $skillAdapter) {
         Write-Host "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
@@ -4677,6 +5129,16 @@ function Get-NextTurnModelLines {
     return $out.ToArray()
 }
 
+function Get-NextTurnIndependenceLines {
+    param([string]$Tool)
+    return @(
+        "",
+        "## Review Independence",
+        (Get-SingleVendorReviewLine -Tool $Tool),
+        "Take this turn with handoff.ps1 review-run, then handoff.ps1 review-apply. A verdict written by hand in this window is refused by commit-check, commit-approved and release-check."
+    )
+}
+
 function Invoke-Next {
     param([bool]$MenuMode = $false, [bool]$Silent = $false)
 
@@ -4729,6 +5191,11 @@ function Invoke-Next {
     $ntLines.Add("## Next Recommended Step (from AI_HANDOFF.md)")
     if ($nextStep -ne "") { $ntLines.Add($nextStep) } else { $ntLines.Add("(none - see AI_HANDOFF.md)") }
     if ($keyContext -ne "") { $ntLines.Add(""); $ntLines.Add("## Key Context"); $ntLines.Add($keyContext) }
+    # v3.17.0: a Reviewer turn under single-vendor review says so, and says why a verdict
+    # written in this window will not count. Same lines in handoff.sh and next-step.
+    if (-not $isMismatch -and $role -eq "Reviewer" -and (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer)) {
+        foreach ($independenceLine in (Get-NextTurnIndependenceLines -Tool $Binding.Reviewer)) { $ntLines.Add($independenceLine) }
+    }
 
     # v3.10.0: name the model this turn should run on. A person driving a window cannot see
     # the task's profile, so a Master left on the strongest model ran ordinary turns on it
@@ -4793,7 +5260,11 @@ function Invoke-Next {
             if ($turnAdapter.Callable) {
                 Write-Host "Automated route available - no paste required:"
                 Write-Host "  $($turnAdapter.NextStep)"
-                Write-Host "Manual paste above remains valid if you prefer to drive the turn yourself."
+                if ($role -eq "Reviewer" -and (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer)) {
+                    Write-Host "Single-vendor review: a review taken by pasting this prompt will not count; commit-check accepts only the review-run verdict."
+                } else {
+                    Write-Host "Manual paste above remains valid if you prefer to drive the turn yourself."
+                }
                 Write-Host ""
             }
 
@@ -5301,9 +5772,22 @@ function Get-ReleasePlan {
     }
     # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
     # are the same tool and must not pass this gate as two different reviewers.
-    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
+    # v3.17.0: under fresh-context the same tool may hold both roles, and then the verdict
+    # must be the harness's own: see Test-HarnessReviewEvidence.
+    $singleVendor = Test-SingleVendorTask -TaskActors $taskActors
+    if ((Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) -and -not (Test-FreshContextReview)) {
         $ok = $false
         $errors.Add("Release audit invariant violation: actual Reviewer must not equal actual Implementer.")
+    }
+    if ($singleVendor) {
+        foreach ($actorError in (Get-SingleVendorActorErrors -TaskActors $taskActors)) {
+            $ok = $false
+            $errors.Add($actorError)
+        }
+        foreach ($evidenceError in (Test-HarnessReviewEvidence -Files @($releaseFiles) -RequireApproved -RequireApplied)) {
+            $ok = $false
+            $errors.Add($evidenceError)
+        }
     }
     if (-not $gitState.Ok) {
         $ok = $false
@@ -5365,6 +5849,7 @@ function Get-ReleasePlan {
         TaskActors = $taskActors
         Package = $package
         ReleaseFromHead = $releaseFromHead
+        SingleVendor = $singleVendor
     }
 }
 
@@ -5389,9 +5874,22 @@ function Get-CommitPlan {
     }
     # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
     # are the same tool and must not pass this gate as two different reviewers.
-    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
+    # v3.17.0: a single-vendor review counts only when the harness produced the verdict. A
+    # REVIEW_DONE set in a chat window cannot show that the Reviewer had a clean context.
+    $singleVendor = Test-SingleVendorTask -TaskActors $taskActors
+    if ((Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) -and -not (Test-FreshContextReview)) {
         $ok = $false
         $errors.Add("Commit audit invariant violation: actual Reviewer must not equal actual Implementer.")
+    }
+    if ($singleVendor) {
+        foreach ($actorError in (Get-SingleVendorActorErrors -TaskActors $taskActors)) {
+            $ok = $false
+            $errors.Add($actorError)
+        }
+        foreach ($evidenceError in (Test-HarnessReviewEvidence -Files @($commitFiles) -RequireApproved -RequireApplied)) {
+            $ok = $false
+            $errors.Add($evidenceError)
+        }
     }
     if (-not $gitState.Ok) {
         $ok = $false
@@ -5416,6 +5914,7 @@ function Get-CommitPlan {
         CommitFiles = $commitFiles
         GitFiles = $gitState.Files
         TaskActors = $taskActors
+        SingleVendor = $singleVendor
     }
 }
 
@@ -5432,6 +5931,9 @@ function Show-CommitPlan {
     Write-Host "Global binding Implementer: $($Binding.Implementer)"
     Write-Host "Actual Reviewer:            $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
     Write-Host "Actual Implementer:         $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    if ($Plan.SingleVendor) {
+        Write-Host "Review:                     $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
     Write-Host ""
 
     Write-Host "Files from AI_HANDOFF.md Changed Files (local coordination files excluded):"
@@ -5524,6 +6026,9 @@ function Show-ReleasePlan {
     Write-Host "Global binding Implementer: $($Binding.Implementer)"
     Write-Host "Actual Reviewer:            $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
     Write-Host "Actual Implementer:         $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    if ($Plan.SingleVendor) {
+        Write-Host "Review:                     $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
     Write-Host ""
 
     Write-Host "Files from AI_HANDOFF.md Changed Files (local coordination files excluded):"
@@ -6135,7 +6640,10 @@ function Get-ReviewPlan {
     }
     # v3.4.1: canonical identity, not display text. 'Codex' and 'Codex Window'
     # are the same tool and must not pass this gate as two different reviewers.
-    if (Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) {
+    # v3.17.0: relaxed only under a declared fresh-context, where this review runs as its own
+    # harness-started read-only process and commit-check later verifies that it did.
+    $singleVendor = Test-SingleVendorTask -TaskActors $taskActors
+    if ((Test-SameToolIdentity -First $taskActors.Reviewer -Second $taskActors.Implementer) -and -not (Test-FreshContextReview)) {
         $ok = $false
         $errors.Add("Independent-review invariant: the actual Reviewer must not equal the actual Implementer.")
     }
@@ -6151,7 +6659,18 @@ function Get-ReviewPlan {
         $errors.Add("AI_HANDOFF.md '## Last Update' does not record who took the turn that produced these changes. Add '- Actor: <tool> (<role>)' naming who actually did the work - including yourself, if you did it. Independent review starts with knowing who to be independent of.")
     }
     $lastTurnActor = Get-LastUpdateActorTool
-    if ($lastTurnActor -ne "" -and -not (Test-LastUpdateIsReviewRecord) -and (Test-SameToolIdentity -First $lastTurnActor -Second $boundReviewer)) {
+    if ($singleVendor) {
+        # v3.17.0: one tool holds Implementer and Reviewer, so the tool name cannot tell an
+        # Implementer turn from a Master that did the work itself. A review may proceed only
+        # after an Implementer record: an Actor line naming the Implementer role (tool name
+        # optional), and not a leftover review record. This reads a label the agent writes
+        # itself, so it catches an honest record of who did the work, not a false one.
+        $implementerRecord = Test-LastUpdateIsImplementerRecord
+        if (-not $implementerRecord.Ok) {
+            $ok = $false
+            $errors.Add("Self-review guard (single-vendor review): one tool holds both Implementer and Reviewer here, so a review may proceed only after an Implementer turn, and AI_HANDOFF.md Last Update is not an Implementer record ($($implementerRecord.Why)). If the Implementer did this work, record '- Actor: <tool> (Implementer)'. If a Master did it, or the last record is still a review, the Implementer must take the next turn first. This guard reads a label the agent writes itself; it stops an honest mismatch, not a false label.")
+        }
+    } elseif ($lastTurnActor -ne "" -and -not (Test-LastUpdateIsReviewRecord) -and (Test-SameToolIdentity -First $lastTurnActor -Second $boundReviewer)) {
         $ok = $false
         $errors.Add("Self-review guard: AI_HANDOFF.md Last Update records '$lastTurnActor' as the actor of the last turn, and that is the Reviewer. Either this work was not done by the recorded Implementer '$($taskActors.Implementer)', or Last Update names the wrong actor. Correct the record, or have the other tool review it; a tool never reviews work it performed.")
     }
@@ -6220,6 +6739,7 @@ function Get-ReviewPlan {
         BoundImplementer = $boundImplementer
         ReviewerIsCodex = $reviewerIsCodex
         Cli = $cli
+        SingleVendor = $singleVendor
     }
 }
 
@@ -6235,6 +6755,9 @@ function Show-ReviewPlan {
     Write-Host "Bound Implementer:   $($Plan.BoundImplementer)"
     Write-Host "Actual Reviewer:     $(if ($Plan.TaskActors.Reviewer -ne '') { $Plan.TaskActors.Reviewer } else { '(missing or ambiguous)' })"
     Write-Host "Actual Implementer:  $(if ($Plan.TaskActors.Implementer -ne '') { $Plan.TaskActors.Implementer } else { '(missing or ambiguous)' })"
+    if ($Plan.SingleVendor) {
+        Write-Host "Review:              $(Get-SingleVendorReviewLine -Tool $Plan.BoundReviewer)"
+    }
     Write-Host ""
     Write-Host "Files to review (from AI_HANDOFF.md Changed Files; local coordination files excluded):"
     if ($Plan.ReviewFiles.Count -eq 0) { Write-Host "  (none)" } else { foreach ($f in $Plan.ReviewFiles) { Write-Host "  $f" } }
@@ -6417,21 +6940,186 @@ function Get-ReviewTestEvidence {
     }
 
     $pairs = [System.Collections.Generic.List[string]]::new()
+    # v3.17.0: the same hashes, kept structured, so a single-vendor review can be bound to
+    # the exact bytes the Reviewer was told to verify.
+    $fileHashes = [System.Collections.Generic.List[object]]::new()
     foreach ($f in $Files) {
-        $full = Join-Path (Get-Location) $f
-        if (Test-Path -LiteralPath $full) {
-            try {
-                $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLowerInvariant()
-                $pairs.Add("$f = $h")
-            } catch {
-                $pairs.Add("$f = UNREADABLE")
-            }
-        } else {
-            $pairs.Add("$f = MISSING")
-        }
+        $h = Get-ReviewFileHash -RelativePath $f
+        $pairs.Add("$f = $h")
+        $fileHashes.Add([ordered]@{ path = [string]$f; sha256 = $h })
     }
 
-    return @{ Summary = $summary; Hashes = [string]::Join(" ; ", $pairs) }
+    return @{ Summary = $summary; Hashes = [string]::Join(" ; ", $pairs); Files = $fileHashes }
+}
+
+# SHA-256 of one file under review, lowercase hex, or MISSING / UNREADABLE. The review
+# prompt, the harness evidence record and the commit-time check all use this one function,
+# so all three agree on what a file's content is.
+function Get-ReviewFileHash {
+    param([string]$RelativePath)
+    $full = Join-Path (Get-Location) $RelativePath
+    if (-not (Test-Path -LiteralPath $full)) { return "MISSING" }
+    try {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $full -ErrorAction Stop).Hash.ToLowerInvariant()
+    } catch {
+        return "UNREADABLE"
+    }
+}
+
+# --- v3.17.0: harness evidence for a single-vendor review ---
+#
+# Under fresh-context with one tool in both roles, a verdict counts only when the harness
+# produced it. review-run proves that as far as local files can: after the Reviewer's own
+# process has exited and its capture passed every check, the harness appends ONE record to
+# REVIEW.jsonl naming the task, the Reviewer, the SHA-256 of the capture (REVIEW_LAST.md),
+# and the SHA-256 of every file the Reviewer was told to verify. commit-check,
+# commit-approved and release-check then require that record, the APPROVED capture it
+# names, the review-apply record in AI_HANDOFF.md, and the same bytes on disk.
+#
+# What this proves: the verdict being relied on is the one review-run captured for THIS
+# task, it was not replaced or edited after capture, review-apply applied it, and the files
+# being committed are byte-for-byte the files that review read. A REVIEW_DONE typed into a
+# chat window, an old capture from another task, a BLOCKED capture, a capture edited after
+# the run, and code changed after the review are all refused.
+#
+# What it does not prove: these are local files with no secret behind them. Something with
+# write access to the working tree - including an agent in a chat window that sets out to do
+# so - can forge a capture and a matching record. The check stops a manual review from
+# passing as a harness review by accident or by habit; it is not a cryptographic proof of
+# provenance. It also cannot make one vendor's model see what a second vendor would.
+$HarnessReviewEvidencePattern = '^\s*\{\s*"handoffReviewEvidence"\s*:'
+
+function Write-HarnessReviewEvidence {
+    param([string]$JsonlPath, [string]$LastPath, [string]$Kind, [object[]]$Files, [string]$Reviewer, [string]$Implementer)
+    $record = [ordered]@{
+        handoffReviewEvidence = 1
+        writtenBy = "handoff.ps1 review-run"
+        kind = $Kind
+        task = $CurrentTask
+        reviewer = (Resolve-ToolIdentity -Tool $Reviewer).Display
+        implementer = (Resolve-ToolIdentity -Tool $Implementer).Display
+        capture = (Get-ReviewFileHash -RelativePath (Split-Path -Leaf $LastPath))
+        files = @($Files)
+        writtenUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    $json = $record | ConvertTo-Json -Compress -Depth 6
+    Add-Content -LiteralPath $JsonlPath -Value $json -Encoding utf8 -ErrorAction Stop
+}
+
+# SHA-256 of the one harness record line, or "" when there is not exactly one. review-apply
+# writes it into Last Update; commit and release compare it, so the applied verdict is tied
+# to one specific review-run even when two captures happen to have identical bytes.
+function Get-HarnessReviewEvidenceLineHash {
+    $path = Join-Path (Get-Location) $ReviewJsonlName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "" }
+    $found = @(Get-Content -Encoding UTF8 -LiteralPath $path | Where-Object { $_ -match $HarnessReviewEvidencePattern })
+    if ($found.Count -ne 1) { return "" }
+    return (Get-TextSha256 -Text ([string]$found[0]).Trim())
+}
+
+function Get-HarnessReviewEvidenceRecords {
+    $records = [System.Collections.Generic.List[object]]::new()
+    $path = Join-Path (Get-Location) $ReviewJsonlName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return ,$records }
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $path)) {
+        if ($line -notmatch $HarnessReviewEvidencePattern) { continue }
+        try {
+            $records.Add(($line.Trim() | ConvertFrom-Json -ErrorAction Stop))
+        } catch {
+            $records.Add("malformed")
+        }
+    }
+    return ,$records
+}
+
+# Returns the list of reasons the current task's single-vendor verdict cannot be relied on;
+# an empty list means it can. -Kind and -Files describe what the record must cover:
+# a code review of Changed Files, or (review-apply of a plan) a plan review of AI_HANDOFF.md.
+function Test-HarnessReviewEvidence {
+    param([string]$Kind = "code", [string[]]$Files = @(), [switch]$RequireApproved, [switch]$RequireApplied)
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $prefix = "Single-vendor review"
+    $lastPath = Join-Path (Get-Location) $ReviewLastName
+    if (-not (Test-Path -LiteralPath $lastPath -PathType Leaf)) {
+        $errors.Add("${prefix}: there is no harness review capture ($ReviewLastName). With one tool in both roles only a verdict from 'handoff.ps1 review-run' followed by 'review-apply' counts; a review taken by hand in a chat window cannot show that the Reviewer had a clean context.")
+        return ,$errors
+    }
+    if ($RequireApproved) {
+        $verdict = Get-VerdictFromCapture -Path $lastPath -ExpectedTask $CurrentTask -BoundReviewer $Binding.Reviewer
+        if (-not $verdict.Ok) {
+            $errors.Add("${prefix}: the harness capture is not a usable verdict for this task. $($verdict.Error)")
+        } elseif ($verdict.Verdict -cne "APPROVED") {
+            $errors.Add("${prefix}: the harness capture's verdict is $($verdict.Verdict), not APPROVED.")
+        }
+    }
+    if ($RequireApplied -and -not (Test-LastUpdateIsReviewApplyRecord)) {
+        $errors.Add("${prefix}: AI_HANDOFF.md Last Update is not the record review-apply writes, so REVIEW_DONE was not set by review-apply. Run 'handoff.ps1 review-run' and then 'handoff.ps1 review-apply'.")
+    } elseif ($RequireApplied) {
+        $appliedCapture = ""
+        foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+            if ($line -match '^-\s*Capture SHA-256:\s*([0-9a-fA-F]{64})\s*$') { $appliedCapture = $Matches[1].ToLowerInvariant() }
+        }
+        $currentCapture = Get-ReviewFileHash -RelativePath $ReviewLastName
+        if ($appliedCapture -eq "") {
+            $errors.Add("${prefix}: the review-apply record in AI_HANDOFF.md names no capture SHA-256, so it cannot be tied to the current verdict. Run 'handoff.ps1 review-apply' for this capture.")
+        } elseif ($appliedCapture -ne $currentCapture) {
+            $errors.Add("${prefix}: the review-apply record names capture $appliedCapture, but the current $ReviewLastName is $currentCapture. REVIEW_DONE was applied from a different review (for example a plan review); apply this verdict with 'handoff.ps1 review-apply'.")
+        } else {
+            $appliedRecord = ""
+            foreach ($line in (Get-SectionLines -Lines $Lines -Heading "Last Update")) {
+                if ($line -match '^-\s*Harness Record SHA-256:\s*([0-9a-fA-F]{64})\s*$') { $appliedRecord = $Matches[1].ToLowerInvariant() }
+            }
+            $currentRecord = Get-HarnessReviewEvidenceLineHash
+            if ($appliedRecord -eq "" -or $appliedRecord -ne $currentRecord) {
+                $errors.Add("${prefix}: the review-apply record does not name the current harness record in $ReviewJsonlName, so REVIEW_DONE was applied from a different review (for example a plan review); apply this verdict with 'handoff.ps1 review-apply'.")
+            }
+        }
+    }
+    $records = Get-HarnessReviewEvidenceRecords
+    if ($records.Count -eq 0) {
+        $errors.Add("${prefix}: $ReviewJsonlName carries no harness evidence record. review-run writes one after the Reviewer's own read-only process has finished; without it the verdict cannot be tied to that run. Run 'handoff.ps1 review-run'.")
+        return ,$errors
+    }
+    if ($records.Count -gt 1) {
+        $errors.Add("${prefix}: $ReviewJsonlName carries $($records.Count) harness evidence records, and one review-run writes exactly one. Run 'handoff.ps1 review-run' again.")
+        return ,$errors
+    }
+    $record = $records[0]
+    if ($record -is [string] -or $null -eq $record.task -or $null -eq $record.capture) {
+        $errors.Add("${prefix}: the harness evidence record in $ReviewJsonlName is malformed. Run 'handoff.ps1 review-run' again.")
+        return ,$errors
+    }
+    if ([string]$record.task -cne $CurrentTask) {
+        $errors.Add("${prefix}: the harness evidence is for task '$($record.task)', not the current task '$CurrentTask'.")
+    }
+    if ([string]$record.kind -ne $Kind) {
+        $errors.Add("${prefix}: the harness evidence is for a $($record.kind) review, and this step needs a $Kind review.")
+    }
+    if (-not (Test-SameToolIdentity -First ([string]$record.reviewer) -Second $Binding.Reviewer)) {
+        $errors.Add("${prefix}: the harness evidence names Reviewer '$($record.reviewer)', not the bound Reviewer '$($Binding.Reviewer)'.")
+    }
+    $captureNow = Get-ReviewFileHash -RelativePath $ReviewLastName
+    if ([string]$record.capture -ne $captureNow) {
+        $errors.Add("${prefix}: $ReviewLastName changed after review-run captured it (recorded $($record.capture), now $captureNow). A capture edited by hand is not the harness verdict.")
+    }
+    $recorded = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+    foreach ($entry in @($record.files)) {
+        if ($null -eq $entry -or $null -eq $entry.path) { continue }
+        $recorded[[string]$entry.path] = [string]$entry.sha256
+    }
+    if (-not (Test-SameFileSet -Expected @($Files) -Actual @($recorded.Keys))) {
+        $errors.Add("${prefix}: the harness review covered [$([string]::Join(', ', @($recorded.Keys)))], but the files declared now are [$([string]::Join(', ', @($Files)))]. Run 'handoff.ps1 review-run' on the current Changed Files.")
+    } else {
+        $changed = @()
+        foreach ($f in $Files) {
+            $was = $recorded[[string]$f]
+            if ($was -eq "UNREADABLE" -or $was -ne (Get-ReviewFileHash -RelativePath $f)) { $changed += $f }
+        }
+        if ($changed.Count -gt 0) {
+            $errors.Add("${prefix}: these files changed after the harness review read them: $([string]::Join(', ', $changed)). The verdict covers other bytes; run 'handoff.ps1 review-run' again.")
+        }
+    }
+    return ,$errors
 }
 
 function Invoke-ReviewRun {
@@ -6530,6 +7218,8 @@ function Invoke-ReviewRun {
     # way, so a plan edited after the evidence was produced fails the same check.
     if ($plan.PlanMode) {
         $planEvidence = Get-ReviewTestEvidence -Files @("AI_HANDOFF.md") -PlanReview
+        $harnessEvidenceKind = "plan"
+        $harnessEvidenceFiles = $planEvidence.Files
         Write-Host ""
         Write-Host "PLAN REVIEW: Changed Files is empty and AI_HANDOFF.md carries a Plan section."
         Write-Host "Codex will judge the plan's scope and acceptance criteria, not code."
@@ -6548,6 +7238,8 @@ function Invoke-ReviewRun {
             "Do not write the word VERDICT, REVIEWER, TASK, or REASON at the start of any earlier line."
     } else {
     $evidence = Get-ReviewTestEvidence -Files @($plan.ReviewFiles)
+    $harnessEvidenceKind = "code"
+    $harnessEvidenceFiles = $evidence.Files
 
     $reviewPrompt = "Read-only code review. Be fast and minimal: keep tool calls to a strict minimum and do not explore the repository broadly. " +
         "PROTOCOL-RUN TEST EVIDENCE (produced by handoff.ps1 itself, outside your sandbox, immediately before this review): $($evidence.Summary) " +
@@ -6742,6 +7434,19 @@ function Invoke-ReviewRun {
         exit 5
     }
 
+    if (Test-FreshContextReview) {
+        try {
+            Write-HarnessReviewEvidence -JsonlPath $jsonlPath -LastPath $lastPath -Kind $harnessEvidenceKind -Files @($harnessEvidenceFiles) -Reviewer $plan.BoundReviewer -Implementer $plan.BoundImplementer
+        } catch {
+            Remove-Item $lastPath -Force -ErrorAction SilentlyContinue
+            Write-Host "review-run: blocked."
+            Write-Host "Reason: the harness evidence record could not be written to $ReviewJsonlName ($_). Under fresh-context a verdict without it cannot count, so the capture was discarded."
+            Write-Host "Stop category: Environment/Preflight - not a user decision."
+            Write-Host "No git changes were made and AI_HANDOFF.md was not modified."
+            Write-Host ""
+            exit 5
+        }
+    }
     Write-Host "review-run: complete (read-only capture)."
     Write-Host "Captured artifacts (local, gitignored - do not commit):"
     Write-Host "  $ReviewJsonlName"
@@ -7085,6 +7790,20 @@ function Invoke-ReviewApply {
         Write-Host ""
         exit 1
     }
+    # v3.17.0: one tool in both roles - apply only a verdict review-run produced for these bytes.
+    if ($base.SingleVendor) {
+        $applyKind = if ($base.PlanMode) { "plan" } else { "code" }
+        $applyFiles = if ($base.PlanMode) { @("AI_HANDOFF.md") } else { @($base.ReviewFiles) }
+        $applyEvidenceErrors = Test-HarnessReviewEvidence -Kind $applyKind -Files $applyFiles
+        if ($applyEvidenceErrors.Count -gt 0) {
+            Write-Host "review-apply: blocked."
+            foreach ($e in $applyEvidenceErrors) { Write-Host "Reason: $e" }
+            Write-Host "Stop category: Protocol Repair - a correction, not a product decision."
+            Write-Host "No files were changed and AI_HANDOFF.md was not modified."
+            Write-Host ""
+            exit 1
+        }
+    }
 
     $date = (Get-Date).ToString("yyyy-MM-dd")
     # v3.4.4: an approved PLAN authorizes implementation; it does not finish the task.
@@ -7128,6 +7847,13 @@ function Invoke-ReviewApply {
         "- Reason: $($verdict.Reason)",
         "- Source: $ReviewLastName (local, gitignored capture from review-run; not committed)"
     )
+    # v3.17.0 (review fix): name the exact capture applied, so a leftover record (a plan
+    # review, an earlier round) can never stand in for a code verdict that was not applied.
+    if (Test-FreshContextReview) {
+        $lastUpdateBody += "- Capture SHA-256: $(Get-ReviewFileHash -RelativePath $ReviewLastName)"
+        $appliedRecordHash = Get-HarnessReviewEvidenceLineHash
+        if ($appliedRecordHash -ne "") { $lastUpdateBody += "- Harness Record SHA-256: $appliedRecordHash" }
+    }
     if ($verdict.Verdict -eq "APPROVED") {
         $nextStepBody = @(
             "- User: the Reviewer (Codex) attested technical readiness (REVIEW_DONE). Grant commit",
@@ -7641,7 +8367,9 @@ function Get-MasterRecommendationFromCapture {
             return $result
         }
         # Canonical comparison: two aliases of one tool are not two tools.
-        if (Test-SameToolIdentity -First $implementer -Second $reviewer) {
+        # v3.17.0: fresh-context allows one tool in both roles; its verdict is then checked
+        # against the harness capture at commit and release instead.
+        if ((Test-SameToolIdentity -First $implementer -Second $reviewer) -and -not (Test-FreshContextReview)) {
             $result.Error = "IMPLEMENTER '$implementer' and REVIEWER '$reviewer' resolve to the same tool. An implementer cannot be the sole reviewer of its own work."
             return $result
         }
@@ -8107,7 +8835,9 @@ function Invoke-Cycle {
 
     # Role invariant: the Reviewer must never be the same tool as the Implementer.
     # An implementer cannot be the sole reviewer of its own work.
-    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $implementerTool) {
+    # v3.17.0: unless the project declared fresh-context, where the same tool reviews in a
+    # separate harness-started read-only run and commit-check verifies that it did.
+    if ((Test-SameToolIdentity -First $Binding.Reviewer -Second $implementerTool) -and -not (Test-FreshContextReview)) {
         Write-Host ""
         Write-Host "${CommandLabel}: blocked."
         Write-Host "Reviewer:    $($Binding.Reviewer)"
@@ -8234,7 +8964,9 @@ function Invoke-Cycle {
     Write-Host ""
 
     $preTurnState = $State
+    $roleFileBefore = Get-RoleFileHash
     $claudeExit = Invoke-ImplementerTurn
+    Assert-RoleFileUnchanged -Before $roleFileBefore -CommandLabel $CommandLabel
     Invoke-CredentialLeakGate -CommandLabel $CommandLabel
     $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preTurnState
     if (-not $investigationBoundary.Ok) {
@@ -8405,7 +9137,8 @@ function Invoke-Loop {
     }
 
     # --- Session preflight: role invariant ---
-    if (Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) {
+    # v3.17.0: relaxed only under a declared fresh-context (see Test-FreshContextReview).
+    if ((Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) -and -not (Test-FreshContextReview)) {
         Write-Host ""
         Write-Host "loop: blocked."
         Write-Host "Reviewer:    $($Binding.Reviewer)"
@@ -8525,6 +9258,16 @@ function Invoke-Loop {
         $script:HandoffModelProfile = $freshStatus.ModelProfile
         $script:ModelSelection = Resolve-ModelSelection -ForState $script:State -HandoffProfile $script:HandoffModelProfile -CommandProfile $ModelProfile -CommandModel $Model -CodexCommandModel $CodexModel -CodexCommandEffort $CodexEffort
         $script:Binding     = Get-RoleBinding
+        # v3.17.0 (review fix): the review rule is part of the binding and is re-read with it.
+        $script:ReviewIndependenceState = Get-ReviewIndependence
+        if (-not $script:ReviewIndependenceState.Ok) {
+            Write-Host ""
+            Write-Host "loop: blocked."
+            Write-Host "Reason:      Invalid review independence detected mid-session. $($script:ReviewIndependenceState.Error)"
+            Write-LoopLog "turn=$turnsRun stop reason=review-independence-invalid exit=1"
+            Write-Host ""
+            exit 1
+        }
 
         $entry = $ActionMap[$script:State]
         if (-not $entry) {
@@ -8717,7 +9460,7 @@ function Invoke-Loop {
         }
 
         # Per-turn re-checks: the binding or the tree may have changed since the session started
-        if (Test-SameToolIdentity -First $script:Binding.Reviewer -Second $script:Binding.Implementer) {
+        if ((Test-SameToolIdentity -First $script:Binding.Reviewer -Second $script:Binding.Implementer) -and -not (Test-FreshContextReview)) {
             Write-Host ""
             Write-Host "loop: blocked."
             Write-Host "Reason:      Role invariant violation detected mid-session (Reviewer == Implementer)."
@@ -8809,8 +9552,10 @@ function Invoke-Loop {
         $turnsRun    = $turnNo
 
         $preImplementerState = $script:State
+        $roleFileBefore = Get-RoleFileHash
         $claudeExit = Invoke-ImplementerTurn
         Write-LoopLog "turn=$turnNo claudeExit=$claudeExit authorizedSoFar=$authorized"
+        Assert-RoleFileUnchanged -Before $roleFileBefore -CommandLabel "loop"
         Invoke-CredentialLeakGate -CommandLabel "loop"
 
         $investigationBoundary = Get-InvestigationSourceBoundary -PreState $preImplementerState
@@ -8998,10 +9743,12 @@ switch ($Command) {
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
             Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
             Write-Host "  adapters                  Show adapter callable/manual status for each role."
-            Write-Host "  roles [-Window] [-WindowOff] [-SetRole <role> -SetTool <tool>] [-Yes]"
+            Write-Host "  roles [-Window] [-WindowOff] [-SetRole <role> -SetTool <tool>] [-ReviewIndependence <separate-tool|fresh-context>] [-Yes]"
             Write-Host "                            Show who holds each role, or change one. -Window opens a small always-on-top"
             Write-Host "                            indicator that also shows a running turn and swaps roles with a click (Windows)."
-            Write-Host "                            A swap is refused while a turn runs and whenever Reviewer would equal Implementer."
+            Write-Host "                            A swap is refused while a turn runs and, under separate-tool, whenever Reviewer"
+            Write-Host "                            would equal Implementer. -ReviewIndependence fresh-context lets one tool hold both:"
+            Write-Host "                            it then reviews in a separate read-only run started by review-run."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check [-Message `"<msg>`"]"

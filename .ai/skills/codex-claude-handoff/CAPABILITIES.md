@@ -13,11 +13,13 @@ For callable/manual automation status, see `ADAPTERS.md`.
 | Role | Default Tool | Why |
 |---|---|---|
 | Master | Codex | Strong at reasoning, planning, task definition, and decision routing |
-| Reviewer | Codex | Independent review and risk classification; must differ from the Implementer |
+| Reviewer | Codex | Independent review and risk classification; never shares the Implementer's context |
 | Implementer | Claude Code | Source of truth for live repo behavior; strong at local inspection and approved edits |
 
 The User is always the approval point and is never one of these roles. Switching the binding
-requires explicit user approval, and the Reviewer must never be the same tool as the Implementer.
+requires explicit user approval, and the Reviewer never shares a context with the Implementer: by
+default a different tool, or under `Review Independence: fresh-context` the same tool in a separate
+harness-launched read-only run.
 
 ## Codex
 

@@ -139,7 +139,9 @@ State: READY_FOR_IMPLEMENTATION
 Waiting For: Implementer
 ```
 
-The Reviewer must not be the same tool as the Implementer for the same work.
+The Reviewer never shares a context with the Implementer for the same work. By default it
+is a different tool; under `Review Independence: fresh-context` the same tool reviews only
+through `handoff.ps1 review-run` and `review-apply`, never in the window that did the work.
 
 ### Reviewer fast-fix exception
 
@@ -355,7 +357,7 @@ When a task involves non-English UI text (Hebrew, Arabic, RTL, CJK, or any langu
 | `release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"` | Execute the guarded release after REVIEW_DONE and explicit user authorization. Runs checks, commits only approved files, pushes, tags, then pushes the tag. |
 | `sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask "<task>"]` | Dry-run the local sequence advance after a release. Verifies the commit/tag and the active/next tasks; edits no files. |
 | `sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask "<task>" [-SupersededVersions "vA.B.C"]` | Advance local `AI_SEQUENCE.md` (released task + checkpoint, bundled supersedes, next task active) and prepare `AI_HANDOFF.md` for the next task. Local coordination only; never runs git. |
-| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn when the adapter registry marks the turn callable (currently READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
+| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn when the adapter registry marks the turn callable (currently READY_FOR_IMPLEMENTATION only; Implementer must be bound to Claude Code; Reviewer != Implementer unless `Review Independence: fresh-context`; clean working tree; explicit confirmation required), then prepare the Reviewer handoff and stop. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 | `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]` | Run a bounded session. By default it runs only auto-loop-eligible Implementer turns. `-IncludeMaster` and `-IncludeReviewer` opt the guarded Codex capture/apply paths into that invocation. Stops at the User or any non-enabled actor. Writes a local `HANDOFF_LOOP.log` (never committed). |
 
@@ -367,7 +369,7 @@ Implementer turns. For one explicitly authorized session, `loop -IncludeMaster` 
 capture/apply paths. Those flags do not change the default `AutoLoopEligible` values,
 and User turns are never automated. The Master remains the decision router.
 
-The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
+The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors` (under `Review Independence: fresh-context`, one tool with the harness verdict), exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
 
 The global role binding remains the routing/adapters source of truth. Release audit uses the current task's actual provenance instead, because a task may have an explicit one-off Implementer or Reviewer assignment.
 

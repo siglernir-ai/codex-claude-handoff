@@ -38,7 +38,9 @@ The protocol is organized around three roles, plus the User. Roles are bound to 
 
 The default binding is Codex as Master + Reviewer and Claude Code as Implementer.
 With explicit user approval, the tools can exchange Master and Implementer
-responsibilities. Reviewer and Implementer must always remain different, and
+responsibilities. Reviewer and Implementer never share a context: by default they
+are different tools, and under `Review Independence: fresh-context` one tool may hold both and
+reviews only through `handoff.ps1 review-run` and `review-apply`, and
 automation availability depends on the verified adapter for the selected role and
 tool.
 
@@ -49,7 +51,7 @@ tool.
 
 **Default binding:** Master = Codex, Reviewer = Codex, Implementer = Claude Code. This is behaviorally identical to earlier versions of the protocol.
 
-**Invariant:** the Reviewer must never be the same tool as the Implementer (an implementer cannot be the sole reviewer of its own work). Switching roles requires explicit user approval. See `.ai/roles/ROLE_ASSIGNMENT.md`.
+**Invariant:** the Reviewer never shares a context with the Implementer (an implementer cannot be the sole reviewer of its own work). By default the Reviewer is a different tool; with `Review Independence: fresh-context` in `.ai/roles/ROLE_ASSIGNMENT.md` (since v3.17.0) it may be the same tool, reviewing in a separate read-only run the harness starts (`review-run`, then `review-apply`), and commit and release accept only that verdict. A single-vendor review is a weaker check than a second vendor's; two tools remain the recommended setup. Switching roles requires explicit user approval. See `.ai/roles/ROLE_ASSIGNMENT.md`.
 
 Multi-task coordination (the "Sequence Owner") is a duty of the Master role, not a fourth role. For the operating method, its layers, and the lifecycle vocabulary, read `PROTOCOL_METHOD.md` in this folder (since v0.18.0).
 
@@ -78,7 +80,7 @@ This file is in `.ai/skills/codex-claude-handoff/`. The following files contain 
 The role-to-tool binding lives one level up, in `.ai/roles/ROLE_ASSIGNMENT.md`.
 It is the single source of truth for role binding. `AI_HANDOFF.md` Task Actors are
 derived display data only. Every turn begins by rereading the binding and checking
-for drift or Reviewer==Implementer; failures stop the protocol closed.
+for drift, or Reviewer==Implementer without `Review Independence: fresh-context`; failures stop the protocol closed.
 
 ## How to Resolve Your Behavior
 

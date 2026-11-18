@@ -57,6 +57,38 @@ function Resolve-Actor {
 
 $Binding = Get-RoleBinding
 
+# v3.17.0: the review rule, read the way handoff.ps1 reads it (absent = separate-tool).
+# Only a valid, single fresh-context line counts; this helper never relaxes anything, it
+# only says when one tool reviews its own role's work.
+function Get-ReviewIndependenceMode {
+    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path $rolesFile)) { return "separate-tool" }
+    $values = @()
+    foreach ($line in (Get-Content -Encoding UTF8 -Path $rolesFile)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:(.*)$') { $values += $Matches[1].Trim().ToLowerInvariant() }
+    }
+    if ($values.Count -eq 1 -and $values[0] -eq "fresh-context") { return "fresh-context" }
+    if ($values.Count -eq 0) { return "separate-tool" }
+    return "invalid"
+}
+
+function Get-CanonicalTool {
+    param([string]$Tool)
+    $key = if ($null -eq $Tool) { "" } else { $Tool.Trim().ToLowerInvariant() }
+    if (@("codex", "codex window", "codex cli", "codex desktop", "openai codex") -contains $key) { return "codex" }
+    if (@("claude code", "claude-code", "claudecode", "claude code cli", "claude code window") -contains $key) { return "claude-code" }
+    return ""
+}
+
+$ReviewIndependenceMode = Get-ReviewIndependenceMode
+$reviewerCanonical = Get-CanonicalTool -Tool $Binding.Reviewer
+$SingleVendorReview = ($ReviewIndependenceMode -eq "fresh-context") -and ($reviewerCanonical -ne "") -and ($reviewerCanonical -eq (Get-CanonicalTool -Tool $Binding.Implementer))
+$SingleVendorLine = ""
+if ($SingleVendorReview) {
+    $reviewerDisplay = if ($reviewerCanonical -eq "codex") { "Codex" } else { "Claude Code" }
+    $SingleVendorLine = "Single-vendor review: $reviewerDisplay is both Implementer and Reviewer. It reviews in a separate read-only run started by the harness (review-run, then review-apply), never in the Implementer's context."
+}
+
 $StatusLines = Get-SectionLines -Lines $Lines -Heading "Status"
 $OpenIssuesLines = Get-SectionLines -Lines $Lines -Heading "Open Issues"
 
@@ -83,6 +115,7 @@ Write-Host "State:        $State"
 Write-Host "Waiting For:  $WaitingFor"
 Write-Host "Current Task: $CurrentTask"
 Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+if ($SingleVendorReview) { Write-Host "Review:       $SingleVendorLine" }
 Write-Host ""
 
 # State -> expected Role
@@ -364,6 +397,13 @@ if ($PrepareFile) {
         $NtLines.Add("")
         $NtLines.Add("## Key Context")
         $NtLines.Add($KeyContext)
+    }
+    # v3.17.0: same section as handoff.ps1 next writes for a single-vendor Reviewer turn.
+    if (-not $Mismatch -and $ActorRole -eq "Reviewer" -and $SingleVendorReview) {
+        $NtLines.Add("")
+        $NtLines.Add("## Review Independence")
+        $NtLines.Add($SingleVendorLine)
+        $NtLines.Add("Take this turn with handoff.ps1 review-run, then handoff.ps1 review-apply. A verdict written by hand in this window is refused by commit-check, commit-approved and release-check.")
     }
     if ($AfterLine -ne "") {
         $NtLines.Add("")

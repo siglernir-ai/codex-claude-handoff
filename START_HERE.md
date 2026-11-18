@@ -14,7 +14,10 @@ something that commits, pushes or releases on its own.
 ## The safety model
 
 Three roles - **Master** routes, **Implementer** writes, **Reviewer** checks. The
-Reviewer is never the same tool as the Implementer; the protocol checks this on every
+Reviewer never shares a context with the Implementer - by default it is a different
+tool, and a project with only one tool can declare a fresh-context review, where the same
+tool reviews in a separate read-only run the harness starts (a weaker check than a second
+vendor). The protocol checks this on every
 turn and blocks the swap. You are not one
 of the three: you are the approval authority. Commit, push, tag, release, deploy,
 database changes and secrets all stop and wait for you, and commit and release each

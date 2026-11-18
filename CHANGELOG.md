@@ -1,3 +1,64 @@
+## 3.17.0 - A Fresh Context, Not a Second Vendor
+
+- **Someone with only one tool could not get a review at all.** The protocol required the
+  Reviewer to be a different vendor from the Implementer, so a user with only Claude Code,
+  or only Codex, was stopped at the first role checkpoint. The real requirement was never
+  two vendors. It is that the Reviewer never shares a context with the Implementer.
+- **One line in `.ai/roles/ROLE_ASSIGNMENT.md` now says how that is enforced.**
+  `Review Independence: separate-tool` is today's rule and the default; an absent line
+  means the same. `Review Independence: fresh-context` lets one tool hold both roles. Any
+  other value, or a second line, blocks every role-dependent command. The shipped file
+  declares `separate-tool`, and both installers carry the project's own line across an
+  upgrade, so installing or upgrading changes nothing.
+- **`handoff.ps1 roles -ReviewIndependence <separate-tool|fresh-context>`** changes it under
+  the same guards as a role swap: refused while a turn runs, refused for a Reviewer the
+  harness cannot run, and `separate-tool` refused while one tool still holds both roles. It
+  writes a Role Swap History row. A role file with no history table now gets one, for this
+  command and for `roles -SetRole`; before, a swap on a fresh install said "Recorded in the
+  Role Swap History table" and recorded nothing.
+- **With one tool in both roles, only the harness verdict counts.** `review-run` already
+  starts the Reviewer as its own read-only process. Under `fresh-context` it also appends
+  one record to `REVIEW.jsonl` with the task, the SHA-256 of the capture and the SHA-256 of
+  every file the Reviewer was told to verify. `review-apply`, `commit-check`,
+  `commit-approved` and `release-check` require that record, an APPROVED capture for the
+  current task that has not changed since, the `review-apply` record, and the same bytes on
+  disk. A `REVIEW_DONE` written in a chat window is refused. With two different tools,
+  `fresh-context` behaves exactly like `separate-tool`.
+- **What that check proves, and what it does not.** It proves the verdict is the one
+  `review-run` captured for this task, unedited, applied by `review-apply`, over the exact
+  files being committed. It is not a cryptographic proof: the files are local, and anything
+  with write access to the project could forge them. And one vendor reviewing its own
+  vendor's work is a weaker check than a second vendor. Two tools remain the recommended
+  setup, and the docs now say so.
+- **The self-review guard reads the role, not only the tool.** When one tool holds both
+  Implementer and Reviewer, the tool name in `- Actor:` cannot tell an Implementer turn from
+  a Master that did the work itself. A review may then proceed only when Last Update is an
+  Implementer record: an Actor line naming the Implementer role (with or without a tool
+  name), and not a leftover review record. This guard reads a label the agent writes itself.
+  It stops a Master that records its own work honestly; it cannot catch a false label.
+- **Commit and release cannot be reached around the harness check.** The single-vendor
+  check applies when either the Task Actors or the binding put one tool in both roles, and
+  both actors must be named tools, so a placeholder such as `TBD` no longer skips it.
+  `review-apply` records the SHA-256 of the capture it applied, and commit and release
+  compare it, so a leftover plan review cannot stand in for an unapplied code verdict.
+  `status`, `user-next` and `work` no longer offer a commit that `commit-check` would refuse.
+  `cycle` and `loop` stop if an Implementer turn edits `.ai/roles/ROLE_ASSIGNMENT.md`, and
+  `loop` re-reads the review rule every turn.
+- **The line is read the same way everywhere.** Key and value are read without regard to
+  letter case by `handoff.ps1`, `handoff.sh`, both `next-step` scripts, both installers and
+  the roles window. An invalid or duplicated line can be repaired with
+  `roles -ReviewIndependence <value>` when it is the only problem, and the roles window shows
+  it as invalid.
+- **Said out loud.** `roles`, `doctor`, `work`, `status`, the review plan, `commit-check` and
+  the Reviewer's `NEXT_TURN.md` each print one line naming a single-vendor review. `roles`
+  and `doctor` also print an advisory, never a block, when Master and Reviewer are the same
+  tool while two tools are bound - the long-standing default: a Reviewer from a different
+  tool than the Master questions the plan as well as the code. `handoff.sh` and `next-step`
+  mirror the rule and the `NEXT_TURN.md` section; a single-vendor commit is verified by
+  `handoff.ps1 commit-check` only. The roles window shows the active rule.
+- **Not verified against a live Codex or Claude Code.** The tests run the harness path
+  against a stand-in for the Codex CLI. No real review was run for this release.
+
 ## 3.16.0 - An Effort Level Outlives a Model
 
 - **A model name in a Codex mapping goes stale.** Claude Code has floating aliases, so a

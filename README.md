@@ -21,7 +21,7 @@ and budget limits; general question dialogue still advances through explicit tur
 
 > **New here? Read [START_HERE.md](START_HERE.md) first** - what this is, what it refuses to do, and why it blocks you.
 
-> **Current release: v3.16.0 public beta.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.17.0 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -30,8 +30,10 @@ and budget limits; general question dialogue still advances through explicit tur
 
 - **One accountable task, not two disconnected answers.** Both agents work from
   the same durable state, scope, decisions, and evidence in the Git project.
-- **One implements; another challenges.** The Reviewer must remain different from
-  the Implementer and can reject the work instead of merely commenting on it.
+- **One implements; another challenges.** The Reviewer never shares a context with
+  the Implementer and can reject the work instead of merely commenting on it. By
+  default it is a different tool; a project with only one tool can declare
+  `fresh-context` review instead (see [Review independence](#review-independence)).
 - **Review and correction, not parallel answers.** A rejection can route the exact
   approved scope back to the Implementer and continue within bounded limits.
 - **Configurable roles.** Codex and Claude Code can exchange responsibilities with
@@ -72,7 +74,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.16.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.17.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -153,9 +155,41 @@ Since v3.15.0 roles are changed with a validated command instead of a hand edit:
 ```
 
 The command refuses a swap while a turn is running, refuses any binding that would
-make the Reviewer the Implementer, moves `Task Actors` with the binding mid-task,
-and writes the Role Swap History row itself. Each later turn rereads the role
-table; stale Task Actors fail closed instead of silently using the old roles.
+make the Reviewer the Implementer (unless the project declared `fresh-context`, below),
+moves `Task Actors` with the binding mid-task, and writes the Role Swap History row
+itself. Each later turn rereads the role table; stale Task Actors fail closed instead of
+silently using the old roles.
+
+### Review independence
+
+The rule is that the Reviewer never shares a context with the Implementer. One line in
+`.ai/roles/ROLE_ASSIGNMENT.md` says how that is enforced:
+
+- `Review Independence: separate-tool` (the default, and what an absent line means) -
+  the Reviewer is a different tool from the Implementer. This is the setup to prefer.
+- `Review Independence: fresh-context` (since v3.17.0) - the same tool may hold both
+  roles. It then reviews in a separate read-only run started by the harness
+  (`review-run`, then `review-apply`), never in the window that did the work.
+
+Change it with `.\scripts\handoff.ps1 roles -ReviewIndependence fresh-context` (or
+`separate-tool`). The command is refused while a turn runs, refuses `separate-tool` while
+one tool holds both roles, and records the change in the Role Swap History. Any other
+value, or a second line, blocks every role-dependent command; the key and value are read
+without regard to letter case, and `roles -ReviewIndependence <value>` repairs a bad line
+when it is the only problem.
+
+When one tool holds both roles, `commit-check`, `commit-approved` and `release-check`
+accept only a verdict the harness produced: an APPROVED `REVIEW_LAST.md` for the current
+task, unchanged since `review-run` captured it, applied by `review-apply`, with the
+reviewed files byte-for-byte the files `review-run` hashed. A `REVIEW_DONE` typed into a
+chat window is refused. `roles`, `doctor`, `work`, `status`, the review plan,
+`commit-check` and `NEXT_TURN.md` each say so in one line.
+
+Be clear about what this is. A single-vendor review is a weaker check than a review by a
+second vendor: the same model family tends to miss the same things. The harness check
+stops a manual review from passing as a harness review; it is not a cryptographic proof,
+and something with write access to the project could forge the local files it reads. Two
+tools remain the recommended setup.
 
 ## Protocol Method
 
@@ -484,7 +518,7 @@ Create the reviewed local commit after explicit user authorization. This command
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 commit-approved -Message "Complete reviewed handoff task" -Authorize "I_AUTHORIZE_COMMIT"
 ```
 
-`commit-approved` has the same gates as `commit-check`, then requires the exact token `I_AUTHORIZE_COMMIT`. It commits only the files listed under `Changed Files` and refuses if the actual task Reviewer and Implementer are missing, ambiguous, or the same tool.
+`commit-approved` has the same gates as `commit-check`, then requires the exact token `I_AUTHORIZE_COMMIT`. It commits only the files listed under `Changed Files` and refuses if the actual task Reviewer and Implementer are missing, ambiguous, or the same tool - unless `Review Independence: fresh-context` is declared, in which case one tool in both roles is accepted only with the harness verdict described under [Review independence](#review-independence).
 
 ### `release-check` and `release`
 
@@ -498,7 +532,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 re
 `release-check` never mutates git. It prints the exact files and commands that
 would run, then blocks unless the handoff is `State: REVIEW_DONE` / `Waiting For:
 User`, the actual task Reviewer and Implementer are present and different in
-`AI_HANDOFF.md` `Task Actors`, the tag does not already exist, and the handoff
+`AI_HANDOFF.md` `Task Actors` (or, under `fresh-context`, the same tool with a harness
+verdict), the tag does not already exist, and the handoff
 `Changed Files` list exactly matches `git status` after excluding local
 coordination files (`AI_HANDOFF.md`, `AI_SEQUENCE.md`, `NEXT_TURN.md`,
 `USER_REQUEST.md`, and `HANDOFF_LOOP.log`).
@@ -566,7 +601,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 re
 invocation shape, then blocks unless: the handoff is `State: READY_FOR_REVIEW` /
 `Waiting For: Reviewer`; the bound Reviewer is Codex; `AI_HANDOFF.md` `Task Actors`
 has exactly one Implementer and one Reviewer; the actual Reviewer is Codex and differs
-from the actual Implementer (the independent-review invariant); and the `Changed Files`
+from the actual Implementer (the independent-review invariant; under `fresh-context` it may
+be the same tool, reviewing in this separate run); and the `Changed Files`
 list matches `git status` after excluding local coordination files. It also reports
 whether a runnable Codex CLI is available for `exec --help`.
 
@@ -681,7 +717,7 @@ It captures the `--json` stream to `CODEX_MASTER.jsonl` and the recommendation t
 capture and applies one local transition: `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION`,
 or `PLAN_REQUIRED` routes to `Waiting For: Implementer`; `BLOCKED` routes to `Waiting For:
 User`. It fails closed on a missing/malformed/stale capture, an invalid state/Waiting For
-pair, missing concrete actors for Implementer-routed work, Reviewer == Implementer, or captured
+pair, missing concrete actors for Implementer-routed work, Reviewer == Implementer (unless `Review Independence: fresh-context`), or captured
 actors that do not match the current role binding.
 
 **Master/Codex is `callable: yes` but `Auto-loop: no`** for `NEEDS_ANALYSIS`: it is callable
@@ -722,7 +758,7 @@ Investigation and planning states are blocked because the Claude Code CLI cannot
 
 **What cycle does:**
 1. Checks eligibility through the adapter registry: state, turn ownership, Implementer bound to Claude Code, the
-   Reviewer != Implementer role invariant, and a clean working tree (tracked and untracked
+   Reviewer != Implementer role invariant (relaxed only under a declared `fresh-context`), and a clean working tree (tracked and untracked
    files; local coordination files are exempt). Since v3.1.5, an exact `Changed Files`
    match is also allowed when resuming a correction after a Reviewer `BLOCKED` verdict;
    any unrelated dirty file still blocks.
@@ -810,7 +846,7 @@ the exact next actor and paste instruction, and stops with exit 0. Investigation
 remain manual - the Claude Code CLI turn cannot be safely restricted to handoff-only edits.
 
 **Hard stops:** `REVIEW_DONE`, `WAITING_FOR_USER`, `BLOCKED`, `IMPLEMENTED`, unrecognized
-state, `Waiting For` mismatch, Reviewer == Implementer, an unapproved dirty working tree,
+state, `Waiting For` mismatch, Reviewer == Implementer (unless `Review Independence: fresh-context`), an unapproved dirty working tree,
 missing Claude Code/npx, Claude Code runner start failure, an unrecovered timeout/non-zero
 exit, `MaxTurns` reached, and the session budget cap. Since v3.1.5 the only dirty-tree
 exception is a Reviewer-`BLOCKED` correction whose Git status equals `Changed Files`

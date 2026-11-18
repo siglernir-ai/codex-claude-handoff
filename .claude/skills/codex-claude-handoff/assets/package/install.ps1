@@ -31,6 +31,45 @@ function Get-InstalledRoleBinding {
     return $binding
 }
 
+# v3.17.0: the review rule is part of the binding, so an upgrade carries it across too.
+# Returns @{ Ok; Mode; Declared; Error }. An absent line is separate-tool; two lines or any
+# other value refuse the upgrade, the same way handoff.ps1 refuses to run under them.
+function Get-InstalledReviewIndependence {
+    param([string]$Path)
+    $result = @{ Ok = $true; Mode = "separate-tool"; Declared = $false; Error = "" }
+    if (-not (Test-Path -LiteralPath $Path)) { return $result }
+    $values = @()
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $Path)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:(.*)$') { $values += $Matches[1].Trim() }
+    }
+    if ($values.Count -eq 0) { return $result }
+    $result.Declared = $true
+    $value = ([string]$values[0]).ToLowerInvariant()
+    if ($values.Count -gt 1 -or @("separate-tool", "fresh-context") -notcontains $value) {
+        $result.Ok = $false
+        $result.Error = "the 'Review Independence:' line must appear once and read separate-tool or fresh-context"
+        return $result
+    }
+    $result.Mode = $value
+    return $result
+}
+
+# Keep exactly one 'Review Independence:' line - the first, which is the template's own
+# position under Current Binding - and give it the installed project's value.
+function Set-MergedReviewIndependence {
+    param([string]$Content, [string]$Mode)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $written = $false
+    foreach ($line in ($Content -split "`r?`n")) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:') {
+            if (-not $written) { $out.Add("Review Independence: $Mode"); $written = $true }
+            continue
+        }
+        $out.Add($line)
+    }
+    return ($out -join "`r`n")
+}
+
 # v3.7.0: an upgrade must not delete what the project added to this file.
 #
 # The merge below builds the new file from the template and substitutes only the three
@@ -107,7 +146,10 @@ function Get-MergedRoleAssignmentContent {
         $content = [regex]::Replace($content, $pattern, $replacement)
     }
     $existingRoleContent = if ($InstalledPath -and (Test-Path -LiteralPath $InstalledPath)) { Get-Content -Raw -LiteralPath $InstalledPath } else { "" }
-    return (Add-PreservedRoleSections -MergedContent $content -ExistingContent $existingRoleContent)
+    $merged = Add-PreservedRoleSections -MergedContent $content -ExistingContent $existingRoleContent
+    $installedMode = Get-InstalledReviewIndependence -Path $InstalledPath
+    if ($installedMode.Declared) { $merged = Set-MergedReviewIndependence -Content $merged -Mode $installedMode.Mode }
+    return $merged
 }
 
 if (-not (Test-Path -LiteralPath $templateRoot)) {
@@ -147,7 +189,13 @@ if ($Force -and (Test-Path -LiteralPath $installedRolePath)) {
     if (-not $preservedRoleBinding) {
         throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $installedRolePath"
     }
-    if ($preservedRoleBinding.Reviewer -eq $preservedRoleBinding.Implementer) {
+    $preservedReviewIndependence = Get-InstalledReviewIndependence -Path $installedRolePath
+    if (-not $preservedReviewIndependence.Ok) {
+        throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md is invalid: $($preservedReviewIndependence.Error). Repair it before updating: $installedRolePath"
+    }
+    # v3.17.0: one tool in both roles is a valid binding when the project declared
+    # fresh-context; the upgrade keeps both the binding and the declaration.
+    if ($preservedRoleBinding.Reviewer -eq $preservedRoleBinding.Implementer -and $preservedReviewIndependence.Mode -ne "fresh-context") {
         throw "Refusing -Force update: existing role binding violates Reviewer != Implementer. Repair it before updating: $installedRolePath"
     }
 }

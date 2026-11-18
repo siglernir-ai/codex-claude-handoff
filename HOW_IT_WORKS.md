@@ -38,7 +38,11 @@ Roles are not permanently tied to one tool. With explicit user approval, a role 
 changed with `handoff.ps1 roles -SetRole <role> -SetTool <tool>` (since v3.15.0),
 which validates the swap, moves the derived Task Actors in `AI_HANDOFF.md` with it,
 and writes the Role Swap History row. `roles -Window` shows a live indicator with
-one-click swaps (Windows). The Reviewer must never equal the Implementer.
+one-click swaps (Windows). The Reviewer never shares a context with the Implementer: by
+default it is a different tool, and with `Review Independence: fresh-context` (since
+v3.17.0) it may be the same tool, reviewing in a separate read-only run the harness
+starts. commit-check, commit-approved and release-check then accept only that harness
+verdict. A second vendor's review is the stronger check; two tools remain recommended.
 Every new turn rereads the role table and fails closed if the handoff is stale.
 
 ## Normal Flow

@@ -45,7 +45,7 @@ After setup, review and commit the installed project-local files. Include
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore skills-lock.json
-git commit -m "Install codex-claude-handoff v3.16.0"
+git commit -m "Install codex-claude-handoff v3.17.0"
 ```
 
 ## Windows alternative: install the pinned release
@@ -54,7 +54,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.16.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.17.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -64,7 +64,7 @@ Commit the installed project-local files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.16.0"
+git commit -m "Install codex-claude-handoff v3.17.0"
 ```
 
 Check the installation:
@@ -117,7 +117,16 @@ Since v3.15.0 one validated command changes a role and records the swap:
 ```
 
 The Reviewer cannot also be the Implementer, and a swap is refused while a turn is
-running. Every later turn checks the current binding again and stops if the handoff
+running. If you have only one of the two tools, declare a fresh-context review:
+
+```powershell
+.\scripts\handoff.ps1 roles -ReviewIndependence fresh-context
+```
+
+The same tool may then hold every role. It reviews in a separate read-only run that the
+harness starts (`review-run`, then `review-apply`), and commit and release accept only
+that verdict. This is a weaker check than a second vendor's review; two tools remain the
+recommended setup. Every later turn checks the current binding again and stops if the handoff
 still contains the old assignment.
 
 ## Optional always-on mode
@@ -154,13 +163,13 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.16.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.17.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-v3.16.0 packages a self-contained public beta Skill. From a clean Git project, run:
+v3.17.0 packages a self-contained public beta Skill. From a clean Git project, run:
 
 ```powershell
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy

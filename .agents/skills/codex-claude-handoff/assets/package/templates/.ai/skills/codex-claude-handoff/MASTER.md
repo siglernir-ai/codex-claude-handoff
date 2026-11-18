@@ -22,7 +22,7 @@ At the beginning of a Master session:
 1. Read `.ai/roles/ROLE_ASSIGNMENT.md` to confirm you hold the Master (and Reviewer) role.
 2. Run `scripts/handoff.ps1 next` (`scripts/handoff.sh next` on macOS/Linux), then read `NEXT_TURN.md`. It carries the State, the current task, the Next Recommended Step, and a line-numbered map of the `AI_HANDOFF.md` sections. If the script cannot run, go straight to step 3.
 3. Read the AI_HANDOFF.md sections this turn needs: always `Status` and `Task Actors`, then `Next Recommended Step`, and `Changed Files` for a review. Read the whole file only when it is short or the turn genuinely depends on all of it.
-4. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer, stop before role-dependent work and report the required repair.
+4. Compare the derived Task Actors in AI_HANDOFF.md with ROLE_ASSIGNMENT.md. If they differ, or Reviewer equals Implementer while the role file does not declare `Review Independence: fresh-context`, stop before role-dependent work and report the required repair. Under it, the review comes only from `handoff.ps1 review-run`, never your own window.
 5. Check State.
 6. Check Waiting For.
 7. Read AGENTS.md only as needed.
@@ -244,7 +244,7 @@ When AI_HANDOFF.md says State is READY_FOR_REVIEW and Waiting For is the Reviewe
 6. Check verification notes.
 7. Look for unrelated changes, missing files, incomplete edits, or broken handoff updates.
 
-The Reviewer must not be the same tool as the Implementer for the same work (see the invariant in `.ai/roles/ROLE_ASSIGNMENT.md`).
+The Reviewer never shares a context with the Implementer for the same work (see the invariant in `.ai/roles/ROLE_ASSIGNMENT.md`). By default it is a different tool. Under `Review Independence: fresh-context` the same tool may hold both roles; then never review in your own window - run `handoff.ps1 review-run` and `review-apply`, because commit-check, commit-approved and release-check refuse any other verdict. Recommend a second tool when the user has one: a second vendor's review is the stronger check.
 
 ## Reviewer Fast-Fix Exception
 
@@ -555,7 +555,7 @@ The Master should not request capability status every session - only when it add
 | `release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"` | Execute the guarded release after REVIEW_DONE and explicit user authorization. Runs checks, commits only approved files, pushes, tags, then pushes the tag. |
 | `sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask "<task>"]` | Dry-run the local sequence advance after a release. Verifies the commit/tag and the active/next tasks; edits no files. |
 | `sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask "<task>" [-SupersededVersions "vA.B.C"]` | Advance local `AI_SEQUENCE.md` (released task + checkpoint, bundled supersedes, next task active) and prepare `AI_HANDOFF.md` for the next task. Local coordination only; never runs git. |
-| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only), then prepare the Reviewer handoff and stop. Requires the Implementer to be bound to Claude Code, Reviewer != Implementer, a clean working tree, and explicit confirmation. |
+| `cycle [-BudgetUsd N]` | Run one bounded handoff cycle: one assisted Implementer turn (READY_FOR_IMPLEMENTATION only), then prepare the Reviewer handoff and stop. Requires the Implementer to be bound to Claude Code, Reviewer != Implementer (or `Review Independence: fresh-context`), a clean working tree, and explicit confirmation. |
 | `run-next [-BudgetUsd N]` | Backward-compatible alias of `cycle` (same implementation). |
 | `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]` | Run a bounded session. By default it runs only auto-loop-eligible Implementer turns. `-IncludeMaster` and `-IncludeReviewer` opt the guarded Codex capture/apply paths into that invocation. Stops at the User or any non-enabled actor. Writes a local HANDOFF_LOOP.log (never committed). |
 
@@ -568,7 +568,7 @@ also run the verified Codex Master and Reviewer capture/apply paths. Those flags
 change the registry's default `AutoLoopEligible` values, and User turns are never
 automated.
 
-The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
+The release executor is separate from turn automation. It may run commit/push/tag only after `REVIEW_DONE`, `Waiting For: User`, actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors` (under `Review Independence: fresh-context`, one tool with the harness verdict), exact Changed Files scope validation, pre-release checks, and an explicit authorization token from the user. It never deploys, touches databases, changes secrets, or creates production configuration changes.
 
 The global role binding remains the routing/adapters source of truth. Release audit uses the current task's actual provenance instead, because a task may have an explicit one-off Implementer or Reviewer assignment.
 

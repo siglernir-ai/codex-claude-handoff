@@ -687,7 +687,9 @@ environment stops - but the loop never continues past any of them on its own:
 
 ### Invariants that must hold throughout
 
-- Reviewer != Implementer (the same tool may not review its own work).
+- The Reviewer never shares a context with the Implementer: by default a different tool;
+  under `Review Independence: fresh-context` (since v3.17.0), the same tool in a separate
+  harness-launched read-only run, whose verdict alone counts at commit and release.
 - No role may self-approve commits or deploys.
 - No role swap without explicit user approval.
 - The user remains the final approval point for all commits, pushes, and production actions.

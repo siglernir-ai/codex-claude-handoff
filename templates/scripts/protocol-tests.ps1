@@ -4483,6 +4483,744 @@ Check "doctor does not flag correct status symbols" (-not ($r.Out -match "double
 $handoffSrc = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $ScriptDir "handoff.ps1")
 Check "handoff.ps1 never reads a file with Get-Content and no -Encoding" (-not ($handoffSrc -split "`n" | Where-Object { $_ -match 'Get-Content ' -and $_ -notmatch '-Encoding' }))
 
+# --- v3.17.0: review independence - separate-tool by default, fresh-context by declaration ---
+Write-Host "[4D-7] Review independence: separate-tool and fresh-context (v3.17.0)"
+
+function New-RiRoles {
+    param([string]$Master = "Codex", [string]$Reviewer = "Codex", [string]$Implementer = "Claude Code", [string]$ModeLine = "", [switch]$History)
+    $text = "# Role Assignment`n`n## Current Binding`n`n| Role | Tool |`n|---|---|`n| Master | $Master |`n| Reviewer | $Reviewer |`n| Implementer | $Implementer |`n"
+    if ($ModeLine -ne "") { $text += "`n$ModeLine`n" }
+    $text += "`nThe User is always the approval point and is never one of these roles.`n"
+    if ($History) { $text += "`n## Role Swap History`n`n| Date | Previous Binding | New Binding | Approved By |`n|---|---|---|---|`n| 2026-09-01 | Master=Codex | Master=Codex | User |`n" }
+    return $text
+}
+
+function New-RiHandoff {
+    param(
+        [string]$State = "READY_FOR_REVIEW",
+        [string]$WaitingFor = "Reviewer",
+        [string]$Task = "solo review task",
+        [string]$Implementer = "Codex",
+        [string]$Reviewer = "Codex",
+        [string]$Actor = "Codex (Implementer)",
+        [string]$ChangedFile = "src/app.txt",
+        [string]$LastUpdateExtra = "",
+        [string]$Extra = ""
+    )
+    return @"
+# AI Handoff
+
+## Status
+- State: $State
+- Waiting For: $WaitingFor
+- Last Updated By: Test
+- Last Updated At: 2026-11-18
+- Current Task: $Task
+
+## Last Update
+- Actor: $Actor
+- Date: 2026-11-18
+$LastUpdateExtra
+
+## Task Actors
+- Implementer: $Implementer
+- Reviewer: $Reviewer
+
+## Changed Files
+- $ChangedFile
+
+## Next Recommended Step
+- See AI_HANDOFF.md.
+$Extra
+"@
+}
+
+function New-RiFixture {
+    param([string]$Roles, [string]$Handoff, [switch]$NoChange, [switch]$NoGit)
+    if ($NoGit) {
+        return (New-Fixture -Files @{ "AI_HANDOFF.md" = $Handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles })
+    }
+    $dir = New-Fixture -Files @{ "AI_HANDOFF.md" = $Handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $dir
+    if (-not $NoChange) {
+        New-Item -ItemType Directory -Path (Join-Path $dir "src") -Force | Out-Null
+        Set-Content -Path (Join-Path $dir "src/app.txt") -Value "hello" -Encoding utf8
+    }
+    return $dir
+}
+
+function Get-RiFile { param([string]$Dir, [string]$Rel) return [System.IO.File]::ReadAllText((Join-Path $Dir $Rel), [System.Text.Encoding]::UTF8) }
+function Get-RiHash { param([string]$Dir, [string]$Rel) return (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Dir $Rel)).Hash }
+
+$riFresh = "Review Independence: fresh-context"
+$riSeparate = "Review Independence: separate-tool"
+$riSoloCodex = New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine $riFresh -History
+$riSoloClaude = New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code" -ModeLine $riFresh
+
+# --- The setting: absent, each value, invalid, duplicated ---
+$riFx = New-RiFixture -Roles $DefaultRoles -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("roles")
+Check "an absent Review Independence line means separate-tool" (($r.Code -eq 0) -and ($r.Out -match "Rule:\s+the Reviewer is never the Implementer") -and ($r.Out -notmatch "Single-vendor review"))
+$riSameHandoff = New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Implementer "Claude Code" -Reviewer "Claude Code" -Actor "Test"
+$riFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code") -Handoff $riSameHandoff -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "with no line, one tool in both roles is still refused" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding: Reviewer and Implementer both resolve to the same tool"))
+$riFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code" -ModeLine $riSeparate) -Handoff $riSameHandoff -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "separate-tool refuses one tool in both roles, binding and Task Actors" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding") -and ($r.Out -match "Independent-review invariant: Task Actors"))
+$riFx = New-RiFixture -Roles $riSoloClaude -Handoff $riSameHandoff -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "fresh-context lets one tool hold Implementer and Reviewer at the role checkpoint" (($r.Code -eq 0) -and ($r.Out -notmatch "Role checkpoint: BLOCKED"))
+$riFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code" -ModeLine "review independence: Fresh-Context") -Handoff $riSameHandoff -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "the key and value are read without regard to letter case" ($r.Code -eq 0)
+$riFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence: relaxed") -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "an unknown value fails closed even with two different tools bound" (($r.Code -eq 12) -and ($r.Out -match "Invalid review independence: ROLE_ASSIGNMENT\.md declares 'Review Independence: relaxed'\. The value must be separate-tool or fresh-context\."))
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("doctor")
+Check "doctor fails on an unknown value and names it" (($r.Out -match "FAIL  Role checkpoint") -and ($r.Out -match "Review Independence: relaxed"))
+$riFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence:") -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "an empty value fails closed" (($r.Code -eq 12) -and ($r.Out -match "Invalid review independence"))
+$riFx = New-RiFixture -Roles ((New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code" -ModeLine $riFresh) + "`n$riFresh`n") -Handoff $riSameHandoff -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "a duplicated line fails closed, even when both copies agree" (($r.Code -eq 12) -and ($r.Out -match "declares 'Review Independence:' 2 times"))
+
+# --- The shipped template leaves behavior unchanged ---
+$riTemplate = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md")
+Check "the shipped role file declares separate-tool, exactly once" ((([regex]::Matches($riTemplate, '(?m)^\s*(?:[-*]\s+)?Review Independence\s*:')).Count -eq 1) -and ($riTemplate -match '(?m)^Review Independence: separate-tool\r?$'))
+$riFx = New-RiFixture -Roles $riTemplate -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("roles")
+Check "the shipped role file keeps today's rule" (($r.Code -eq 0) -and ($r.Out -match "Rule:\s+the Reviewer is never the Implementer"))
+$riFx = New-RiFixture -Roles ($riTemplate -replace '\| Implementer \| Claude Code \|', '| Implementer | Codex |') -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
+Check "the shipped role file still refuses one tool in both roles" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding"))
+
+# The installer keeps the declaration on upgrade, and keeps the binding it allows.
+$riInstallTarget = Join-Path $FixtureRoot "ri-install-target"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riInstallTarget -NoRolesWindow 2>&1
+$riInstalledRoles = Join-Path $riInstallTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "a fresh install writes the separate-tool declaration" ((Test-Path -LiteralPath $riInstalledRoles) -and ((Get-Content -Encoding UTF8 -Raw -LiteralPath $riInstalledRoles) -match '(?m)^Review Independence: separate-tool\r?$'))
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riInstallTarget -Force -NoRolesWindow 2>&1
+$riAfter = Get-Content -Encoding UTF8 -Raw -LiteralPath $riInstalledRoles
+Check "an upgrade of an untouched install keeps separate-tool, once" ((([regex]::Matches($riAfter, '(?m)^Review Independence:')).Count -eq 1) -and ($riAfter -match '(?m)^Review Independence: separate-tool\r?$'))
+$riSolo = ($riAfter -replace 'Review Independence: separate-tool', 'Review Independence: fresh-context') -replace '\| Implementer \| Claude Code \|', '| Implementer | Codex |'
+[System.IO.File]::WriteAllText($riInstalledRoles, $riSolo, (New-Object System.Text.UTF8Encoding($false)))
+$riUp = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riInstallTarget -Force -NoRolesWindow 2>&1 | Out-String
+$riAfter = Get-Content -Encoding UTF8 -Raw -LiteralPath $riInstalledRoles
+Check "an upgrade keeps a fresh-context declaration and the one-tool binding it allows" (($LASTEXITCODE -eq 0) -and (([regex]::Matches($riAfter, '(?m)^Review Independence:')).Count -eq 1) -and ($riAfter -match '(?m)^Review Independence: fresh-context\r?$') -and ($riAfter -match '\| Implementer \| Codex \|')) $riUp
+[System.IO.File]::WriteAllText($riInstalledRoles, ($riAfter -replace 'Review Independence: fresh-context', 'Review Independence: sometimes'), (New-Object System.Text.UTF8Encoding($false)))
+$riPrevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $riUp = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riInstallTarget -Force -NoRolesWindow 2>&1 | Out-String
+    $riUpCode = $LASTEXITCODE
+} finally { $ErrorActionPreference = $riPrevEap }
+Check "an upgrade refuses an invalid declaration instead of guessing" (($riUpCode -ne 0) -and ($riUp -match "Review Independence"))
+
+# --- The command: roles -ReviewIndependence ---
+$riCmdFx = New-RiFixture -Roles (New-RiRoles -History) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$riRolesBefore = Get-RiHash -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles", "-ReviewIndependence", "sometimes", "-Yes")
+Check "roles -ReviewIndependence refuses an unknown value and changes nothing" (($r.Code -eq 1) -and ($r.Out -match "-ReviewIndependence must be separate-tool or fresh-context \(got: 'sometimes'\)") -and ((Get-RiHash -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riRolesBefore))
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-SetRole", "Master", "-SetTool", "Codex", "-Yes")
+Check "roles -ReviewIndependence is never combined with a role swap" (($r.Code -eq 1) -and ($r.Out -match "change one thing at a time") -and ((Get-RiHash -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riRolesBefore))
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+Check "asking for the rule already in force changes nothing" (($r.Code -eq 0) -and ($r.Out -match "already separate-tool") -and ((Get-RiHash -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riRolesBefore))
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+$riCmdText = Get-RiFile -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "roles -ReviewIndependence fresh-context applies and says what it weakens" (($r.Code -eq 0) -and ($r.Out -match "roles: applied\. Review Independence: fresh-context") -and ($r.Out -match "Two tools remain the recommended setup"))
+Check "the change writes exactly one declaration line, under the binding" ((([regex]::Matches($riCmdText, '(?m)^Review Independence:')).Count -eq 1) -and ($riCmdText -match '(?s)\| Implementer \| Claude Code \|\r?\n\r?\nReview Independence: fresh-context'))
+Check "the change is recorded in the Role Swap History like a role swap" ($riCmdText -match '(?m)^\| \d{4}-\d{2}-\d{2} \| Master=Codex, Reviewer=Codex, Implementer=Claude Code, Review Independence=separate-tool \| Master=Codex, Reviewer=Codex, Implementer=Claude Code, Review Independence=fresh-context \| User \(handoff\.ps1 roles\) \|')
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles")
+Check "roles states the fresh-context rule once it is in force" ($r.Out -match "Rule:\s+the Reviewer never shares a context with the Implementer\. Review Independence: fresh-context")
+Check "two different tools under fresh-context print no single-vendor line" ($r.Out -notmatch "Single-vendor review")
+$r = Invoke-Handoff -WorkDir $riCmdFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+$riCmdText = Get-RiFile -Dir $riCmdFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "switching back to separate-tool is allowed while the tools differ" (($r.Code -eq 0) -and ($riCmdText -match '(?m)^Review Independence: separate-tool\r?$') -and ($riCmdText -match 'Review Independence=fresh-context \| Master=Codex, Reviewer=Codex, Implementer=Claude Code, Review Independence=separate-tool'))
+
+$riNoHistFx = New-RiFixture -Roles (New-RiRoles) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riNoHistFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+$riNoHistText = Get-RiFile -Dir $riNoHistFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "a role file with no history table gets one, instead of a claim that nothing backs" (($r.Code -eq 0) -and ($riNoHistText -match '(?s)## Role Swap History\r?\n\r?\n\| Date \| Before \| After \| Decided by \|\r?\n\|---\|---\|---\|---\|\r?\n\| \d{4}-\d{2}-\d{2} \| Master=Codex'))
+
+$riBackFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Task "Finished task") -NoChange
+$riBackBefore = Get-RiHash -Dir $riBackFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riBackFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+Check "separate-tool is refused while one tool holds both roles, with the way out" (($r.Code -eq 1) -and ($r.Out -match "Reassign a role first") -and ((Get-RiHash -Dir $riBackFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riBackBefore))
+
+# The adapter refusal for fresh-context cannot be reached through the CLI today: both known
+# tools have a callable Reviewer adapter, and an unknown tool fails the role checkpoint
+# before the roles command runs. What is reachable is tested: an unknown Reviewer is refused
+# at the checkpoint, by name, and the file is not touched.
+$riNoAdapterFx = New-RiFixture -Roles (New-RiRoles -Reviewer "Gemini") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$riNoAdapterBefore = Get-RiHash -Dir $riNoAdapterFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riNoAdapterFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+Check "an unknown Reviewer tool is refused at the checkpoint before fresh-context can be set" (($r.Code -eq 12) -and ($r.Out -match "Unrecognized tool identity 'Gemini'") -and ((Get-RiHash -Dir $riNoAdapterFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riNoAdapterBefore))
+$riHandoffSrc = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the command checks for a callable Reviewer adapter before allowing fresh-context" ($riHandoffSrc -match '(?s)if \(\$normalized -eq "fresh-context"\) \{\s+\$reviewerAdapter = Get-AdapterProfile -Role "Reviewer" -Tool \$Binding\.Reviewer\s+if \(-not \$reviewerAdapter\.Callable\)')
+
+$riLiveFx = New-RiFixture -Roles (New-RiRoles -History) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User") -NoChange
+$riLiveBefore = Get-RiHash -Dir $riLiveFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$riSleeper = Start-Process -FilePath $PwshExe -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 45") -WindowStyle Hidden -PassThru
+try {
+    Start-Sleep -Milliseconds 500
+    $riMarker = [ordered]@{ processId = $riSleeper.Id; startTicks = $riSleeper.StartTime.ToUniversalTime().Ticks; command = "cycle"; startedUtc = "2026-11-18T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = $null; exitCode = $null }
+    [System.IO.File]::WriteAllText((Join-Path $riLiveFx "HANDOFF_BACKGROUND.json"), ($riMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riLiveFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+    Check "the review rule never changes while a turn is running" (($r.Code -eq 1) -and ($r.Out -match "A turn is running now") -and ((Get-RiHash -Dir $riLiveFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riLiveBefore))
+} finally {
+    try { Stop-Process -Id $riSleeper.Id -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+# --- Every relaxed gate, both ways ---
+# roles -SetRole: separate-tool exchanges (unchanged); fresh-context lets the pair share a tool.
+$riSwapFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riFresh -History) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riSwapFx -Arguments @("roles", "-SetRole", "Implementer", "-SetTool", "Codex", "-Yes")
+$riSwapText = Get-RiFile -Dir $riSwapFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "under fresh-context a swap may put one tool in both roles, with no exchange" (($r.Code -eq 0) -and ($r.Out -notmatch "Exchange:") -and ($riSwapText -match '\| Implementer \| Codex \|') -and ($riSwapText -match '\| Reviewer \| Codex \|'))
+Check "the applied swap says it is now a single-vendor review" ($r.Out -match "Single-vendor review: Codex is both Implementer and Reviewer")
+$riSwapSepFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riSeparate -History) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riSwapSepFx -Arguments @("roles", "-SetRole", "Implementer", "-SetTool", "Codex", "-Yes")
+Check "under separate-tool the same swap still exchanges the pair" (($r.Code -eq 0) -and ($r.Out -match "Exchange:\s+Reviewer takes Claude Code"))
+
+# master-apply: a recommendation that names one tool twice.
+$riMasterCapture = "MASTER_RECOMMENDATION: READY_FOR_IMPLEMENTATION`nWAITING_FOR: Implementer`nIMPLEMENTER: Codex`nREVIEWER: Codex`nTASK: solo master task`nMODEL_PROFILE: economy`nREASON: scoped."
+$riMasterFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -Task "solo master task" -Implementer "TBD" -Reviewer "TBD" -Actor "Test") -NoChange
+Set-Content -Path (Join-Path $riMasterFx "MASTER_LAST.md") -Value $riMasterCapture -Encoding utf8
+$r = Invoke-Handoff -WorkDir $riMasterFx -Arguments @("master-apply", "-Yes")
+Check "under fresh-context master-apply accepts one tool as Implementer and Reviewer" (($r.Code -eq 0) -and ((Get-RiFile -Dir $riMasterFx -Rel "AI_HANDOFF.md") -match "State:\s+READY_FOR_IMPLEMENTATION")) $r.Out
+$riMasterSepFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riSeparate) -Handoff (New-RiHandoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -Task "solo master task" -Implementer "TBD" -Reviewer "TBD" -Actor "Test") -NoChange
+Set-Content -Path (Join-Path $riMasterSepFx "MASTER_LAST.md") -Value ($riMasterCapture -replace "IMPLEMENTER: Codex", "IMPLEMENTER: Claude Code" -replace "REVIEWER: Codex", "REVIEWER: Claude Code") -Encoding utf8
+$r = Invoke-Handoff -WorkDir $riMasterSepFx -Arguments @("master-apply", "-Yes")
+Check "under separate-tool master-apply still refuses one tool as both" (($r.Code -ne 0) -and ($r.Out -match "resolve to the same tool"))
+
+# cycle and loop: past the role invariant under fresh-context; the next guard (no Git) stops them.
+$riCycleFx = New-RiFixture -Roles $riSoloClaude -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Implementer "Claude Code" -Reviewer "Claude Code" -Actor "Test") -NoGit
+$r = Invoke-Handoff -WorkDir $riCycleFx -Arguments @("cycle", "-Yes")
+Check "under fresh-context cycle passes the role invariant" (($r.Code -ne 0) -and ($r.Out -notmatch "Role invariant violation") -and ($r.Out -match "Git"))
+$r = Invoke-Handoff -WorkDir $riCycleFx -Arguments @("loop", "-Yes")
+Check "under fresh-context loop passes the session role invariant" (($r.Code -ne 0) -and ($r.Out -notmatch "Role invariant violation") -and ($r.Out -match "Git"))
+$riCycleSepFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code") -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Implementer "Claude Code" -Reviewer "Claude Code" -Actor "Test") -NoGit
+$r = Invoke-Handoff -WorkDir $riCycleSepFx -Arguments @("cycle", "-Yes")
+Check "under separate-tool cycle is still refused for one tool in both roles" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding"))
+$r = Invoke-Handoff -WorkDir $riCycleSepFx -Arguments @("loop", "-Yes")
+Check "under separate-tool loop is still refused for one tool in both roles" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding"))
+Check "each of the ten same-tool gates in handoff.ps1 is relaxed only through Test-FreshContextReview" (([regex]::Matches($riHandoffSrc, [regex]::Escape("-and -not (Test-FreshContextReview)"))).Count -eq 10)
+
+# --- The harness path: review-run, review-apply, then commit and release accept it ---
+$riFakeApprove = Join-Path $FixtureRoot "fake-codex-solo-approve.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo Looked at the diff.> REVIEW_LAST.md
+echo VERDICT: APPROVED>> REVIEW_LAST.md
+echo REVIEWER: Codex>> REVIEW_LAST.md
+echo TASK: solo review task>> REVIEW_LAST.md
+echo REASON: scope and behavior match the task.>> REVIEW_LAST.md
+:done
+'@ | Set-Content -Path $riFakeApprove -Encoding ascii
+$riFakeBlock = Join-Path $FixtureRoot "fake-codex-solo-block.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo VERDICT: BLOCKED> REVIEW_LAST.md
+echo REVIEWER: Codex>> REVIEW_LAST.md
+echo TASK: solo review task>> REVIEW_LAST.md
+echo REASON: a test is missing.>> REVIEW_LAST.md
+:done
+'@ | Set-Content -Path $riFakeBlock -Encoding ascii
+$riPrevCodexCli = $env:CODEX_CLI
+try {
+    $env:CODEX_CLI = $riFakeApprove
+    $riRunFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("review-check")
+    Check "review-check names a single-vendor review" (($r.Code -eq 0) -and ($r.Out -match "Review:\s+Single-vendor review: Codex is both Implementer and Reviewer\. It reviews in a separate read-only run started by the harness"))
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("review-run", "-Yes")
+    $riJsonl = if (Test-Path (Join-Path $riRunFx "REVIEW.jsonl")) { Get-RiFile -Dir $riRunFx -Rel "REVIEW.jsonl" } else { "" }
+    Check "review-run names a single-vendor review in its plan" (($r.Code -eq 0) -and ($r.Out -match "Review:\s+Single-vendor review"))
+    Check "review-run writes one harness evidence record under fresh-context" (([regex]::Matches($riJsonl, '(?m)^\{"handoffReviewEvidence":1,')).Count -eq 1)
+    $riRecord = ($riJsonl -split "`r?`n" | Where-Object { $_ -match '^\{"handoffReviewEvidence"' } | Select-Object -First 1) | ConvertFrom-Json
+    Check "the record binds the task, the capture and each reviewed file by SHA-256" (($riRecord.task -eq "solo review task") -and ($riRecord.kind -eq "code") -and ($riRecord.capture -eq (Get-RiHash -Dir $riRunFx -Rel "REVIEW_LAST.md").ToLowerInvariant()) -and (@($riRecord.files).Count -eq 1) -and (@($riRecord.files)[0].path -eq "src/app.txt") -and (@($riRecord.files)[0].sha256 -eq (Get-RiHash -Dir $riRunFx -Rel "src/app.txt").ToLowerInvariant()))
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("review-apply", "-Yes")
+    Check "review-apply applies a harness verdict for a single-vendor review" (($r.Code -eq 0) -and ((Get-RiFile -Dir $riRunFx -Rel "AI_HANDOFF.md") -match "State:\s+REVIEW_DONE"))
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-check")
+    Check "commit-check accepts the harness verdict" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready for explicit authorization"))
+    Check "commit-check names a single-vendor review" ($r.Out -match "Review:\s+Single-vendor review: Codex is both Implementer and Reviewer")
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("release-check", "-Version", "v9.9.9")
+    Check "release-check raises no review objection to the harness verdict" (($r.Out -notmatch "Reason: Single-vendor review") -and ($r.Out -match "Release package dist/"))
+
+    # Code that changes after the review is not the code the review approved.
+    $riApp = Join-Path $riRunFx "src/app.txt"
+    $riAppBytes = [System.IO.File]::ReadAllBytes($riApp)
+    Set-Content -Path $riApp -Value "hello, changed after review" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-check")
+    Check "a file changed after the harness review is refused at commit" (($r.Code -eq 1) -and ($r.Out -match "these files changed after the harness review read them: src/app\.txt"))
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("release-check", "-Version", "v9.9.9")
+    Check "a file changed after the harness review is refused at release" (($r.Code -eq 1) -and ($r.Out -match "changed after the harness review read them"))
+    [System.IO.File]::WriteAllBytes($riApp, $riAppBytes)
+    $riLast = Join-Path $riRunFx "REVIEW_LAST.md"
+    $riLastBytes = [System.IO.File]::ReadAllBytes($riLast)
+    Add-Content -Path $riLast -Value "Edited by hand." -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-check")
+    Check "a capture edited after review-run is refused" (($r.Code -eq 1) -and ($r.Out -match "REVIEW_LAST\.md changed after review-run captured it"))
+    [System.IO.File]::WriteAllBytes($riLast, $riLastBytes)
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-check")
+    Check "restoring the reviewed bytes restores the verdict" ($r.Code -eq 0)
+    $riJsonlPath = Join-Path $riRunFx "REVIEW.jsonl"
+    $riJsonlBytes = [System.IO.File]::ReadAllBytes($riJsonlPath)
+    Add-Content -Path $riJsonlPath -Value ($riJsonl -split "`r?`n" | Where-Object { $_ -match '^\{"handoffReviewEvidence"' } | Select-Object -First 1) -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-check")
+    Check "a second evidence record is refused, not chosen between" (($r.Code -eq 1) -and ($r.Out -match "carries 2 harness evidence records"))
+    [System.IO.File]::WriteAllBytes($riJsonlPath, $riJsonlBytes)
+    $riCommitsBefore = "$(& git -C $riRunFx rev-list --count HEAD)".Trim()
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("commit-approved", "-Message", "Solo reviewed change", "-Authorize", "I_AUTHORIZE_COMMIT")
+    $riCommitsAfter = "$(& git -C $riRunFx rev-list --count HEAD)".Trim()
+    Check "commit-approved commits a harness-reviewed single-vendor change" (($r.Code -eq 0) -and ([int]$riCommitsAfter -eq ([int]$riCommitsBefore + 1)))
+    $r = Invoke-Handoff -WorkDir $riRunFx -Arguments @("release-check", "-Version", "v9.9.9")
+    Check "after the commit, release-check still ties the reviewed bytes to the verdict" (($r.Out -notmatch "Reason: Single-vendor review") -and ($r.Out -match "Release package dist/"))
+
+    # A REVIEW_DONE reached by hand, with no harness run, is refused at commit and release.
+    $riForgedFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Actor "Reviewer (Codex)" -LastUpdateExtra "- Verdict: APPROVED")
+    $r = Invoke-Handoff -WorkDir $riForgedFx -Arguments @("commit-check")
+    Check "a manual REVIEW_DONE is refused by commit-check when one tool holds both roles" (($r.Code -eq 1) -and ($r.Out -match "Single-vendor review: there is no harness review capture"))
+    $riForgedCommits = "$(& git -C $riForgedFx rev-list --count HEAD)".Trim()
+    $r = Invoke-Handoff -WorkDir $riForgedFx -Arguments @("commit-approved", "-Message", "Forged", "-Authorize", "I_AUTHORIZE_COMMIT")
+    Check "a manual REVIEW_DONE is refused by commit-approved and nothing is committed" (($r.Code -eq 1) -and ($r.Out -match "no harness review capture") -and ("$(& git -C $riForgedFx rev-list --count HEAD)".Trim() -eq $riForgedCommits))
+    $r = Invoke-Handoff -WorkDir $riForgedFx -Arguments @("release-check", "-Version", "v9.9.9")
+    Check "a manual REVIEW_DONE is refused by release-check" (($r.Code -eq 1) -and ($r.Out -match "Reason: Single-vendor review: there is no harness review capture"))
+    Set-Content -Path (Join-Path $riForgedFx "REVIEW_LAST.md") -Value "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: solo review task`nREASON: written by hand" -Encoding utf8
+    $riForgedText = (Get-RiFile -Dir $riForgedFx -Rel "AI_HANDOFF.md") -replace "- Actor: Reviewer \(Codex\)", "- Actor: Reviewer (Codex), applied from the captured review verdict via review-apply"
+    [System.IO.File]::WriteAllText((Join-Path $riForgedFx "AI_HANDOFF.md"), $riForgedText, (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riForgedFx -Arguments @("commit-check")
+    Check "a hand-written capture with no harness record is refused" (($r.Code -eq 1) -and ($r.Out -match "carries no harness evidence record"))
+    $r = Invoke-Handoff -WorkDir $riForgedFx -Arguments @("release-check", "-Version", "v9.9.9")
+    Check "release-check refuses the hand-written capture too" (($r.Code -eq 1) -and ($r.Out -match "carries no harness evidence record"))
+
+    # review-apply itself refuses a verdict review-run did not produce.
+    $riHandApplyFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+    Set-Content -Path (Join-Path $riHandApplyFx "REVIEW_LAST.md") -Value "VERDICT: APPROVED`nREVIEWER: Codex`nTASK: solo review task`nREASON: written by hand" -Encoding utf8
+    $riHandBefore = Get-RiHash -Dir $riHandApplyFx -Rel "AI_HANDOFF.md"
+    $r = Invoke-Handoff -WorkDir $riHandApplyFx -Arguments @("review-apply", "-Yes")
+    Check "review-apply refuses a single-vendor verdict that review-run did not write" (($r.Code -eq 1) -and ($r.Out -match "carries no harness evidence record") -and ((Get-RiHash -Dir $riHandApplyFx -Rel "AI_HANDOFF.md") -eq $riHandBefore))
+
+    # A BLOCKED harness verdict does not become an approval by editing the state.
+    $env:CODEX_CLI = $riFakeBlock
+    $riBlockFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+    $null = Invoke-Handoff -WorkDir $riBlockFx -Arguments @("review-run", "-Yes")
+    $r = Invoke-Handoff -WorkDir $riBlockFx -Arguments @("review-apply", "-Yes")
+    $riBlockText = (Get-RiFile -Dir $riBlockFx -Rel "AI_HANDOFF.md") -replace "- State: READY_FOR_IMPLEMENTATION", "- State: REVIEW_DONE" -replace "- Waiting For: Implementer", "- Waiting For: User"
+    [System.IO.File]::WriteAllText((Join-Path $riBlockFx "AI_HANDOFF.md"), $riBlockText, (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riBlockFx -Arguments @("commit-check")
+    Check "a BLOCKED harness verdict edited to REVIEW_DONE is refused" (($r.Code -eq 1) -and ($r.Out -match "verdict is BLOCKED, not APPROVED"))
+
+    # A plan review under fresh-context is bound the same way, to the plan text.
+    $env:CODEX_CLI = $riFakeApprove
+    $riPlanFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -ChangedFile "None yet" -Extra "`n## Plan`n- Step one: add the feature.") -NoChange
+    $null = Invoke-Handoff -WorkDir $riPlanFx -Arguments @("review-run", "-Yes")
+    $r = Invoke-Handoff -WorkDir $riPlanFx -Arguments @("review-apply", "-Yes")
+    Check "an approved single-vendor plan review is applied from its harness record" (($r.Code -eq 0) -and ((Get-RiFile -Dir $riPlanFx -Rel "AI_HANDOFF.md") -match "State:\s+READY_FOR_IMPLEMENTATION")) $r.Out
+
+    # Under separate-tool nothing new is written.
+    $riSepRunFx = New-RiFixture -Roles $DefaultRoles -Handoff (New-RiHandoff -Implementer "Claude Code" -Reviewer "Codex" -Actor "Claude Code (Implementer)")
+    $r = Invoke-Handoff -WorkDir $riSepRunFx -Arguments @("review-run", "-Yes")
+    $riSepJsonl = if (Test-Path (Join-Path $riSepRunFx "REVIEW.jsonl")) { Get-RiFile -Dir $riSepRunFx -Rel "REVIEW.jsonl" } else { "" }
+    Check "under separate-tool review-run writes no evidence record and no new line" (($r.Code -eq 0) -and ($riSepJsonl -notmatch "handoffReviewEvidence") -and ($r.Out -notmatch "Single-vendor review"))
+} finally {
+    if ($null -eq $riPrevCodexCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $riPrevCodexCli }
+}
+
+# Two different tools under fresh-context behave exactly like separate-tool.
+$riTwoFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riFresh) -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Implementer "Claude Code" -Reviewer "Codex" -Actor "Claude Code (Implementer)")
+$r = Invoke-Handoff -WorkDir $riTwoFx -Arguments @("commit-check")
+Check "with two tools, fresh-context needs no harness record, as separate-tool" (($r.Code -eq 0) -and ($r.Out -notmatch "Single-vendor review"))
+
+# --- The self-review guard keeps its purpose ---
+$riSelfFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Codex (Master)")
+$r = Invoke-Handoff -WorkDir $riSelfFx -Arguments @("review-check")
+Check "one tool in all roles: a Master that did the work is still refused review" (($r.Code -eq 1) -and ($r.Out -match "Self-review guard \(single-vendor review\)"))
+$riSelfFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Codex")
+$r = Invoke-Handoff -WorkDir $riSelfFx -Arguments @("review-check")
+Check "one tool in all roles: an Actor line that names no role is refused" (($r.Code -eq 1) -and ($r.Out -match "Self-review guard \(single-vendor review\).*its Actor line is 'Codex'"))
+$riSelfFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riFresh) -Handoff (New-RiHandoff -Implementer "Claude Code" -Reviewer "Codex" -Actor "Codex (Master)")
+$r = Invoke-Handoff -WorkDir $riSelfFx -Arguments @("review-check")
+Check "fresh-context with two tools: a Master that reviews its own work is refused as before" (($r.Code -eq 1) -and ($r.Out -match "Self-review guard: AI_HANDOFF\.md Last Update records 'Codex'"))
+
+# --- Say it out loud: one line in each place ---
+$riSayFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+foreach ($riCmd in @("roles", "status", "work")) {
+    $r = Invoke-Handoff -WorkDir $riSayFx -Arguments @($riCmd)
+    Check "$riCmd prints one single-vendor line" ((([regex]::Matches($r.Out, "Single-vendor review: Codex is both Implementer and Reviewer")).Count -eq 1) -and ($r.Code -eq 0))
+}
+$r = Invoke-Handoff -WorkDir $riSayFx -Arguments @("work")
+Check "work does not offer a hand-taken review as an equal path" (($r.Out -match "will not count: commit-check accepts only the review-run verdict") -and ($r.Out -notmatch "To take the turn manually"))
+$r = Invoke-Handoff -WorkDir $riSayFx -Arguments @("next")
+Check "next says a pasted review will not count" (($r.Out -match "a review taken by pasting this prompt will not count") -and ($r.Out -notmatch "Manual paste above remains valid"))
+$r = Invoke-Handoff -WorkDir $riSayFx -Arguments @("doctor")
+Check "doctor reports a single-vendor review as information, not a failure" (($r.Out -match "INFO  Single-vendor review: Codex is both Implementer and Reviewer") -and ($r.Out -match "OK  Role checkpoint") -and ($r.Out -notmatch "FAIL  Role checkpoint"))
+$null = Invoke-Handoff -WorkDir $riSayFx -Arguments @("next")
+$riNt = Get-RiFile -Dir $riSayFx -Rel "NEXT_TURN.md"
+Check "NEXT_TURN.md gives the Reviewer a single-vendor section" ($riNt -match "(?s)## Review Independence\r?\nSingle-vendor review: Codex is both Implementer and Reviewer.*refused by commit-check, commit-approved and release-check")
+$riImplFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoChange
+$null = Invoke-Handoff -WorkDir $riImplFx -Arguments @("next")
+Check "an Implementer turn carries no Review Independence section" ((Get-RiFile -Dir $riImplFx -Rel "NEXT_TURN.md") -notmatch "## Review Independence")
+$riQuietFx = New-RiFixture -Roles $DefaultRoles -Handoff (New-RiHandoff -Implementer "Claude Code" -Reviewer "Codex" -Actor "Claude Code (Implementer)")
+$null = Invoke-Handoff -WorkDir $riQuietFx -Arguments @("next")
+$r = Invoke-Handoff -WorkDir $riQuietFx -Arguments @("status")
+Check "separate-tool prints no single-vendor line and writes no section" (($r.Out -notmatch "Single-vendor review") -and ((Get-RiFile -Dir $riQuietFx -Rel "NEXT_TURN.md") -notmatch "## Review Independence"))
+
+# --- Advisory, not a block: Master and Reviewer on one tool, two tools bound ---
+$r = Invoke-Handoff -WorkDir $riQuietFx -Arguments @("roles")
+Check "roles advises a Reviewer from a different tool than the Master" (($r.Code -eq 0) -and ($r.Out -match "Advisory: Master and Reviewer are both Codex\. A Reviewer from a different tool than the Master questions the plan as well as the code\."))
+$r = Invoke-Handoff -WorkDir $riQuietFx -Arguments @("doctor")
+Check "doctor gives the same advisory as information" (($r.Out -match "INFO  Advisory: Master and Reviewer are both Codex") -and ($r.Out -notmatch "FAIL  Role checkpoint"))
+$r = Invoke-Handoff -WorkDir $riSayFx -Arguments @("roles")
+Check "with one tool bound there is no second tool to advise" ($r.Out -notmatch "Advisory:")
+$riSplitFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Codex" -Implementer "Claude Code") -Handoff (New-RiHandoff -Implementer "Claude Code" -Reviewer "Codex" -Actor "Claude Code (Implementer)")
+$r = Invoke-Handoff -WorkDir $riSplitFx -Arguments @("roles")
+Check "a Reviewer apart from the Master draws no advisory" ($r.Out -notmatch "Advisory:")
+
+# --- Parity: handoff.sh and next-step write the same section and enforce the same rule ---
+$riBash = Get-Command bash -ErrorAction SilentlyContinue
+if ($null -eq $riBash) {
+    Write-Host "  SKIP  review independence parity with handoff.sh and next-step: no bash interpreter on this machine"
+} else {
+    $riShPath = (Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/'
+    $riNextShPath = (Join-Path $RepoRoot "scripts/next-step.sh") -replace '\\', '/'
+    $riNextPsPath = Join-Path $RepoRoot "scripts/next-step.ps1"
+    function Get-RiSection { param([string]$Text) if (($Text -replace "`r", "") -match '(?s)## Review Independence\n(.*?)(\n\n|$)') { return $Matches[1] } return "<none>" }
+    function Invoke-RiIn { param([string]$Dir, [scriptblock]$Block)
+        $prevCwd = [System.Environment]::CurrentDirectory
+        Push-Location $Dir
+        [System.Environment]::CurrentDirectory = $Dir
+        try { return (& $Block 2>&1 | Out-String) } finally { Pop-Location; [System.Environment]::CurrentDirectory = $prevCwd }
+    }
+    $null = Invoke-Handoff -WorkDir $riSayFx -Arguments @("next")
+    $riPsSection = Get-RiSection -Text (Get-RiFile -Dir $riSayFx -Rel "NEXT_TURN.md")
+    $null = Invoke-RiIn -Dir $riSayFx -Block { & $riBash.Source $riShPath next }
+    $riShSection = Get-RiSection -Text (Get-RiFile -Dir $riSayFx -Rel "NEXT_TURN.md")
+    Check "handoff.sh and handoff.ps1 write the same Review Independence section" (($riPsSection -ne "<none>") -and ($riPsSection -eq $riShSection)) "ps=[$riPsSection] sh=[$riShSection]"
+    $null = Invoke-RiIn -Dir $riSayFx -Block { & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $riNextPsPath -PrepareFile }
+    $riNextPsSection = Get-RiSection -Text (Get-RiFile -Dir $riSayFx -Rel "NEXT_TURN.md")
+    $null = Invoke-RiIn -Dir $riSayFx -Block { & $riBash.Source $riNextShPath --prepare-file }
+    $riNextShSection = Get-RiSection -Text (Get-RiFile -Dir $riSayFx -Rel "NEXT_TURN.md")
+    Check "next-step.ps1 and next-step.sh write the same section as handoff.ps1" (($riNextPsSection -eq $riPsSection) -and ($riNextShSection -eq $riPsSection)) "ps=[$riNextPsSection] sh=[$riNextShSection]"
+    $riShOut = Invoke-RiIn -Dir $riSayFx -Block { & $riBash.Source $riShPath status }
+    Check "handoff.sh status prints the single-vendor line" ($riShOut -match "Review:\s+Single-vendor review: Codex is both Implementer and Reviewer")
+    $riShOut = Invoke-RiIn -Dir $riQuietFx -Block { & $riBash.Source $riShPath next }
+    Check "handoff.sh says nothing new under separate-tool" (($riShOut -notmatch "Single-vendor") -and ((Get-RiFile -Dir $riQuietFx -Rel "NEXT_TURN.md") -notmatch "## Review Independence"))
+    $riBadFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence: relaxed") -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+    $riShOut = Invoke-RiIn -Dir $riBadFx -Block { & $riBash.Source $riShPath next; "exit=$LASTEXITCODE" }
+    Check "handoff.sh fails closed on an unknown value, like handoff.ps1" (($riShOut -match "exit=12") -and ($riShOut -match "Invalid review independence"))
+    $riSameFx = New-RiFixture -Roles (New-RiRoles -Master "Claude Code" -Reviewer "Claude Code" -Implementer "Claude Code") -Handoff $riSameHandoff -NoGit
+    $riFreshSameFx = New-RiFixture -Roles $riSoloClaude -Handoff $riSameHandoff -NoGit
+    $riShOut = Invoke-RiIn -Dir $riSameFx -Block { & $riBash.Source $riShPath next; "exit=$LASTEXITCODE" }
+    Check "handoff.sh refuses one tool in both roles without fresh-context" (($riShOut -match "exit=12") -and ($riShOut -match "Invalid role binding"))
+    $riShOut = Invoke-RiIn -Dir $riFreshSameFx -Block { & $riBash.Source $riShPath next; "exit=$LASTEXITCODE" }
+    Check "handoff.sh accepts one tool in both roles under fresh-context" (($riShOut -match "exit=0") -and ($riShOut -notmatch "Role checkpoint: BLOCKED"))
+    $riShOut = Invoke-RiIn -Dir $riForgedFx -Block { & $riBash.Source $riShPath commit-check }
+    Check "handoff.sh sends a single-vendor commit to the PowerShell check that reads the harness record" ($riShOut -match "Commit: BLOCKED in handoff\.sh - a single-vendor review is verified only by pwsh scripts/handoff\.ps1 commit-check")
+}
+
+
+# --- v3.17.0 review fixes: each check below failed before its fix ---
+Write-Host "[4D-7b] Review independence: holes closed after review (v3.17.0)"
+
+$riFakeEmpty = Join-Path $FixtureRoot "fake-codex-solo-empty.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+:done
+'@ | Set-Content -Path $riFakeEmpty -Encoding ascii
+$riFakeRoleEdit = Join-Path $FixtureRoot "fake-codex-solo-role-edit.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo Review Independence: separate-tool>> .ai\roles\ROLE_ASSIGNMENT.md
+:done
+'@ | Set-Content -Path $riFakeRoleEdit -Encoding ascii
+$riFakeNoop = Join-Path $FixtureRoot "fake-codex-solo-noop.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo done> FAKE_IMPLEMENTER_RAN.txt
+:done
+'@ | Set-Content -Path $riFakeNoop -Encoding ascii
+
+# 1. Placeholder Task Actors no longer skip the harness check at commit and release.
+$riTbdFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Implementer "TBD" -Reviewer "TBD" -Actor "Reviewer (Codex)" -LastUpdateExtra "- Verdict: APPROVED")
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("commit-check")
+Check "fresh-context with TBD Task Actors: commit-check still requires the harness verdict" (($r.Code -eq 1) -and ($r.Out -match "Task Actors Implementer is 'TBD', not a known tool") -and ($r.Out -match "no harness review capture")) $r.Out
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("release-check", "-Version", "v9.9.9")
+Check "fresh-context with TBD Task Actors: release-check still requires the harness verdict" (($r.Code -eq 1) -and ($r.Out -match "Task Actors Reviewer is 'TBD', not a known tool") -and ($r.Out -match "no harness review capture"))
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("commit-approved", "-Message", "Forged", "-Authorize", "I_AUTHORIZE_COMMIT")
+Check "fresh-context with TBD Task Actors: commit-approved refuses" (($r.Code -eq 1) -and ($r.Out -match "no harness review capture"))
+$riTbdSepFx = New-RiFixture -Roles (New-RiRoles -ModeLine $riSeparate) -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Implementer "TBD" -Reviewer "TBD" -Actor "Reviewer (Codex)")
+$r = Invoke-Handoff -WorkDir $riTbdSepFx -Arguments @("commit-check")
+Check "separate-tool keeps its behavior for placeholder actors (recorded separately, unchanged here)" ($r.Out -notmatch "Single-vendor review")
+
+# 5. status, user-next and work agree with the gate.
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("status")
+Check "status does not call a single-vendor REVIEW_DONE without a harness verdict ALLOWED" (($r.Out -match "Commit:\s+Blocked - commit-check refuses this single-vendor REVIEW_DONE") -and ($r.Out -notmatch "Commit:\s+ALLOWED"))
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("user-next")
+Check "user-next does not offer commit-approved that commit-check would refuse" (($r.Out -notmatch "commit-approved -Message") -and ($r.Out -match "review must come from the harness"))
+$r = Invoke-Handoff -WorkDir $riTbdFx -Arguments @("work")
+Check "work does not offer commit-approved that commit-check would refuse" (($r.Out -notmatch "commit-approved -Message") -and ($r.Out -match "review must come from the harness"))
+
+# 2. A single-vendor review proceeds only after an Implementer record.
+$riRoleOnlyFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Implementer")
+$r = Invoke-Handoff -WorkDir $riRoleOnlyFx -Arguments @("review-check")
+Check "the shipped '- Actor: Implementer' form, with no tool, is an Implementer record" (($r.Code -eq 0) -and ($r.Out -match "review-check: ready"))
+$riMasterOnlyFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Master")
+$r = Invoke-Handoff -WorkDir $riMasterOnlyFx -Arguments @("review-check")
+Check "an honest '- Actor: Master', with no tool, is refused review" (($r.Code -eq 1) -and ($r.Out -match "its Actor line is 'Master'"))
+$riLeftoverFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Reviewer (Codex), applied from the captured review verdict via review-apply" -LastUpdateExtra "- Verdict: BLOCKED")
+$r = Invoke-Handoff -WorkDir $riLeftoverFx -Arguments @("review-check")
+Check "a leftover review record (BLOCKED findings fixed without a new record) is refused review" (($r.Code -eq 1) -and ($r.Out -match "it is still the record of a review"))
+$riLeftoverMasterFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -Actor "Codex (Master)" -LastUpdateExtra "- Verdict: BLOCKED")
+$r = Invoke-Handoff -WorkDir $riLeftoverMasterFx -Arguments @("review-check")
+Check "a Verdict line no longer hides a Master's turn from the single-vendor guard" (($r.Code -eq 1) -and ($r.Out -match "Self-review guard \(single-vendor review\)"))
+$riHandoffSrc2 = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot "scripts/handoff.ps1")
+Check "the harness's own interrupted-correction record counts as an Implementer record" ($riHandoffSrc2 -match "\^Automation Recovery after interrupted")
+
+$riPrevCodexCli2 = $env:CODEX_CLI
+try {
+    # A failed review-run clears the old record, and a re-run after it still works.
+    $env:CODEX_CLI = $riFakeApprove
+    $riRerunFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+    $null = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("review-run", "-Yes")
+    $riHadRecord = (Test-Path (Join-Path $riRerunFx "REVIEW.jsonl")) -and ((Get-RiFile -Dir $riRerunFx -Rel "REVIEW.jsonl") -match "handoffReviewEvidence")
+    $env:CODEX_CLI = $riFakeEmpty
+    $r = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("review-run", "-Yes")
+    $riJsonlAfter = if (Test-Path (Join-Path $riRerunFx "REVIEW.jsonl")) { Get-RiFile -Dir $riRerunFx -Rel "REVIEW.jsonl" } else { "" }
+    Check "a failed review-run leaves no old harness record behind" ($riHadRecord -and ($r.Code -ne 0) -and ($riJsonlAfter -notmatch "handoffReviewEvidence") -and (-not (Test-Path (Join-Path $riRerunFx "REVIEW_LAST.md"))))
+    $r = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("review-apply", "-Yes")
+    Check "after a failed run there is nothing to apply" ($r.Code -eq 1)
+    $env:CODEX_CLI = $riFakeApprove
+    $r = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("review-run", "-Yes")
+    $r2 = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("review-apply", "-Yes")
+    Check "a re-run of review-run after a failed run completes and applies" (($r.Code -eq 0) -and ($r2.Code -eq 0) -and ((Get-RiFile -Dir $riRerunFx -Rel "AI_HANDOFF.md") -match "State:\s+REVIEW_DONE"))
+
+    # 9. review-apply records the capture hash, and commit compares it.
+    $riAppliedText = Get-RiFile -Dir $riRerunFx -Rel "AI_HANDOFF.md"
+    Check "review-apply records the SHA-256 of the capture it applied" ($riAppliedText -match ("- Capture SHA-256: " + (Get-RiHash -Dir $riRerunFx -Rel "REVIEW_LAST.md").ToLowerInvariant()))
+
+    # 12. Record for another task, and a file-set mismatch.
+    $riOtherTask = $riAppliedText -replace "- Current Task: solo review task", "- Current Task: another task"
+    [System.IO.File]::WriteAllText((Join-Path $riRerunFx "AI_HANDOFF.md"), $riOtherTask, (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("commit-check")
+    Check "a harness record for another task is refused" (($r.Code -eq 1) -and ($r.Out -match "the harness evidence is for task 'solo review task', not the current task 'another task'"))
+    $riExtraSet = $riAppliedText -replace "## Changed Files\r?\n- src/app.txt", "## Changed Files`n- src/app.txt`n- src/extra.txt"
+    [System.IO.File]::WriteAllText((Join-Path $riRerunFx "AI_HANDOFF.md"), $riExtraSet, (New-Object System.Text.UTF8Encoding($false)))
+    Set-Content -Path (Join-Path $riRerunFx "src/extra.txt") -Value "extra" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $riRerunFx -Arguments @("commit-check")
+    Check "a file outside the reviewed set is refused" (($r.Code -eq 1) -and ($r.Out -match "the harness review covered \[src/app\.txt\], but the files declared now are \[src/app\.txt, src/extra\.txt\]"))
+
+    # 12 / 9. A plan record at commit, and a leftover plan review-apply record.
+    $riPlan2Fx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -ChangedFile "None yet" -Extra "`n## Plan`n- Step one: add the feature.") -NoChange
+    $null = Invoke-Handoff -WorkDir $riPlan2Fx -Arguments @("review-run", "-Yes")
+    $null = Invoke-Handoff -WorkDir $riPlan2Fx -Arguments @("review-apply", "-Yes")
+    $riPlanApplied = Get-RiFile -Dir $riPlan2Fx -Rel "AI_HANDOFF.md"
+    New-Item -ItemType Directory -Path (Join-Path $riPlan2Fx "src") -Force | Out-Null
+    Set-Content -Path (Join-Path $riPlan2Fx "src/app.txt") -Value "hello" -Encoding utf8
+    $riPlanDone = ($riPlanApplied -replace "- State: READY_FOR_IMPLEMENTATION", "- State: REVIEW_DONE" -replace "- Waiting For: Implementer", "- Waiting For: User") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- src/app.txt"
+    [System.IO.File]::WriteAllText((Join-Path $riPlan2Fx "AI_HANDOFF.md"), $riPlanDone, (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riPlan2Fx -Arguments @("commit-check")
+    Check "an approved plan record presented at commit is refused" (($r.Code -eq 1) -and ($r.Out -match "the harness evidence is for a plan review, and this step needs a code review"))
+    # Now a code review-run that is never applied, with the plan's review-apply record put back.
+    $riPlanReady = ($riPlanApplied -replace "- State: READY_FOR_IMPLEMENTATION", "- State: READY_FOR_REVIEW" -replace "- Waiting For: Implementer", "- Waiting For: Reviewer") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- src/app.txt"
+    $riPlanReady = $riPlanReady -replace "(?s)## Last Update\r?\n.*?(?=\r?\n## )", "## Last Update`n- Actor: Codex (Implementer)`n- Date: 2026-11-18`n"
+    [System.IO.File]::WriteAllText((Join-Path $riPlan2Fx "AI_HANDOFF.md"), $riPlanReady, (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-Handoff -WorkDir $riPlan2Fx -Arguments @("review-run", "-Yes")
+    $riLeftoverPlan = ($riPlanApplied -replace "- State: READY_FOR_IMPLEMENTATION", "- State: REVIEW_DONE" -replace "- Waiting For: Implementer", "- Waiting For: User") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- src/app.txt"
+    [System.IO.File]::WriteAllText((Join-Path $riPlan2Fx "AI_HANDOFF.md"), $riLeftoverPlan, (New-Object System.Text.UTF8Encoding($false)))
+    $r2 = Invoke-Handoff -WorkDir $riPlan2Fx -Arguments @("commit-check")
+    Check "a leftover plan review-apply record cannot stand in for an unapplied code verdict" (($r.Code -eq 0) -and ($r2.Code -eq 1) -and ($r2.Out -match "REVIEW_DONE was applied from a different review")) "$($r2.Out)"
+
+    # 12. loop -IncludeReviewer end to end under fresh-context.
+    $env:CODEX_CLI = $riFakeApprove
+    $riLoopFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff)
+    $r = Invoke-Handoff -WorkDir $riLoopFx -Arguments @("loop", "-IncludeReviewer", "-Yes")
+    $r2 = Invoke-Handoff -WorkDir $riLoopFx -Arguments @("commit-check")
+    Check "loop -IncludeReviewer runs a single-vendor review end to end and commit-check accepts it" (($r.Code -eq 0) -and ((Get-RiFile -Dir $riLoopFx -Rel "AI_HANDOFF.md") -match "State:\s+REVIEW_DONE") -and ($r2.Code -eq 0)) "$($r.Out)"
+
+    # 10. A write-enabled Implementer turn may not change the role file.
+    $env:CODEX_CLI = $riFakeRoleEdit
+    $riEditFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Actor "Test") -NoChange
+    $r = Invoke-Handoff -WorkDir $riEditFx -Arguments @("cycle", "-Yes")
+    Check "cycle stops when the Implementer turn edits the role file" (($r.Code -eq 6) -and ($r.Out -match "the Implementer turn changed \.ai/roles/ROLE_ASSIGNMENT\.md")) "$($r.Out)"
+    $riEditFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Actor "Test") -NoChange
+    $r = Invoke-Handoff -WorkDir $riEditFx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
+    Check "loop stops when the Implementer turn edits the role file" (($r.Code -eq 6) -and ($r.Out -match "the Implementer turn changed \.ai/roles/ROLE_ASSIGNMENT\.md")) "$($r.Out)"
+    $env:CODEX_CLI = $riFakeNoop
+    $riNoEditFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Actor "Test") -NoChange
+    $r = Invoke-Handoff -WorkDir $riNoEditFx -Arguments @("cycle", "-Yes")
+    Check "an Implementer turn that leaves the role file alone is not stopped by that check" ((Test-Path (Join-Path $riNoEditFx "FAKE_IMPLEMENTER_RAN.txt")) -and ($r.Out -notmatch "changed \.ai/roles/ROLE_ASSIGNMENT\.md"))
+} finally {
+    if ($null -eq $riPrevCodexCli2) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $riPrevCodexCli2 }
+}
+
+# 8. loop re-reads the review rule every turn, with the binding.
+Check "loop re-reads Review Independence with the binding each turn" ($riHandoffSrc2 -match '(?s)\$script:Binding     = Get-RoleBinding\r?\n\s+# v3\.17\.0 \(review fix\)[^\n]*\r?\n\s+\$script:ReviewIndependenceState = Get-ReviewIndependence')
+
+# 6. The roles window shows an invalid line as invalid.
+Check "the roles window shows an invalid or duplicated line as invalid, not as fresh-context" (($riHandoffSrc2 -match "review rule INVALID") -and ($riHandoffSrc2 -match "values\.Count -eq 1 -and ``\`$values\[0\] -eq 'fresh-context'"))
+
+# 7. An invalid line is repairable by the command when it is the only problem.
+$riRepairFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence: relaxed" -History) -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riRepairFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+$riRepaired = Get-RiFile -Dir $riRepairFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "roles -ReviewIndependence repairs an invalid line" (($r.Code -eq 0) -and (([regex]::Matches($riRepaired, '(?m)^Review Independence:')).Count -eq 1) -and ($riRepaired -match '(?m)^Review Independence: separate-tool\r?$') -and ($riRepaired -match 'Review Independence=invalid \|')) $r.Out
+$riDupFx = New-RiFixture -Roles ((New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine $riFresh) + "`nreview independence: FRESH-CONTEXT`n") -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Task "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riDupFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+$riDedup = Get-RiFile -Dir $riDupFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "roles -ReviewIndependence repairs a duplicated line under a one-tool binding" (($r.Code -eq 0) -and (([regex]::Matches($riDedup, '(?mi)^review independence:')).Count -eq 1)) $r.Out
+$riDupFx2 = New-RiFixture -Roles ((New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine $riFresh) + "`n$riFresh`n") -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Task "Finished task") -NoChange
+$riDupFx2Before = Get-RiHash -Dir $riDupFx2 -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riDupFx2 -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+Check "the repair still refuses separate-tool for a one-tool binding" (($r.Code -eq 1) -and ($r.Out -match "Reassign a role first") -and ((Get-RiHash -Dir $riDupFx2 -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riDupFx2Before))
+$riBadToolFx = New-RiFixture -Roles (New-RiRoles -Reviewer "Gemini" -ModeLine "Review Independence: relaxed") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$riBadToolBefore = Get-RiHash -Dir $riBadToolFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riBadToolFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+Check "the repair is refused when another problem remains, with the manual repair named" (($r.Code -eq 12) -and ($r.Out -match "Repair it by hand in \.ai/roles/ROLE_ASSIGNMENT\.md") -and ((Get-RiHash -Dir $riBadToolFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riBadToolBefore))
+$riDriftFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence: relaxed") -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Implementer "Codex" -Reviewer "Claude Code" -Actor "Test") -NoChange
+$r = Invoke-Handoff -WorkDir $riDriftFx -Arguments @("next")
+Check "the bad-line hint is printed even when role drift is reported too" (($r.Code -eq 12) -and ($r.Out -match "Role drift") -and ($r.Out -match "The 'Review Independence:' line must appear once"))
+$riRolesBadFx = New-RiFixture -Roles (New-RiRoles -ModeLine "Review Independence: relaxed") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riRolesBadFx -Arguments @("roles")
+Check "plain roles is still blocked by an invalid line, and names the repair command" (($r.Code -eq 12) -and ($r.Out -match "roles -ReviewIndependence <separate-tool\|fresh-context> -Yes"))
+
+# 3. Agent instructions hold under both modes, in every copy.
+$riOldSentences = @(
+    "If they differ, or Reviewer equals Implementer, stop",
+    "If they differ, or Reviewer equals Implementer, fail closed",
+    "Reviewer and Implementer must always remain different",
+    "drift or Reviewer==Implementer is a fail-closed stop",
+    "for drift or Reviewer==Implementer;",
+    "Implementer must be bound to Claude Code; Reviewer != Implementer;"
+)
+$riAgentFiles = @(".ai/skills/codex-claude-handoff/MASTER.md", ".ai/skills/codex-claude-handoff/IMPLEMENTER.md", ".ai/skills/codex-claude-handoff/SKILL.md", ".ai/skills/codex-claude-handoff/CLAUDE.md", ".ai/skills/codex-claude-handoff/CODEX.md", ".ai/skills/codex-claude-handoff/ADAPTERS.md", "templates/AGENTS.md", "templates/CLAUDE.md")
+$riStale = @()
+foreach ($riRel in @($riAgentFiles + @($riAgentFiles | Where-Object { $_ -like ".ai/*" } | ForEach-Object { "templates/$_" }))) {
+    $riText = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot $riRel)
+    foreach ($riSentence in $riOldSentences) { if ($riText.Contains($riSentence)) { $riStale += "$riRel : $riSentence" } }
+}
+Check "no agent instruction still forbids one tool in both roles under fresh-context" ($riStale.Count -eq 0) ($riStale -join " | ")
+$riMasterDoc = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/MASTER.md")
+$riImplDoc = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot ".ai/skills/codex-claude-handoff/IMPLEMENTER.md")
+Check "MASTER.md and IMPLEMENTER.md state the start-of-turn rule for both modes" (($riMasterDoc -match "Reviewer equals Implementer while the role file does not declare ``Review Independence: fresh-context``") -and ($riImplDoc -match "Reviewer equals Implementer while the role file does not declare ``Review Independence: fresh-context``"))
+
+# 4. Mis-cased lines are read the same way by every implementation.
+$riMisFx = New-RiFixture -Roles (New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine "review independence: Fresh-Context") -Handoff (New-RiHandoff) -NoGit
+$r = Invoke-Handoff -WorkDir $riMisFx -Arguments @("next")
+$riMisPs = Get-RiFile -Dir $riMisFx -Rel "NEXT_TURN.md"
+Check "handoff.ps1 reads a mis-cased fresh-context line" (($r.Code -eq 0) -and ($riMisPs -match "## Review Independence"))
+$riBash2 = Get-Command bash -ErrorAction SilentlyContinue
+if ($null -eq $riBash2) {
+    Write-Host "  SKIP  mis-cased parity with handoff.sh: no bash interpreter on this machine"
+} else {
+    $riSh2 = (Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/'
+    $riNextSh2 = (Join-Path $RepoRoot "scripts/next-step.sh") -replace '\\', '/'
+    $riPrevCwd = [System.Environment]::CurrentDirectory
+    Push-Location $riMisFx
+    [System.Environment]::CurrentDirectory = $riMisFx
+    try {
+        $riShOut2 = (& $riBash2.Source $riSh2 next 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+        $riShNt = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $riMisFx "NEXT_TURN.md")
+        $null = & $riBash2.Source $riNextSh2 --prepare-file 2>&1
+        $riNextShNt = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $riMisFx "NEXT_TURN.md")
+    } finally { Pop-Location; [System.Environment]::CurrentDirectory = $riPrevCwd }
+    Check "handoff.sh reads the same mis-cased line the same way" (($riShOut2 -match "exit=0") -and ($riShNt -match "## Review Independence")) $riShOut2
+    Check "next-step.sh reads the same mis-cased line the same way" ($riNextShNt -match "## Review Independence")
+}
+$riMisTarget = Join-Path $FixtureRoot "ri-miscase-target"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riMisTarget -NoRolesWindow 2>&1
+$riMisRoles = Join-Path $riMisTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+$riMisText = (Get-Content -Encoding UTF8 -Raw -LiteralPath $riMisRoles) -replace 'Review Independence: separate-tool', 'review independence: Fresh-Context'
+[System.IO.File]::WriteAllText($riMisRoles, $riMisText, (New-Object System.Text.UTF8Encoding($false)))
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $riMisTarget -Force -NoRolesWindow 2>&1
+$riMisAfter = Get-Content -Encoding UTF8 -Raw -LiteralPath $riMisRoles
+Check "install.ps1 keeps a mis-cased fresh-context line on upgrade, with two tools bound" ((([regex]::Matches($riMisAfter, '(?mi)^review independence:')).Count -eq 1) -and ($riMisAfter -match '(?m)^Review Independence: fresh-context\r?$'))
+
+# --- v3.17.0 second review: four last items ---
+Write-Host "[4D-7c] Review independence: last review items (v3.17.0)"
+
+# 1. A turn that edits the role file AND leaks a credential reports both.
+$riFakeBoth = Join-Path $FixtureRoot "fake-codex-solo-role-and-secret.cmd"
+@'
+@echo off
+if "%~2"=="--help" goto done
+findstr "^" > NUL
+echo Review Independence: separate-tool>> .ai\roles\ROLE_ASSIGNMENT.md
+echo - leaked sk-abcdefghijklmnopqrstuvwx0123>> AI_HANDOFF.md
+:done
+'@ | Set-Content -Path $riFakeBoth -Encoding ascii
+$riPrevCodexCli3 = $env:CODEX_CLI
+try {
+    $env:CODEX_CLI = $riFakeBoth
+    $riBothFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Actor "Test") -NoChange
+    $r = Invoke-Handoff -WorkDir $riBothFx -Arguments @("cycle", "-Yes")
+    Check "cycle reports a role-file edit even when the same turn leaked a credential" (($r.Out -match "the Implementer turn changed \.ai/roles/ROLE_ASSIGNMENT\.md") -and ($r.Out -match "SECURITY STOP") -and ($r.Code -eq 13)) "code=$($r.Code)"
+    $riBothFx = New-RiFixture -Roles $riSoloCodex -Handoff (New-RiHandoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -Actor "Test") -NoChange
+    $r = Invoke-Handoff -WorkDir $riBothFx -Arguments @("loop", "-Yes", "-MaxTurns", "1")
+    Check "loop reports a role-file edit even when the same turn leaked a credential" (($r.Out -match "the Implementer turn changed \.ai/roles/ROLE_ASSIGNMENT\.md") -and ($r.Out -match "SECURITY STOP") -and ($r.Code -eq 13)) "code=$($r.Code)"
+} finally {
+    if ($null -eq $riPrevCodexCli3) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $riPrevCodexCli3 }
+}
+
+# 2. A broken line opens the one-tool repair only when it already asks for fresh-context.
+$riSepDupFx = New-RiFixture -Roles ((New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine $riSeparate) + "`n$riSeparate`n") -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Task "Finished task") -NoChange
+$riSepDupBefore = Get-RiHash -Dir $riSepDupFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riSepDupFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+Check "a duplicated separate-tool line is no way into fresh-context with one tool bound" (($r.Code -eq 12) -and ((Get-RiHash -Dir $riSepDupFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riSepDupBefore))
+$riMixedFx = New-RiFixture -Roles ((New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex" -ModeLine $riFresh) + "`n$riSeparate`n") -Handoff (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Task "Finished task") -NoChange
+$riMixedBefore = Get-RiHash -Dir $riMixedFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$r = Invoke-Handoff -WorkDir $riMixedFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+Check "mixed values are no way into fresh-context with one tool bound" (($r.Code -eq 12) -and ((Get-RiHash -Dir $riMixedFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -eq $riMixedBefore))
+$riSepDupTwoFx = New-RiFixture -Roles ((New-RiRoles -ModeLine $riSeparate -History) + "`n$riSeparate`n") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task") -NoChange
+$r = Invoke-Handoff -WorkDir $riSepDupTwoFx -Arguments @("roles", "-ReviewIndependence", "separate-tool", "-Yes")
+$riSepDupTwoText = Get-RiFile -Dir $riSepDupTwoFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "repair to separate-tool still works with two different tools bound" (($r.Code -eq 0) -and (([regex]::Matches($riSepDupTwoText, '(?m)^Review Independence:')).Count -eq 1))
+
+# 4. A BOM before the line, and a non-breaking space, are read the same way by both shells.
+$riBom = [byte[]](0xEF, 0xBB, 0xBF)
+$riUtf8 = New-Object System.Text.UTF8Encoding($false)
+$riBomRoles = "Review Independence: fresh-context`n| Master | Codex |`n| Reviewer | Codex |`n| Implementer | Codex |`n"
+$riNbsp = [string][char]0x00A0
+$riNbspRoles = (New-RiRoles -Master "Codex" -Reviewer "Codex" -Implementer "Codex") + "`nReview Independence:$($riNbsp)fresh-context$($riNbsp)`n"
+$riParityCases = @(
+    @{ Name = "a UTF-8 BOM before the line on line 1"; Bytes = ($riBom + $riUtf8.GetBytes($riBomRoles)) },
+    @{ Name = "a non-breaking space after the colon and at the end"; Bytes = $riUtf8.GetBytes($riNbspRoles) }
+)
+$riBash3 = Get-Command bash -ErrorAction SilentlyContinue
+foreach ($riCase in $riParityCases) {
+    $riPFx = New-RiFixture -Roles $DefaultRoles -Handoff (New-RiHandoff) -NoGit
+    [System.IO.File]::WriteAllBytes((Join-Path $riPFx ".ai/roles/ROLE_ASSIGNMENT.md"), $riCase.Bytes)
+    $r = Invoke-Handoff -WorkDir $riPFx -Arguments @("next")
+    $riPsOk = ($r.Code -eq 0) -and ((Get-RiFile -Dir $riPFx -Rel "NEXT_TURN.md") -match "## Review Independence")
+    if ($null -eq $riBash3) {
+        Write-Host "  SKIP  parity for $($riCase.Name): no bash interpreter on this machine"
+        Check "handoff.ps1 reads fresh-context with $($riCase.Name)" $riPsOk
+        continue
+    }
+    $riPrevCwd3 = [System.Environment]::CurrentDirectory
+    Push-Location $riPFx
+    [System.Environment]::CurrentDirectory = $riPFx
+    try {
+        Remove-Item -LiteralPath (Join-Path $riPFx "NEXT_TURN.md") -Force -ErrorAction SilentlyContinue
+        $riShOut3 = (& $riBash3.Source ((Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/') next 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+        $riShOk = ($riShOut3 -match "exit=0") -and (Test-Path (Join-Path $riPFx "NEXT_TURN.md")) -and ((Get-RiFile -Dir $riPFx -Rel "NEXT_TURN.md") -match "## Review Independence")
+        $null = & $riBash3.Source ((Join-Path $RepoRoot "scripts/next-step.sh") -replace '\\', '/') --prepare-file 2>&1
+        $riNextOk = (Get-RiFile -Dir $riPFx -Rel "NEXT_TURN.md") -match "## Review Independence"
+    } finally { Pop-Location; [System.Environment]::CurrentDirectory = $riPrevCwd3 }
+    Check "handoff.ps1, handoff.sh and next-step.sh all read fresh-context with $($riCase.Name)" ($riPsOk -and $riShOk -and $riNextOk) "ps=$riPsOk sh=$riShOk next=$riNextOk $riShOut3"
+}
+
 # --- Summary ---
 Write-Host ""
 Write-Host "Results: $($script:Pass) passed, $($script:Fail) failed."

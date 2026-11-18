@@ -34,8 +34,8 @@ orchestrator exists.
 
 | Role | Default tool | Callable | Supported states | Invocation or manual instruction | Safety limits | Stop category when not callable | User authorization required |
 |---|---|---|---|---|---|---|---|
-| Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer; `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
-| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; `NEEDS_INVESTIGATION` receives read-only prompts and a post-turn source-change boundary; Claude customizations/plugins/hooks disabled; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
+| Master | Codex | yes, explicit-command only (NEEDS_ANALYSIS) | `NEEDS_ANALYSIS` | Capture: `handoff.ps1 master-run`. Apply: `handoff.ps1 master-apply` (since v2.0.1). Together they complete the Master's `NEEDS_ANALYSIS` routing turn end-to-end. Since v2.1.0, `loop -IncludeMaster` may opt this exact turn into one loop session. For other states, paste the generated prompt into Codex. | Explicit `yes` per command, or explicit `loop -IncludeMaster` for one authorized loop session; bound Master is Codex; captured `TASK` must match Current Task; recommendation/Waiting For pair must be valid; non-`BLOCKED` routing must use the current bound Implementer and Reviewer and preserve Reviewer != Implementer (one tool in both is accepted only under `Review Independence: fresh-context`); `master-apply` edits only `AI_HANDOFF.md`; not auto-run by default and never by `cycle`; no git add/commit/push/tag/deploy/db/secrets. | Operator Manual Action | yes, explicit `yes` before `master-run` and `master-apply`; loop session authorization when `-IncludeMaster` is used |
+| Implementer | Claude Code | yes | `READY_FOR_IMPLEMENTATION`, `NEEDS_INVESTIGATION` | `bounded PowerShell runner -> npx --yes @anthropic-ai/claude-code --safe-mode -p "<prompt>" --permission-mode acceptEdits --disallowed-tools "Bash" --max-budget-usd N --no-session-persistence --output-format text` via `handoff.ps1 cycle`, `run-next`, or `loop`. | Explicit `yes` confirmation (interactive `yes` or `-Yes`); Reviewer != Implementer unless `Review Independence: fresh-context`; clean tree except local handoff files, or an exact `Changed Files` match after a Reviewer `BLOCKED` verdict; `NEEDS_INVESTIGATION` receives read-only prompts and a post-turn source-change boundary; Claude customizations/plugins/hooks disabled; Bash disallowed; budget cap; hard timeout; stdout/stderr capture; process-tree kill on timeout; post-turn no-op/no-progress guard (v2.6.0); exact-scope interrupted-correction recovery may route only to the independent Reviewer (v3.1.5); no commit/push/tag/deploy/db/secrets automation. | Non-callable Actor for unsupported Implementer states; Environment/Preflight when `npx` or Claude Code is unavailable | yes, explicit confirmation before each `cycle` or loop session |
 | Reviewer | Codex | yes, explicit-command only (READY_FOR_REVIEW) | `READY_FOR_REVIEW` | Capture: `handoff.ps1 review-run`. Apply: `handoff.ps1 review-apply` (since v1.3.0). Together they complete the Reviewer's `READY_FOR_REVIEW` turn end-to-end. For other states, paste the generated prompt into Codex. | Explicit `yes` per command; bound and actual Reviewer is Codex and != actual Implementer; Changed Files == git status; Codex read-only (no `--ask-for-approval` / `--dangerously-bypass` / danger-full-access); `review-apply` edits only `AI_HANDOFF.md`; not auto-run by `loop`/`cycle` by default (callable != loop-eligible); since v1.4.0 `loop -IncludeReviewer` may opt in to auto-run this exact turn in-session, `cycle` never does; no commit/push/tag/deploy/db/secrets; no release action. | Operator Manual Action | yes, explicit `yes` before `review-run` and `review-apply`; commit/release stay separate User authorizations |
 
 ## Symmetric Role Adapters (v3.5.2)
@@ -90,7 +90,8 @@ mode expresses. It is enforced after the turn, identically for both tools, by th
 check that has always bounded the Claude Implementer. The exact-scope check likewise runs
 after the turn for both tools.
 
-**Swapping roles.** Edit `.ai/roles/ROLE_ASSIGNMENT.md`, keeping Reviewer != Implementer.
+**Swapping roles.** Use `handoff.ps1 roles -SetRole <role> -SetTool <tool>`, keeping Reviewer != Implementer
+unless the project declares `Review Independence: fresh-context` (see "Review independence" below).
 A task already recorded under one binding will not run under another: the role checkpoint
 blocks on drift, and `handoff.ps1 start` opens a fresh task under the new binding after
 archiving the old record.
@@ -112,7 +113,7 @@ approval without forcing the user to type raw git commands.
 
 | Capability | Callable | Eligible state | Invocation | Safety limits | Stop category when unavailable or unauthorized | User authorization required |
 |---|---|---|---|---|---|---|
-| Approved commit executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 commit-check [-Message "<msg>"]`. Execute: `handoff.ps1 commit-approved -Message "<msg>" -Authorize "I_AUTHORIZE_COMMIT"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files vs git status match, explicit authorization token, and no push/tag/deploy/db/secrets actions. Commits only the approved Changed Files and excludes local coordination files. | Environment/Preflight when PowerShell is unavailable; User Commit Authorization until the token is supplied | yes, exact token required for execution |
+| Approved commit executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 commit-check [-Message "<msg>"]`. Execute: `handoff.ps1 commit-approved -Message "<msg>" -Authorize "I_AUTHORIZE_COMMIT"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors` (under `Review Independence: fresh-context`, one tool with the harness verdict from `review-run` + `review-apply`), exact Changed Files vs git status match, explicit authorization token, and no push/tag/deploy/db/secrets actions. Commits only the approved Changed Files and excludes local coordination files. | Environment/Preflight when PowerShell is unavailable; User Commit Authorization until the token is supplied | yes, exact token required for execution |
 
 ## Release Execution Adapter
 
@@ -122,7 +123,7 @@ contract shape as role adapters.
 
 | Capability | Callable | Eligible state | Invocation | Safety limits | Stop category when unavailable or unauthorized | User authorization required |
 |---|---|---|---|---|---|---|
-| Authorized release executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 release-check -Version vX.Y.Z`. Execute: `handoff.ps1 release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors`, exact Changed Files vs git status match, existing pre-release checks, explicit authorization token, commit before tag, and no deploy/db/secrets/production-config actions. | Environment/Preflight when PowerShell is unavailable; User Release Authorization until the token is supplied | yes, exact token required for execution |
+| Authorized release executor | yes, PowerShell only | `REVIEW_DONE` with `Waiting For: User` | Dry-run: `handoff.ps1 release-check -Version vX.Y.Z`. Execute: `handoff.ps1 release -Version vX.Y.Z -Message "<msg>" -Authorize "I_AUTHORIZE_RELEASE_vX.Y.Z"`. | Requires actual task Reviewer != actual task Implementer from `AI_HANDOFF.md` `Task Actors` (under `Review Independence: fresh-context`, one tool with the harness verdict from `review-run` + `review-apply`), exact Changed Files vs git status match, existing pre-release checks, explicit authorization token, commit before tag, and no deploy/db/secrets/production-config actions. | Environment/Preflight when PowerShell is unavailable; User Release Authorization until the token is supplied | yes, exact token required for execution |
 
 ## State-Specific Notes
 
@@ -412,7 +413,7 @@ the tool-name form of `Waiting For` is rejected; bound Master must be Codex; Tas
 allowed for capture; `master-run` fails closed (no handoff change, no commit) on an unavailable
 CLI, timeout (no capture file), and exit-0-with-no-capture; the multi-word prompt is delivered
 via stdin (not argv); `master-apply` fails closed on missing/malformed/stale recommendations,
-invalid recommendation/Waiting For pairs, missing concrete actors, Reviewer == Implementer, and
+invalid recommendation/Waiting For pairs, missing concrete actors, Reviewer == Implementer (unless `Review Independence: fresh-context`), and
 captured actors that do not match the current role binding. Master/Codex is `callable: yes` /
 `Auto-loop: no` in the `adapters` view. Bash refuses `master-check` / `master-run` honestly and
 does not implement `master-apply`.
@@ -718,3 +719,43 @@ profile may map either one alone. An effort level stays valid when the vendor re
 model, which is why it is the preferred route for Codex, which has no floating model
 aliases. A `high_reasoning` profile that resolves to a concrete effort is a cost
 escalation and needs `-AllowModelEscalation`, exactly as a concrete model does.
+
+## Review Independence (v3.17.0)
+
+The Reviewer never shares a context with the Implementer. `.ai/roles/ROLE_ASSIGNMENT.md`
+says how, in one line: `Review Independence: separate-tool` (default; also what an absent
+line means) or `Review Independence: fresh-context`. Any other value, or two lines, fails
+the role checkpoint. `handoff.ps1 roles -ReviewIndependence <value> [-Yes]` changes it under
+the same guards as a role swap and writes a Role Swap History row.
+
+Under `fresh-context`, Reviewer and Implementer may resolve to the same tool at every gate:
+the role checkpoint, `roles -SetRole`, the `master-apply` capture check, `cycle`, `loop`, the
+review plan, and the commit and release audits. With two different tools it behaves like
+`separate-tool`. With one tool in both roles:
+
+- `review-run` starts the Reviewer as its own read-only process, as it always does, and
+  after the capture passes every check appends one harness record to `REVIEW.jsonl`: the
+  task, the Reviewer, the SHA-256 of `REVIEW_LAST.md`, and the SHA-256 of every file the
+  Reviewer was told to verify.
+- `review-apply` applies only a verdict that record covers.
+- `commit-check`, `commit-approved` and `release-check` require an APPROVED capture for the
+  current task, the `review-apply` record in `AI_HANDOFF.md`, exactly one harness record
+  naming that task and that capture's current hash, and the reviewed files unchanged.
+- The single-vendor check applies when either the Task Actors or the binding put one tool
+  in both roles, and both Task Actors must be named tools (a `TBD` placeholder is refused).
+  `review-apply` records the capture's SHA-256 in Last Update, and commit and release
+  require it to match the current capture.
+- A review may proceed only when Last Update is an Implementer record: an Actor line naming
+  the Implementer role, and not a leftover review record. The tool name no longer tells an
+  Implementer turn from a Master that did the work itself. This reads a label the agent
+  writes itself; it stops an honest record of the wrong role, not a false one.
+- `cycle` and `loop` stop if a write-enabled Implementer turn changes `ROLE_ASSIGNMENT.md`.
+
+What this proves: the verdict relied on is the one `review-run` captured for this task,
+unedited since, applied by `review-apply`, over the exact bytes being committed. What it
+does not prove: the files are local and carry no secret, so anything with write access to
+the project can forge them; and one vendor reviewing its own vendor's work is a weaker
+check than a second vendor. `roles`, `doctor`, `work`, `status`, the review plan,
+`commit-check` and the Reviewer's `NEXT_TURN.md` each state a single-vendor review in one
+line. `handoff.sh` and `next-step` mirror the rule and the `NEXT_TURN.md` section; a
+single-vendor commit is verified by `handoff.ps1 commit-check` only.

@@ -44,7 +44,7 @@ User -> Master -> Implementer -> Reviewer -> User
 - Gates: Investigation Gate, Planning Gate, Verification Gate (`MASTER.md`).
 - Invariants (quoted authorities - this file does not restate them in new words):
   - "One task per handoff cycle." (`MASTER.md`, "Scope Discipline")
-  - The Reviewer must not be the same tool as the Implementer
+  - "The Reviewer never shares a context with the Implementer."
     (`.ai/roles/ROLE_ASSIGNMENT.md`, "Invariant").
   - Commits, pushes, deploys, database work, and secret changes require explicit
     user approval (`MASTER.md`, "Manual Approval Boundaries").
@@ -153,7 +153,8 @@ Approved commit execution model (implemented in v2.2.0): Reviewer attestation ->
 User Commit Authorization -> `handoff.ps1 commit-approved` may execute a guarded local
 commit only. The executor must fail closed unless the handoff is `REVIEW_DONE`, the
 changed-file scope matches git status, the actual task Reviewer and actual task
-Implementer recorded in `AI_HANDOFF.md` `Task Actors` are present and different, and
+Implementer recorded in `AI_HANDOFF.md` `Task Actors` are present and different (or, under
+`Review Independence: fresh-context`, one tool with the harness verdict), and
 the user supplies the exact `I_AUTHORIZE_COMMIT` token. It never pushes, tags,
 deploys, touches databases, handles secrets, or commits local coordination files.
 Release execution model (implemented in v0.19.1): Reviewer attestation ->
@@ -162,7 +163,8 @@ commit/push/tag. The user remains the only authority for releases; the user is
 never the default technical verifier. The guarded release executor must fail
 closed unless the handoff is `REVIEW_DONE`, the changed-file scope matches git
 status, the actual task Reviewer and actual task Implementer recorded in
-`AI_HANDOFF.md` `Task Actors` are present and different, pre-release checks pass,
+`AI_HANDOFF.md` `Task Actors` are present and different (or, under `Review Independence: fresh-context`,
+one tool with the harness verdict), pre-release checks pass,
 and the user supplies the exact release authorization token.
 
 Codex Reviewer turn (since v1.2.0, completed v1.3.0): the `review-check` / `review-run`
@@ -186,7 +188,8 @@ the loop at `REVIEW_DONE` / `Waiting For: User`, `BLOCKED` returns to
 `MaxTurns`/budget. This opt-in does not change `AutoLoopEligible` (Reviewer/Codex stays
 `Auto-loop: no`), and `cycle` still never auto-runs a Reviewer turn. The independent-review
 invariant is unchanged: both commands refuse unless the bound and actual Reviewer is Codex and
-differs from the actual Implementer. The user's release authorization at `REVIEW_DONE` is also
+differs from the actual Implementer (under `Review Independence: fresh-context` it may be the same tool, reviewing in that
+harness-started run). The user's release authorization at `REVIEW_DONE` is also
 unchanged. See `ADAPTERS.md`, "Automated Reviewer Turn" and "Opt-in Reviewer Loop Integration".
 
 Codex Master turn (capture since v1.3.1; apply since v2.0.1): the `master-check` /

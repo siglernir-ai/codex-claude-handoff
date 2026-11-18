@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.16.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.17.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -75,6 +75,61 @@ _get_role_binding() {
     done <<< "$parsed"
 }
 
+# v3.17.0: the review rule from ROLE_ASSIGNMENT.md, read the way handoff.ps1 reads it. An
+# absent line is separate-tool; two lines or any other value leave the strict rule in force
+# and set REVIEW_INDEPENDENCE_ERROR, which blocks at the role checkpoint.
+_get_review_independence() {
+    REVIEW_INDEPENDENCE="separate-tool" REVIEW_INDEPENDENCE_ERROR=""
+    local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
+    [ -f "$rf" ] || return 0
+    local count value raw lines
+    # v3.17.0 (review fix): key and value are read without regard to case, as handoff.ps1
+    # reads them; a mis-cased line is never mistaken for an absent one.
+    lines="$(tr -d '\r' < "$rf" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }')"
+    count="$(printf '%s' "$lines" | grep -c '^<' || true)"
+    [ "$count" -eq 0 ] && return 0
+    if [ "$count" -gt 1 ]; then
+        REVIEW_INDEPENDENCE_ERROR="ROLE_ASSIGNMENT.md declares 'Review Independence:' $count times. Keep exactly one line: 'Review Independence: separate-tool' or 'Review Independence: fresh-context'."
+        return 0
+    fi
+    raw="${lines#<}"; raw="${raw%>}"
+    value="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        separate-tool|fresh-context) REVIEW_INDEPENDENCE="$value" ;;
+        *) REVIEW_INDEPENDENCE_ERROR="ROLE_ASSIGNMENT.md declares 'Review Independence: $raw'. The value must be separate-tool or fresh-context." ;;
+    esac
+}
+
+# Canonical tool identity, the same alias list as handoff.ps1's registry.
+_canonical_tool() {
+    local key; key="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    case "$key" in
+        "codex"|"codex window"|"codex cli"|"codex desktop"|"openai codex") echo "codex" ;;
+        "claude code"|"claude-code"|"claudecode"|"claude code cli"|"claude code window") echo "claude-code" ;;
+        *) echo "" ;;
+    esac
+}
+
+_display_tool() {
+    case "$(_canonical_tool "$1")" in
+        codex) echo "Codex" ;;
+        claude-code) echo "Claude Code" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# True when fresh-context is declared and the two given tools are one tool.
+_single_vendor_review() {
+    [ -z "$REVIEW_INDEPENDENCE_ERROR" ] && [ "$REVIEW_INDEPENDENCE" = "fresh-context" ] || return 1
+    local a b
+    a="$(_canonical_tool "$1")"; b="$(_canonical_tool "$2")"
+    [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
+_single_vendor_line() {
+    echo "Single-vendor review: $(_display_tool "$1") is both Implementer and Reviewer. It reviews in a separate read-only run started by the harness (review-run, then review-apply), never in the Implementer's context."
+}
+
 _resolve_actor() {
     case "$1" in
         User)        echo "User" ;;
@@ -140,6 +195,12 @@ _after_text() {
 }
 
 _commit_status_text() {
+    # v3.17.0 (review fix): agree with commit-check, which refuses a single-vendor
+    # REVIEW_DONE here and leaves the harness-verdict check to handoff.ps1.
+    if [ "$STATE" = "REVIEW_DONE" ] && _single_vendor_review "$REVIEWER_TOOL" "$IMPLEMENTER_TOOL"; then
+        echo "Blocked in handoff.sh - a single-vendor review is verified only by pwsh scripts/handoff.ps1 commit-check, which checks that the verdict came from review-run."
+        return 0
+    fi
     case "$STATE" in
         REVIEW_DONE) echo "ALLOWED - the Reviewer attested technical readiness; the remaining step is your commit authorization. Commit only the files listed under Changed Files." ;;
         IMPLEMENTED) echo "ALLOWED - no Reviewer review required. Review the work before committing." ;;
@@ -227,6 +288,9 @@ cmd_status() {
     echo "Task:         $CURRENT_TASK"
     echo "Model Profile: $MODEL_PROFILE"
     echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
+    if _single_vendor_review "$REVIEWER_TOOL" "$IMPLEMENTER_TOOL"; then
+        echo "Review:       $(_single_vendor_line "$REVIEWER_TOOL")"
+    fi
     echo "Adapters:     run 'bash scripts/handoff.sh adapters' for callable/manual automation status"
     echo "Commit:       $(_commit_status_text)"
     [ -f "$(pwd)/.agents/skills/codex-claude-handoff/SKILL.md" ] && \
@@ -289,7 +353,12 @@ cmd_adapters() {
     echo "  Reviewer     Claude Code  yes       read-only   READY_FOR_REVIEW"
     echo ""
     echo "Every turn above runs from PowerShell; Bash reports status and never invokes a tool."
-    echo "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    if [ -z "$REVIEW_INDEPENDENCE_ERROR" ] && [ "$REVIEW_INDEPENDENCE" = "fresh-context" ]; then
+        echo "Swapping roles: handoff.ps1 roles -SetRole <role> -SetTool <tool>. Review Independence is fresh-context, so"
+        echo "Reviewer and Implementer may be one tool; its verdict then counts only from review-run + review-apply."
+    else
+        echo "Swapping roles: edit .ai/roles/ROLE_ASSIGNMENT.md, keeping Reviewer != Implementer."
+    fi
     echo ""
     echo "Capability:  Authorized release executor"
     echo "Callable:    no in Bash (PowerShell only)"
@@ -494,6 +563,13 @@ $cf"
         echo "## Next Recommended Step (from AI_HANDOFF.md)"
         if [ -n "$next_step" ]; then echo "$next_step"; else echo "(none - see AI_HANDOFF.md)"; fi
         if [ -n "$key_context" ]; then echo ""; echo "## Key Context"; echo "$key_context"; fi
+        # v3.17.0: same section as handoff.ps1 writes for a single-vendor Reviewer turn.
+        if ! $is_mismatch && [ "$exp_role" = "Reviewer" ] && _single_vendor_review "$REVIEWER_TOOL" "$IMPLEMENTER_TOOL"; then
+            echo ""
+            echo "## Review Independence"
+            _single_vendor_line "$REVIEWER_TOOL"
+            echo "Take this turn with handoff.ps1 review-run, then handoff.ps1 review-apply. A verdict written by hand in this window is refused by commit-check, commit-approved and release-check."
+        fi
         if ! $is_mismatch && [ "$actor" != "User" ]; then _model_lines "$actor"; fi
         if [ -n "$section_map" ]; then echo ""; echo "## AI_HANDOFF.md Sections (line numbers)"; echo "$section_map"; fi
         if [ -n "$after_line" ];  then echo ""; echo "## After You Finish"; echo "$after_line"; fi
@@ -578,6 +654,15 @@ cmd_commit_check() {
     # "git add -A" to clear a protocol stop is exactly how a live token reaches
     # history. Name-based only: Bash does not read file contents here.
     _warn_credential_paths
+    if [ "$STATE" = "REVIEW_DONE" ] && [ "$WAITING_FOR" = "User" ] && _single_vendor_review "$REVIEWER_TOOL" "$IMPLEMENTER_TOOL"; then
+        # v3.17.0: a single-vendor verdict counts only when the harness produced it, and that
+        # is verified by the PowerShell commit check, which reads the harness evidence.
+        _single_vendor_line "$REVIEWER_TOOL"
+        echo "Commit: BLOCKED in handoff.sh - a single-vendor review is verified only by pwsh scripts/handoff.ps1 commit-check, which checks that the verdict came from review-run."
+        echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
+        echo ""
+        return
+    fi
     if [ "$STATE" = "REVIEW_DONE" ] && [ "$WAITING_FOR" = "User" ]; then
         local LOCAL_IGNORED="AI_HANDOFF.md NEXT_TURN.md USER_REQUEST.md HANDOFF_LOOP.log AI_SEQUENCE.md HANDOFF_RUN.json REVIEW.jsonl REVIEW_LAST.md MASTER.jsonl MASTER_LAST.md IMPLEMENTER.jsonl IMPLEMENTER_LAST.md IMPLEMENTER_COMMAND.md CODEX_REVIEW.jsonl CODEX_REVIEW_LAST.md CODEX_MASTER.jsonl CODEX_MASTER_LAST.md CLAUDE_IMPLEMENTER.jsonl CLAUDE_IMPLEMENTER_LAST.md CLAUDE_IMPLEMENTER_COMMAND.md .ai/roles/ROLE_ASSIGNMENT.md"
         local commit_files=() actual_files=()
@@ -769,7 +854,11 @@ _role_checkpoint() {
         esac
     done < <(_section_content "Task Actors")
     local errors=""
-    [ "$REVIEWER_TOOL" = "$IMPLEMENTER_TOOL" ] && errors="Invalid role binding: Reviewer and Implementer are both '$REVIEWER_TOOL'."
+    # v3.17.0: an unreadable review rule blocks; fresh-context lets one tool hold both roles.
+    [ -n "$REVIEW_INDEPENDENCE_ERROR" ] && errors="Invalid review independence: $REVIEW_INDEPENDENCE_ERROR"
+    if [ "$REVIEWER_TOOL" = "$IMPLEMENTER_TOOL" ] && { [ -n "$REVIEW_INDEPENDENCE_ERROR" ] || [ "$REVIEW_INDEPENDENCE" != "fresh-context" ]; }; then
+        errors="${errors}${errors:+$'\n'}Invalid role binding: Reviewer and Implementer are both '$REVIEWER_TOOL'."
+    fi
     if [ -n "$implementer" ] && [ "$implementer" != "TBD" ] && [ "$implementer" != "$IMPLEMENTER_TOOL" ]; then
         errors="${errors}${errors:+$'\n'}Role drift: AI_HANDOFF.md Task Actors Implementer='$implementer' but ROLE_ASSIGNMENT.md binds Implementer='$IMPLEMENTER_TOOL'."
     fi
@@ -861,6 +950,7 @@ cmd_models_blocked() {
 
 _parse_status
 _get_role_binding
+_get_review_independence
 _role_checkpoint
 
 case "$COMMAND" in

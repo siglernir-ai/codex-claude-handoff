@@ -551,6 +551,107 @@ else
     rm -rf "$BASH_TMP"
 fi
 
+# --- v3.17.0: review independence - handoff.sh, next-step.sh and install.sh agree ---
+echo "[bash] Review independence (v3.17.0)"
+ri_roles() {
+    # ri_roles <fixture> <tool> <mode-line or empty>: one tool in all three roles
+    cat > "$1/.ai/roles/ROLE_ASSIGNMENT.md" <<EOF
+# Role Assignment
+
+## Current Binding
+
+| Role | Tool |
+|---|---|
+| Master | $2 |
+| Reviewer | $2 |
+| Implementer | $2 |
+
+$3
+EOF
+    {
+        printf '# AI Handoff\n\n## Status\n- State: READY_FOR_REVIEW\n- Waiting For: Reviewer\n'
+        printf -- '- Last Updated By: Test\n- Last Updated At: 2026-11-18\n- Current Task: solo review task\n\n'
+        printf '## Last Update\n- Actor: %s (Implementer)\n\n## Task Actors\n- Implementer: %s\n- Reviewer: %s\n\n' "$2" "$2" "$2"
+        printf '## Changed Files\n- src/app.txt\n\n## Next Recommended Step\n- Review.\n'
+    } > "$1/AI_HANDOFF.md"
+}
+
+RI_FX="$(make_fixture READY_FOR_REVIEW Reviewer)"
+ri_roles "$RI_FX" "Codex" ""
+run_handoff "$RI_FX" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "Invalid role binding"
+check "bash refuses one tool in both roles when no rule is declared" $? "$RH_OUT"
+
+ri_roles "$RI_FX" "Codex" "Review Independence: fresh-context"
+run_handoff "$RI_FX" next
+[ "$RH_CODE" -eq 0 ] && grep -q '^## Review Independence$' "$RI_FX/NEXT_TURN.md" && \
+    grep -q '^Single-vendor review: Codex is both Implementer and Reviewer\. It reviews in a separate read-only run started by the harness' "$RI_FX/NEXT_TURN.md"
+check "bash next writes the single-vendor section under fresh-context" $? "$RH_OUT"
+
+run_handoff "$RI_FX" status
+printf '%s' "$RH_OUT" | grep -q "^Review:       Single-vendor review: Codex"
+check "bash status names a single-vendor review" $? "$RH_OUT"
+
+ri_done="$(mktemp -d "$FIXTURE_ROOT/fx.XXXXXX")"
+mkdir -p "$ri_done/.ai/roles"
+cp "$RI_FX/.ai/roles/ROLE_ASSIGNMENT.md" "$ri_done/.ai/roles/ROLE_ASSIGNMENT.md"
+sed 's/^- State: READY_FOR_REVIEW$/- State: REVIEW_DONE/; s/^- Waiting For: Reviewer$/- Waiting For: User/' "$RI_FX/AI_HANDOFF.md" > "$ri_done/AI_HANDOFF.md"
+run_handoff "$ri_done" status
+printf '%s' "$RH_OUT" | grep -q "^Commit:       Blocked in handoff.sh - a single-vendor review" && ! printf '%s' "$RH_OUT" | grep -q "^Commit:       ALLOWED"
+check "bash status does not call a single-vendor REVIEW_DONE ALLOWED" $? "$RH_OUT"
+
+( cd "$RI_FX" && bash "$SCRIPT_DIR/next-step.sh" --prepare-file ) >/dev/null 2>&1
+grep -q '^## Review Independence$' "$RI_FX/NEXT_TURN.md"
+check "next-step.sh writes the same section" $?
+
+ri_roles "$RI_FX" "Codex" "Review Independence: relaxed"
+run_handoff "$RI_FX" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "Invalid review independence"
+check "bash fails closed on an unknown Review Independence value" $? "$RH_OUT"
+
+printf 'Review Independence: fresh-context\nReview Independence: fresh-context\n' >> "$RI_FX/.ai/roles/ROLE_ASSIGNMENT.md"
+sed -i 's/^Review Independence: relaxed$//' "$RI_FX/.ai/roles/ROLE_ASSIGNMENT.md"
+run_handoff "$RI_FX" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "declares 'Review Independence:' 2 times"
+check "bash fails closed on a duplicated Review Independence line" $? "$RH_OUT"
+
+# install.sh carries the declaration, and the binding it allows, across an upgrade.
+RI_TARGET="$FIXTURE_ROOT/ri-install-target"
+mkdir -p "$RI_TARGET"
+git -C "$RI_TARGET" init -q
+bash "$SCRIPT_DIR/install.sh" "$RI_TARGET" >/dev/null 2>&1
+RI_ROLE_FILE="$RI_TARGET/.ai/roles/ROLE_ASSIGNMENT.md"
+[ "$(tr -d '\r' < "$RI_ROLE_FILE" | grep -c '^Review Independence: separate-tool$')" -eq 1 ]
+check "bash fresh install writes the separate-tool declaration once" $?
+sed -i 's/^Review Independence: separate-tool/Review Independence: fresh-context/; s/^| Implementer | Claude Code |/| Implementer | Codex |/' "$RI_ROLE_FILE"
+ri_up="$(bash "$SCRIPT_DIR/install.sh" "$RI_TARGET" --force 2>&1)"
+ri_code=$?
+[ "$ri_code" -eq 0 ] && [ "$(tr -d '\r' < "$RI_ROLE_FILE" | grep -c '^Review Independence:')" -eq 1 ] && \
+    tr -d '\r' < "$RI_ROLE_FILE" | grep -q '^Review Independence: fresh-context$' && \
+    tr -d '\r' < "$RI_ROLE_FILE" | grep -q '^| Implementer | Codex |$'
+check "bash --force upgrade keeps fresh-context and the one-tool binding it allows" $? "$ri_up"
+sed -i 's/^Review Independence: fresh-context/Review Independence: sometimes/' "$RI_ROLE_FILE"
+ri_up="$(bash "$SCRIPT_DIR/install.sh" "$RI_TARGET" --force 2>&1)"
+ri_code=$?
+[ "$ri_code" -ne 0 ] && printf '%s' "$ri_up" | grep -q "Review Independence"
+check "bash --force upgrade refuses an invalid declaration" $? "$ri_up"
+
+# v3.17.0 review fix: the line is read without regard to case, as handoff.ps1 reads it.
+ri_roles "$RI_FX" "Codex" "review independence: Fresh-Context"
+run_handoff "$RI_FX" next
+[ "$RH_CODE" -eq 0 ] && grep -q '^## Review Independence$' "$RI_FX/NEXT_TURN.md"
+check "bash reads a mis-cased fresh-context line, as handoff.ps1 does" $? "$RH_OUT"
+RI_TARGET2="$FIXTURE_ROOT/ri-install-miscase"
+mkdir -p "$RI_TARGET2"
+git -C "$RI_TARGET2" init -q
+bash "$SCRIPT_DIR/install.sh" "$RI_TARGET2" >/dev/null 2>&1
+RI_ROLE_FILE2="$RI_TARGET2/.ai/roles/ROLE_ASSIGNMENT.md"
+sed -i 's/^Review Independence: separate-tool/review independence: Fresh-Context/' "$RI_ROLE_FILE2"
+ri_up="$(bash "$SCRIPT_DIR/install.sh" "$RI_TARGET2" --force 2>&1)"
+ri_code=$?
+[ "$ri_code" -eq 0 ] && [ "$(tr -d '\r' < "$RI_ROLE_FILE2" | grep -ci '^review independence:')" -eq 1 ] && \
+    tr -d '\r' < "$RI_ROLE_FILE2" | grep -q '^Review Independence: fresh-context$'
+check "bash --force upgrade keeps a mis-cased fresh-context line with two tools bound" $? "$ri_up"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed."

@@ -71,7 +71,27 @@ if $FORCE && [ -f "$ROLE_FILE" ]; then
         echo "Refusing --force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $ROLE_FILE"
         exit 1
     fi
-    if [ "$PRESERVED_REVIEWER" = "$PRESERVED_IMPLEMENTER" ]; then
+    # v3.17.0: the review rule is part of the binding. An absent line is separate-tool;
+    # two lines or any other value refuse the upgrade, as handoff.ps1 refuses to run.
+    # v3.17.0 (review fix): key and value without regard to case, as install.ps1 reads them.
+    ri_lines="$(tr -d '\r' < "$ROLE_FILE" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }')"
+    ri_count="$(printf '%s' "$ri_lines" | grep -c '^<' || true)"
+    ri_values="${ri_lines#<}"; ri_values="${ri_values%>}"
+    ri_values="$(printf '%s' "$ri_values" | tr '[:upper:]' '[:lower:]')"
+    PRESERVED_REVIEW_INDEPENDENCE=""
+    if [ "$ri_count" -gt 1 ]; then
+        echo "Refusing --force update: existing ROLE_ASSIGNMENT.md is invalid: the 'Review Independence:' line must appear once and read separate-tool or fresh-context. Repair it before updating: $ROLE_FILE"
+        exit 1
+    elif [ "$ri_count" -eq 1 ]; then
+        case "$ri_values" in
+            separate-tool|fresh-context) PRESERVED_REVIEW_INDEPENDENCE="$ri_values" ;;
+            *)
+                echo "Refusing --force update: existing ROLE_ASSIGNMENT.md is invalid: the 'Review Independence:' line must appear once and read separate-tool or fresh-context. Repair it before updating: $ROLE_FILE"
+                exit 1
+                ;;
+        esac
+    fi
+    if [ "$PRESERVED_REVIEWER" = "$PRESERVED_IMPLEMENTER" ] && [ "$PRESERVED_REVIEW_INDEPENDENCE" != "fresh-context" ]; then
         echo "Refusing --force update: existing role binding violates Reviewer != Implementer. Repair it before updating: $ROLE_FILE"
         exit 1
     fi
@@ -226,6 +246,20 @@ while IFS= read -r -d '' src; do
             rm -rf -- "$_extra_dir" "$_tmpl_headings"
         fi
 
+        # v3.17.0: keep one 'Review Independence:' line - the template's, the first - with
+        # the installed project's value. PowerShell does the same in Set-MergedReviewIndependence.
+        if [ -n "${PRESERVED_REVIEW_INDEPENDENCE:-}" ]; then
+            _ri_tmp="$role_tmp.ri.$$"
+            awk -v mode="$PRESERVED_REVIEW_INDEPENDENCE" -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '
+                { line=$0; sub(/\r$/, "", line); if (NR == 1 && index(line, bom) == 1) line = substr(line, length(bom) + 1); gsub(nbsp, " ", line) }
+                tolower(line) ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/ {
+                    if (!done) { cr = ($0 ~ /\r$/) ? "\r" : ""; print "Review Independence: " mode cr; done=1 }
+                    next
+                }
+                { print }
+            ' "$role_tmp" > "$_ri_tmp"
+            mv -f -- "$_ri_tmp" "$role_tmp"
+        fi
         mv -f -- "$role_tmp" "$TARGET_PATH/$rel"
         echo "Preserved current role binding while refreshing role instructions."
     else

@@ -12,6 +12,8 @@ file is the single place that records which tool currently holds each role.
 | Reviewer | Codex |
 | Implementer | Claude Code |
 
+Review Independence: separate-tool
+
 The User is always the approval point and is never one of these roles.
 
 ## Role Meanings
@@ -34,10 +36,14 @@ The User is always the approval point and is never one of these roles.
 
 ## Invariant (must always hold)
 
-- The Reviewer must not be the same tool as the Implementer. An implementer cannot
-  be the sole reviewer of its own work. With two tools, one tool holds Master +
-  Reviewer and the other holds Implementer, which satisfies this by construction.
-- Assigning the same tool to both Implementer and Reviewer is forbidden.
+- The Reviewer never shares a context with the Implementer.
+- `Review Independence:` (one line, under Current Binding) says how. Any other value or a
+  second line blocks every role-dependent command; no line means `separate-tool`.
+  - `separate-tool` (default): the Reviewer is a different tool; one tool in both roles is refused.
+  - `fresh-context`: one tool may hold both roles. It reviews only in a separate read-only
+    run the harness starts (`review-run`, then `review-apply`); commit and release refuse
+    any other verdict. A second vendor is the stronger check; two tools are recommended.
+- Change it with `handoff.ps1 roles -ReviewIndependence <value>` (recorded in the history).
 
 ## Switching Roles
 
@@ -61,6 +67,6 @@ The User is always the approval point and is never one of these roles.
   `NEEDS_INVESTIGATION` for an Implementer bound to either Claude Code or Codex.
   This note is not the authority: run `handoff.ps1 adapters` for the resolved
   status, because the registry is what the commands actually read.
-- `cycle` and `loop` enforce the invariant above in their preflight: if the Reviewer
-  and the Implementer resolve to the same tool, they block before any automation
-  turn runs.
+- `cycle` and `loop` enforce the invariant above in their preflight: under
+  `separate-tool`, if the Reviewer and the Implementer resolve to the same tool, they
+  block before any automation turn runs.
