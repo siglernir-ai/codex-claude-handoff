@@ -701,3 +701,20 @@ is the operator's own choice, as `-Model` is for Claude. For a turn driven in a 
 `Model For This Turn` section with the profile and the model for the actor's tool; a
 person switching to that model opens a new window rather than switching inside a long
 conversation.
+
+### Codex reasoning effort (v3.16.0)
+
+The Codex reasoning effort resolves the same way, from the same profile:
+
+1. `-CodexEffort` for an operator's concrete one-command choice.
+2. `HANDOFF_CODEX_EFFORT_<PROFILE>` process environment variable.
+3. The profile's `codexEffort` in `MODEL_ROUTING.json`.
+4. `inherit`: Codex keeps its own configured effort.
+
+The accepted levels are `minimal`, `low`, `medium`, `high` and `xhigh`; any other value
+fails closed before Codex starts. Automated Codex turns pass a resolved level as
+`-c model_reasoning_effort=<level>`. The effort and the model are independent, so a
+profile may map either one alone. An effort level stays valid when the vendor replaces a
+model, which is why it is the preferred route for Codex, which has no floating model
+aliases. A `high_reasoning` profile that resolves to a concrete effort is a cost
+escalation and needs `-AllowModelEscalation`, exactly as a concrete model does.

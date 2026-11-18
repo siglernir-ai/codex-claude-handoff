@@ -1651,6 +1651,75 @@ $null = Invoke-Handoff -WorkDir $userNextFx -Arguments @("next")
 $nt = Get-Content -Raw -Path (Join-Path $userNextFx "NEXT_TURN.md")
 Check "a User turn carries no model section" ($nt -notmatch "## Model For This Turn")
 
+# --- v3.16.0: the Codex reasoning effort follows the profile ---
+# Codex has no floating model aliases, so a concrete model name in a mapping breaks when
+# the vendor replaces the model. An effort level does not. The profile now maps to one.
+Write-Host "[4C-2b] Codex reasoning effort routing (v3.16.0)"
+Check "shipped routing names a codexEffort for every profile" (@($shippedRoutingConfig.profiles.PSObject.Properties | Where-Object { $null -eq $_.Value.PSObject.Properties['codexEffort'] }).Count -eq 0)
+Check "shipped routing keeps every codexEffort on inherit (install changes no behavior)" ($shippedRoutingText -notmatch '"codexEffort"\s*:\s*"(?!inherit)')
+# Windows PowerShell keeps the LAST of two identical keys and handoff.sh reads the FIRST, so a
+# repeated key would make the two shells disagree about a value the user edited.
+Check "shipped routing names each key once per profile" (([regex]::Matches($shippedRoutingText, '"codexEffort"').Count -eq @($shippedRoutingConfig.profiles.PSObject.Properties).Count) -and ([regex]::Matches($shippedRoutingText, '"codexModel"').Count -eq @($shippedRoutingConfig.profiles.PSObject.Properties).Count) -and ([regex]::Matches($shippedRoutingText, '"claudeModel"').Count -eq @($shippedRoutingConfig.profiles.PSObject.Properties).Count))
+Check "shipped routing repeats no guidance line" (@($shippedRoutingConfig._readme | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0)
+
+$effortRouting = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit","codexModel":"test-codex-standard","codexEffort":"low"},"high_reasoning":{"claudeModel":"inherit","codexModel":"inherit","codexEffort":"high"}}}'
+$effortOnlyRouting = '{"schemaVersion":1,"profiles":{"standard":{"claudeModel":"inherit","codexModel":"inherit","codexEffort":"medium"}}}'
+$effortFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "codex effort"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting }
+$r = Invoke-Handoff -WorkDir $effortFx -Arguments @("models")
+Check "models resolves the Codex effort from the profile's codexEffort" (($r.Code -eq 0) -and ($r.Out -match "Codex effort:\s+low") -and ($r.Out -match "Effort source:\s+MODEL_ROUTING\.json"))
+Check "the Codex model still resolves beside the effort" ($r.Out -match "Codex model:\s+test-codex-standard")
+Check "models names the effort override order" ($r.Out -match "Effort order:\s+-CodexEffort, HANDOFF_CODEX_EFFORT_<PROFILE>, MODEL_ROUTING\.json codexEffort, inherit")
+Check "models says a resolved effort is passed to codex exec" ($r.Out -match "Effort behavior:\s+master-run, review-run and the Codex Implementer pass -c model_reasoning_effort")
+$r = Invoke-Handoff -WorkDir $codexFx -Arguments @("models")
+Check "a profile with no codexEffort resolves to inherit" (($r.Code -eq 0) -and ($r.Out -match "Codex effort:\s+inherit") -and ($r.Out -match "Effort behavior:\s+Codex uses its configured/default reasoning effort"))
+
+$prevEffortStandard = $env:HANDOFF_CODEX_EFFORT_STANDARD
+$env:HANDOFF_CODEX_EFFORT_STANDARD = "HIGH"
+try {
+    $r = Invoke-Handoff -WorkDir $effortFx -Arguments @("models")
+    Check "HANDOFF_CODEX_EFFORT_<PROFILE> overrides codexEffort, case-insensitively" (($r.Out -match "Codex effort:\s+high") -and ($r.Out -match "Effort source:\s+environment HANDOFF_CODEX_EFFORT_STANDARD"))
+    Check "an effort override leaves the Codex model alone" ($r.Out -match "Codex model:\s+test-codex-standard")
+    $r = Invoke-Handoff -WorkDir $effortFx -Arguments @("models", "-CodexEffort", "minimal")
+    Check "-CodexEffort overrides the environment" (($r.Out -match "Codex effort:\s+minimal") -and ($r.Out -match "command line -CodexEffort"))
+    $env:HANDOFF_CODEX_EFFORT_STANDARD = "turbo"
+    $r = Invoke-Handoff -WorkDir $effortFx -Arguments @("models")
+    Check "an unknown effort level from the environment fails closed" (($r.Code -eq 1) -and ($r.Out -match "Resolved Codex reasoning effort must be one of: minimal, low, medium, high, xhigh, or inherit"))
+} finally {
+    if ($null -eq $prevEffortStandard) { Remove-Item Env:\HANDOFF_CODEX_EFFORT_STANDARD -ErrorAction SilentlyContinue } else { $env:HANDOFF_CODEX_EFFORT_STANDARD = $prevEffortStandard }
+}
+$r = Invoke-Handoff -WorkDir $effortFx -Arguments @("models", "-CodexEffort", "high; rm -rf")
+Check "an effort value that is not a level never reaches codex exec" (($r.Code -eq 1) -and ($r.Out -match "Resolved Codex reasoning effort must be one of"))
+$badEffortFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"codexEffort":"extreme"}}}' }
+$r = Invoke-Handoff -WorkDir $badEffortFx -Arguments @("models")
+Check "an unknown effort level in MODEL_ROUTING.json fails closed" (($r.Code -eq 1) -and ($r.Out -match "Resolved Codex reasoning effort must be one of"))
+$r = Invoke-Handoff -WorkDir $badEffortFx -Arguments @("doctor")
+Check "doctor fails on an unknown effort level" ($r.Out -match "Model routing configuration is invalid")
+$r = Invoke-Handoff -WorkDir $effortFx -Arguments @("doctor")
+Check "doctor reports the resolved Codex effort" ($r.Out -match "Codex effort=low; effort source=MODEL_ROUTING\.json")
+
+$effortOnlyFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortOnlyRouting }
+$r = Invoke-Handoff -WorkDir $effortOnlyFx -Arguments @("models")
+Check "a codexEffort mapping alone clears INERT" (($r.Code -eq 0) -and ($r.Out -notmatch "INERT") -and ($r.Out -match "Codex model:\s+inherit"))
+$prevEffortEconomy = $env:HANDOFF_CODEX_EFFORT_ECONOMY
+$env:HANDOFF_CODEX_EFFORT_ECONOMY = "low"
+try {
+    $r = Invoke-Handoff -WorkDir $codexInertFx -Arguments @("models")
+    Check "a Codex effort environment override clears INERT" ($r.Out -notmatch "INERT")
+} finally {
+    if ($null -eq $prevEffortEconomy) { Remove-Item Env:\HANDOFF_CODEX_EFFORT_ECONOMY -ErrorAction SilentlyContinue } else { $env:HANDOFF_CODEX_EFFORT_ECONOMY = $prevEffortEconomy }
+}
+
+$null = Invoke-Handoff -WorkDir $effortFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $effortFx "NEXT_TURN.md")
+Check "NEXT_TURN.md names the Codex reasoning effort for a Codex turn" ($nt -match "Codex reasoning effort: low \(MODEL_ROUTING\.json\)")
+$effortClaudeFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting }
+$null = Invoke-Handoff -WorkDir $effortClaudeFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $effortClaudeFx "NEXT_TURN.md")
+Check "a Claude Code turn carries no Codex effort line" (($nt -match "## Model For This Turn") -and ($nt -notmatch "Codex reasoning effort"))
+$null = Invoke-Handoff -WorkDir $codexFx -Arguments @("next")
+$nt = Get-Content -Raw -Path (Join-Path $codexFx "NEXT_TURN.md")
+Check "an unmapped effort adds no effort line" ($nt -notmatch "Codex reasoning effort")
+
 # Both shells, one answer: handoff.sh writes the same model section for the same project.
 $parityBash = Get-Command bash -ErrorAction SilentlyContinue
 if ($null -eq $parityBash) {
@@ -1679,6 +1748,12 @@ if ($null -eq $parityBash) {
         @{ Name = "unmapped profile"; Fx = $inheritNextFx; Env = @{} },
         @{ Name = "models -Activate layout"; Fx = (New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $activateLayout }); Env = @{} },
         @{ Name = "the other tool's value is unsafe"; Fx = $codexFx; Env = @{ HANDOFF_CLAUDE_MODEL_STANDARD = "two words" } },
+        @{ Name = "effort file mapping"; Fx = $effortFx; Env = @{} },
+        @{ Name = "effort only, no model"; Fx = $effortOnlyFx; Env = @{} },
+        @{ Name = "effort environment override, upper case"; Fx = $effortFx; Env = @{ HANDOFF_CODEX_EFFORT_STANDARD = "XHIGH" } },
+        @{ Name = "effort on a Claude Code turn"; Fx = $effortClaudeFx; Env = @{} },
+        @{ Name = "unknown effort level"; Fx = $effortFx; Env = @{ HANDOFF_CODEX_EFFORT_STANDARD = "turbo" } },
+        @{ Name = "unknown effort level on a Claude Code turn"; Fx = $effortClaudeFx; Env = @{ HANDOFF_CODEX_EFFORT_STANDARD = "turbo" } },
         @{ Name = "malformed routing file"; Fx = (New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = '{"schemaVersion":1,"profiles":{"standard":{"codexModel":"test-codex-broken"}}' }); Env = @{} }
     )
     foreach ($case in $parityCases) {
@@ -1744,6 +1819,51 @@ try {
     $r = Invoke-Handoff -WorkDir $rfx -Arguments @("review-run", "-Yes", "-AllowModelEscalation")
     $argv = if (Test-Path (Join-Path $rfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $rfx "FAKE_ARGV.txt") } else { "" }
     Check "an approved review-run passes the strongest mapped Codex model" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-high "))
+
+    # v3.16.0: the resolved effort reaches codex exec as a configuration override.
+    $efx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master" -CurrentTask "codex effort run"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting } -InitGit
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "master-run passes the resolved effort after the model" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-standard -c model_reasoning_effort=low --cd ")) $argv
+    Check "master-run prints the effort it runs at" (($r.Out -match "Codex effort: low \(MODEL_ROUTING\.json\)") -and ($r.Out -match "Invocation: codex exec --model `"test-codex-standard`" -c model_reasoning_effort=low --cd "))
+
+    $efx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortOnlyRouting } -InitGit
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "an effort with no model passes the effort and no --model" (($r.Code -eq 0) -and ($argv -match "^exec -c model_reasoning_effort=medium --cd ") -and ($argv -notmatch "--model")) $argv
+
+    $efx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "master-run with no effort mapping passes no effort override" (($r.Code -eq 0) -and ($argv -notmatch "model_reasoning_effort"))
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes", "-CodexEffort", "xhigh")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "-CodexEffort reaches codex exec for one command" (($r.Code -eq 0) -and ($argv -match "^exec -c model_reasoning_effort=xhigh --cd ")) $argv
+    Remove-Item -LiteralPath (Join-Path $efx "FAKE_ARGV.txt") -Force -ErrorAction SilentlyContinue
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes", "-CodexEffort", "turbo")
+    Check "master-run refuses an unknown effort before Codex starts" (($r.Code -ne 0) -and ($r.Out -match "Resolved Codex reasoning effort must be one of") -and (-not (Test-Path (Join-Path $efx "FAKE_ARGV.txt")))) $r.Out
+
+    # A concrete effort on high_reasoning is a cost escalation, model or no model.
+    $efx = New-Fixture -Files @{ "AI_HANDOFF.md" = $highProfileHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting } -InitGit
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes")
+    Check "a concrete high_reasoning effort requires -AllowModelEscalation" (($r.Code -eq 1) -and ($r.Out -match "resolves to the Codex reasoning effort 'high' and requires explicit cost escalation approval") -and ($r.Out -notmatch "concrete Codex model") -and (-not (Test-Path (Join-Path $efx "FAKE_ARGV.txt")))) $r.Out
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes", "-AllowModelEscalation")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "an approved escalation runs master-run at the mapped effort" (($r.Code -eq 0) -and ($argv -match "^exec -c model_reasoning_effort=high --cd ")) $argv
+    $efx = New-Fixture -Files @{ "AI_HANDOFF.md" = $highProfileHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+    $r = Invoke-Handoff -WorkDir $efx -Arguments @("master-run", "-Yes", "-CodexEffort", "high")
+    $argv = if (Test-Path (Join-Path $efx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $efx "FAKE_ARGV.txt") } else { "" }
+    Check "an effort named on the command line is the user's own choice and needs no second approval" (($r.Code -eq 0) -and ($argv -match "^exec -c model_reasoning_effort=high --cd ")) $r.Out
+
+    $rfx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "codex review effort"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting } -InitGit
+    Initialize-FixtureGitBaseline -Dir $rfx
+    New-Item -ItemType Directory -Path (Join-Path $rfx "scripts") -Force | Out-Null
+    Set-Content -Path (Join-Path $rfx "scripts/handoff.ps1") -Value "# fixture" -Encoding utf8
+    $h = (Get-Content -Raw -Path (Join-Path $rfx "AI_HANDOFF.md")) -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- scripts/handoff.ps1"
+    Set-Content -Path (Join-Path $rfx "AI_HANDOFF.md") -Value $h -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $rfx -Arguments @("review-run", "-Yes")
+    $argv = if (Test-Path (Join-Path $rfx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $rfx "FAKE_ARGV.txt") } else { "" }
+    Check "review-run passes the resolved effort" (($r.Code -eq 0) -and ($argv -match "^exec --model test-codex-standard -c model_reasoning_effort=low --cd ")) "$($r.Out) argv=[$argv]"
 } finally {
     if ($null -eq $prevCodexCli) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevCodexCli }
 }
@@ -1796,8 +1916,27 @@ $cifx = New-Fixture -Files @{ "AI_HANDOFF.md" = $codexImplHandoff; ".ai/roles/RO
 Initialize-FixtureGitBaseline -Dir $cifx
 $r = Invoke-Handoff -WorkDir $cifx -Arguments @("cycle")
 Check "cycle with a Codex Implementer stops at the Codex cost gate before the yes prompt" (($r.Code -eq 1) -and ($r.Out -match "Codex Implementer turn: blocked - model routing") -and ($r.Out -notmatch "Cancelled") -and ($r.Out -notmatch "exited with error")) "code=$($r.Code)"
+# v3.16.0: the same gate when the profile maps only an effort, and the effort reaches the
+# Codex Implementer's own codex exec call.
+$cifx = New-Fixture -Files @{ "AI_HANDOFF.md" = $codexImplHandoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $codexImplRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting } -InitGit
+Initialize-FixtureGitBaseline -Dir $cifx
+$r = Invoke-Handoff -WorkDir $cifx -Arguments @("cycle")
+Check "cycle with a Codex Implementer stops at the cost gate for a concrete effort alone" (($r.Code -eq 1) -and ($r.Out -match "Codex Implementer turn: blocked - model routing") -and ($r.Out -match "resolves to the Codex reasoning effort 'high'") -and ($r.Out -notmatch "Cancelled")) "code=$($r.Code) $($r.Out)"
+$prevCodexCliImpl = $env:CODEX_CLI
+$env:CODEX_CLI = $fakeModelEcho
+try {
+    $codexImplStandard = ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "codex implementer effort") -replace "- Implementer: Claude Code", "- Implementer: Codex") -replace "- Reviewer: Codex", "- Reviewer: Claude Code"
+    $cifx = New-Fixture -Files @{ "AI_HANDOFF.md" = $codexImplStandard; ".ai/roles/ROLE_ASSIGNMENT.md" = $codexImplRoles; ".ai/skills/codex-claude-handoff/MODEL_ROUTING.json" = $effortRouting } -InitGit
+    Initialize-FixtureGitBaseline -Dir $cifx
+    $r = Invoke-Handoff -WorkDir $cifx -Arguments @("cycle", "-Yes")
+    $argv = if (Test-Path (Join-Path $cifx "FAKE_ARGV.txt")) { Get-Content -Raw -Path (Join-Path $cifx "FAKE_ARGV.txt") } else { "" }
+    Check "the Codex Implementer turn passes the resolved effort to codex exec" ($argv -match "^exec --model test-codex-standard -c model_reasoning_effort=low --cd .* --sandbox workspace-write ") "code=$($r.Code) argv=[$argv] $($r.Out)"
+} finally {
+    if ($null -eq $prevCodexCliImpl) { Remove-Item Env:\CODEX_CLI -ErrorAction SilentlyContinue } else { $env:CODEX_CLI = $prevCodexCliImpl }
+}
 
 Check "the Codex Implementer turn runs the Codex cost gate and passes the resolved model" (($handoffSrcV310 -match '(?s)function Invoke-CodexImplementerTurn.{0,2500}Test-CodexModelPreflight') -and ($handoffSrcV310 -match "(?s)function Invoke-CodexImplementerTurn.{0,6000}CodexUsesConcreteModel\) \{ \`$argList \+= @\('--model'"))
+Check "every automated Codex turn adds the effort override from one helper (v3.16.0)" (([regex]::Matches($handoffSrcV310, "\`$argList \+= @\(Get-CodexEffortArgs\)").Count -eq 3) -and ($handoffSrcV310 -match "(?s)function Invoke-CodexImplementerTurn.{0,6500}Get-CodexEffortArgs"))
 
 # The Bash suite is run for real when a Bash interpreter exists, and reported as SKIPPED
 # - never as passing - when one does not. A suite that silently counts as green when it

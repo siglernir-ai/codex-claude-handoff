@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.15.1)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.16.0)
 # Commands: status, adapters, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -389,8 +389,16 @@ _routing_file_usable() {
     [ $(( $(tr -cd '"' < "$file" | wc -c | tr -d ' ') % 2 )) -eq 0 ]
 }
 
+# The closed list handoff.ps1 uses for the Codex reasoning effort.
+_safe_effort() {
+    case "$1" in
+        inherit|minimal|low|medium|high|xhigh) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 _model_lines() {
-    local canonical label profile file claude_model claude_source model source
+    local canonical label profile file claude_model claude_source codex_model codex_source effort effort_source model source
     canonical="$(_canonical_tool "$1")"
     case "$canonical" in
         codex)       label="Codex model" ;;
@@ -409,17 +417,25 @@ _model_lines() {
     _resolve_tool_model "HANDOFF_CLAUDE_MODEL_" "claudeModel" "$profile" "$file"
     claude_model="$TOOL_MODEL"; claude_source="$TOOL_SOURCE"
     _resolve_tool_model "HANDOFF_CODEX_MODEL_" "codexModel" "$profile" "$file"
-    if ! _safe_model "$claude_model" || ! _safe_model "$TOOL_MODEL"; then
+    codex_model="$TOOL_MODEL"; codex_source="$TOOL_SOURCE"
+    # v3.16.0: the Codex reasoning effort follows the same profile and the same order.
+    _resolve_tool_model "HANDOFF_CODEX_EFFORT_" "codexEffort" "$profile" "$file"
+    effort="$(printf '%s' "$TOOL_MODEL" | tr '[:upper:]' '[:lower:]')"; effort_source="$TOOL_SOURCE"
+    if [ "$effort" = "default" ]; then effort="inherit"; fi
+    if ! _safe_model "$claude_model" || ! _safe_model "$codex_model" || ! _safe_effort "$effort"; then
         echo "Model routing is BLOCKED - run handoff.ps1 models before this turn."
         return 0
     fi
     if [ "$canonical" = "codex" ]; then
-        model="$TOOL_MODEL"; source="$TOOL_SOURCE"
+        model="$codex_model"; source="$codex_source"
     else
         model="$claude_model"; source="$claude_source"
     fi
     echo "Profile: $profile"
     echo "$label: $model ($source)"
+    if [ "$canonical" = "codex" ] && [ "$effort" != "inherit" ]; then
+        echo "Codex reasoning effort: $effort ($effort_source)"
+    fi
     if [ "$model" = "inherit" ]; then
         echo "No model is mapped for this profile: keep the model your window already uses."
     else

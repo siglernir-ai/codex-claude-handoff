@@ -131,7 +131,8 @@ The Master selects a capability profile for each meaningful task and records it 
 `Model Profile` in the `AI_HANDOFF.md` Status section. The Master does not hard-code
 provider model names. Each tool translates the profile to its own concrete model
 through `MODEL_ROUTING.json` (`claudeModel`, `codexModel`) or an environment override
-(`HANDOFF_CLAUDE_MODEL_<PROFILE>`, `HANDOFF_CODEX_MODEL_<PROFILE>`). Automated turns pass
+(`HANDOFF_CLAUDE_MODEL_<PROFILE>`, `HANDOFF_CODEX_MODEL_<PROFILE>`; since v3.16.0 also
+`codexEffort` or `HANDOFF_CODEX_EFFORT_<PROFILE>` for the Codex reasoning effort). Automated turns pass
 that model to the tool; a window turn reads it from `NEXT_TURN.md`, and the person
 driving the window opens a new window on it when it differs (since v3.10.0).
 

@@ -107,6 +107,15 @@ What the Master costs depends on two things:
    `HANDOFF_CODEX_MODEL_HIGH_REASONING` to your strongest one. A Codex app that was
    already open reads new environment variables only after it restarts.
 
+   **Prefer an effort level over a model name for Codex (since v3.16.0).** Codex has
+   no floating model aliases, so a concrete model name in a mapping breaks when the
+   vendor replaces the model. Reasoning effort levels (`minimal`, `low`, `medium`,
+   `high`, `xhigh`) stay valid across model generations. Set for example
+   `HANDOFF_CODEX_EFFORT_STANDARD=low` and `HANDOFF_CODEX_EFFORT_HIGH_REASONING=high`,
+   or map `codexEffort` per profile in `MODEL_ROUTING.json`. Automated Codex turns pass
+   it as `-c model_reasoning_effort=<level>`. A concrete effort on `high_reasoning`
+   requires `-AllowModelEscalation`, like a concrete model.
+
    **A new model means a new window.** Switching models inside a conversation resends
    the whole conversation to the new model without its cache. A new window starts from
    `NEXT_TURN.md` and `AI_HANDOFF.md` and loses nothing.

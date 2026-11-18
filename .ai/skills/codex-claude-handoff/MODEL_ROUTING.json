@@ -13,29 +13,37 @@
     "  standard       -> your normal working model",
     "  high_reasoning -> your strongest model; concrete escalation also requires -AllowModelEscalation",
     "Automated Codex turns (master-run, review-run, the Codex Implementer) pass codexModel as --model; NEXT_TURN.md names it for window turns.",
+    "codexEffort (since v3.16.0) maps a profile to a Codex reasoning effort: minimal, low, medium, high or xhigh.",
+    "An effort level stays valid when the vendor replaces a model; a model name does not. Either may be mapped alone.",
+    "Automated Codex turns pass it as -c model_reasoning_effort=<level>; the environment route is HANDOFF_CODEX_EFFORT_<PROFILE>.",
     "Model names are intentionally NOT shipped here: they change often and belong to your setup, not the protocol."
   ],
 
   "profiles": {
     "inherit": {
       "claudeModel": "inherit",
-      "codexModel": "inherit"
+      "codexModel": "inherit",
+      "codexEffort": "inherit"
     },
     "economy": {
       "claudeModel": "inherit",
-      "codexModel": "inherit"
+      "codexModel": "inherit",
+      "codexEffort": "inherit"
     },
     "cheap_readonly": {
       "claudeModel": "inherit",
-      "codexModel": "inherit"
+      "codexModel": "inherit",
+      "codexEffort": "inherit"
     },
     "standard": {
       "claudeModel": "inherit",
-      "codexModel": "inherit"
+      "codexModel": "inherit",
+      "codexEffort": "inherit"
     },
     "high_reasoning": {
       "claudeModel": "inherit",
-      "codexModel": "inherit"
+      "codexModel": "inherit",
+      "codexEffort": "inherit"
     }
   }
 }

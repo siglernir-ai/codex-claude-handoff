@@ -1,3 +1,33 @@
+## 3.16.0 - An Effort Level Outlives a Model
+
+- **A model name in a Codex mapping goes stale.** Claude Code has floating aliases, so a
+  profile mapped to one keeps working when the model behind it is replaced. Codex has none:
+  a concrete name in `MODEL_ROUTING.json` or `HANDOFF_CODEX_MODEL_<PROFILE>` breaks the day
+  the vendor retires that model, and the mapping has to be found and fixed by hand.
+- **A profile now also maps to a Codex reasoning effort.** `codexEffort` in
+  `MODEL_ROUTING.json`, `HANDOFF_CODEX_EFFORT_<PROFILE>` in the environment, or `-CodexEffort`
+  for one command, in that reverse order of precedence. The levels are `minimal`, `low`,
+  `medium`, `high` and `xhigh`, and they stay valid across model generations. Automated
+  Codex turns (`master-run`, `review-run`, the Codex Implementer) pass the resolved level
+  as `-c model_reasoning_effort=<level>`. Effort and model are independent: map either one
+  alone. The shipped file keeps every `codexEffort` on `inherit`, so installing changes
+  nothing.
+- **The list of levels is closed.** The value becomes part of the `codex exec` command
+  line, so anything that is not one of the five levels blocks the turn before Codex starts,
+  in `handoff.ps1` and in `handoff.sh` alike.
+- **A concrete effort on `high_reasoning` is a cost escalation.** It needs
+  `-AllowModelEscalation`, exactly as a concrete model does. An effort named on the command
+  line is the user's own choice and needs no second approval.
+- **`models`, `doctor` and `NEXT_TURN.md` name it.** `models` prints the resolved effort,
+  its source and the override order; `doctor` reports it; `NEXT_TURN.md` carries a
+  `Codex reasoning effort` line for a Codex turn driven in a window. An effort mapping on
+  its own also clears the INERT notice. New protocol tests cover resolution, the closed
+  list, the cost gate, the arguments each automated turn passes, and parity between the
+  two shells.
+- **Not verified against a live Codex.** The tests run against a stand-in for the Codex
+  CLI and check the exact arguments passed. No real `codex exec` call was made for this
+  release, so confirm the five level names against your installed Codex before mapping one.
+
 ## 3.15.1 - The Handoff File Stays Small
 
 - **A real project's `AI_HANDOFF.md` reached 1.2 GB.** Windows PowerShell 5.1 reads a file

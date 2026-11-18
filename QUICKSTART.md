@@ -45,7 +45,7 @@ After setup, review and commit the installed project-local files. Include
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore skills-lock.json
-git commit -m "Install codex-claude-handoff v3.15.0"
+git commit -m "Install codex-claude-handoff v3.16.0"
 ```
 
 ## Windows alternative: install the pinned release
@@ -54,7 +54,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.15.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.16.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -64,7 +64,7 @@ Commit the installed project-local files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.15.0"
+git commit -m "Install codex-claude-handoff v3.16.0"
 ```
 
 Check the installation:
@@ -84,7 +84,9 @@ The Master selects a stable capability profile (`economy`, `cheap_readonly`,
 `standard`, or `high_reasoning`). All profiles safely inherit the current Claude
 Code and Codex defaults until you optionally map them, either with
 `HANDOFF_CLAUDE_MODEL_<PROFILE>` and `HANDOFF_CODEX_MODEL_<PROFILE>` environment
-variables or in `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json`. Future model
+variables or in `.ai/skills/codex-claude-handoff/MODEL_ROUTING.json`. For Codex you can
+map a reasoning effort instead of a model name (`HANDOFF_CODEX_EFFORT_<PROFILE>`), which
+stays valid when models change. Future model
 changes then require one local mapping update instead of a Skill rewrite.
 `NEXT_TURN.md` names the model for each turn; when it changes, open a new window.
 
@@ -152,13 +154,13 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.15.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.16.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-v3.15.0 packages a self-contained public beta Skill. From a clean Git project, run:
+v3.16.0 packages a self-contained public beta Skill. From a clean Git project, run:
 
 ```powershell
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy
