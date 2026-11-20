@@ -1,3 +1,145 @@
+## 3.18.0 - The First Choice Is Yours
+
+- **A fresh install ran on a binding nobody chose.** Installing gave every project Master =
+  Codex, Reviewer = Codex, Implementer = Claude Code, silently. Which tools work on a
+  project, and which one leads, is the user's decision. It is now asked for, never assumed.
+- **One line in `.ai/roles/ROLE_ASSIGNMENT.md` records it.** The shipped file says
+  `Setup: pending`. `handoff.ps1 setup` writes `Setup: complete` with the chosen binding.
+  No line means configured: every install made before v3.18.0, and every upgrade of one,
+  behaves exactly as before. Any other value, or a second line, fails closed through the
+  role checkpoint (exit 12), and only `setup` repairs it, when it is the only problem.
+- **Until setup is done, work commands stop with exit code 14** and one instruction,
+  `.\scripts\handoff.ps1 setup`. That includes the no-command menu and every form of
+  `roles`. `doctor` warns (it does not fail), `status` says NOT CONFIGURED instead of
+  showing the template's binding, and `models` runs. Nothing was started and nothing was
+  changed, and the message says so.
+- **`handoff.ps1 setup [-Players "<tools>"] [-Master "<tool>"] [-Window] [-Yes]`.** One rule,
+  for every way in. Two players: the Master's tool implements and the other tool reviews,
+  so the Master and the Reviewer are different tools. One player: that tool holds every role
+  under `Review Independence: fresh-context`, and the plan says plainly that a single-vendor
+  review is weaker than two vendors. Unknown tools, a Master who is not a player, an empty
+  list and two players without a Master are refused by name. setup writes the three rows,
+  the review line, `Setup: complete` and a Role Swap History row in one swap of the file,
+  and moves the install's Task Actors so `work` runs clean straight after. If the second
+  write fails (for example `AI_HANDOFF.md` is open in another program), the role file is
+  restored byte for byte, no temp file is left, and setup can simply be run again. In Bash
+  an interrupt between the two writes is handled the same way; setup's work files live in
+  `.ai/handoff-history/`, which Git ignores; and if even the restore fails, setup says it
+  failed part-way, keeps the saved original there and prints the one command that puts it
+  back. A folder setup cannot write is named as such. `HANDOFF_TEST_SETUP_FAIL` exists for
+  the test suite only: it can make Bash setup fail at a chosen step, never pass. It is refused
+  while a turn runs. A pending project is set up only from the untouched install state:
+  setup does not adopt a record written before the players were chosen, such as a
+  hand-written `REVIEW_DONE`, and says how to keep it and start clean (move `AI_HANDOFF.md`
+  into `.ai/handoff-history/`, re-run the installer with `-Force`, run setup). A configured
+  project reconfigures only at a finished task (`REVIEW_DONE` or `BLOCKED`, Waiting For:
+  User), whose Task Actors are never rewritten; setup then names `start` as the next step,
+  because `work` stops on role drift until `start` retires that record.
+- **A picker window on Windows, flags everywhere else.** Without `-Players`, setup opens a
+  small dialog in the style of the roles indicator: tick the players, choose the Master. The
+  tools found on the machine are ticked first, using the checks `doctor` already makes; no
+  Master is ever preselected, and Save stays disabled until the choice is valid. The window
+  owns no rules: every result it can show is computed by setup beforehand, and Save returns
+  the choice to the same code path as `-Players ... -Master ... -Yes`. Where no window can
+  open (no console, an agent's shell, `HANDOFF_BACKGROUND_NO_WINDOW`), a person at a console
+  gets a short numbered prompt, and anything else gets the flag form and exit 1. A picker
+  that fails is reported as a failure (exit 3), never as a cancel (exit 2), and never falls
+  back to a console prompt. The roles indicator has a `setup` button, which runs
+  `setup -Window`.
+- **The installers ask, or take the answer up front.** `install.ps1` (and `bootstrap.ps1`,
+  and `scripts/install.ps1`) accept `-Players`, `-Master` and `-NoSetupWindow`; `install.sh`
+  accepts `--players` and `--master`. A fresh install opens the picker at the end when a
+  person can use it, and otherwise prints NOT CONFIGURED and the command. A bad flag fails
+  the install and says why. Whether a project is new is decided before anything is copied,
+  from the role file, because the Skill's own setup passes `-Force` on a first install. An
+  upgrade carries the project's own Setup line, or none, and refuses an invalid one.
+- **`bash scripts/handoff.sh setup --players <list> --master <tool> [--yes]`.** The same
+  rules and the same file, from Bash, so a Linux machine without PowerShell can leave the
+  pending state. Bash sets up the untouched install state only: reconfiguring a project
+  after its first task needs `pwsh scripts/handoff.ps1 setup`, because the `start` recovery
+  that retires the finished record exists only there. `handoff.sh` and both `next-step`
+  helpers apply the same gate; in Bash only `status` and `setup` are exempt, as in
+  PowerShell, so `adapters` no longer shows the template binding as if it had been chosen.
+- **The stop never hands an agent a ready-made choice.** The exit-14 and exit-12 blocks,
+  the refusals and the installers' notices show placeholders (`-Players "<Claude Code, Codex,
+  or both>" -Master "<one of the players>"`) and say that an agent must ask the user. Where
+  usage text and the docs show a concrete command, it is labelled an example and sits next
+  to that sentence.
+- **Agents ask; they never choose.** `SKILL.md` tells an agent that installs the protocol to
+  ask the user for the players and the Master, then run setup with flags, and never to edit
+  the Setup line by hand. The Skill's setup scripts say when setup is pending.
+- **Fixed: `roles -SetRole` on a fresh install blocked every later command.** The swap left
+  the install's template Task Actors behind, and the next command stopped on role drift.
+  In the untouched install state the Task Actors now follow the binding. `-SetTool` must now
+  name a known tool: a placeholder such as `TBD`, `User` or an unknown name is refused.
+- **Fixed: a typographic quote could break a generated window script.** PowerShell also ends
+  a single-quoted string at U+2018..U+201B, so a project folder named with one broke the
+  indicator and the picker, and a crafted name could add a command. Values are now escaped
+  with the parser's own escaper.
+- **Fixed (security scan): `handoff.sh` accepted an unknown tool.** Under `fresh-context`, a
+  name the registry does not know, used for both Reviewer and Implementer, passed the Bash
+  role checkpoint, and `handoff.sh commit-check` printed ALLOWED. Bash now rejects an
+  unknown bound tool or Task Actor, as `handoff.ps1` does, and compares canonical identities,
+  so an alias such as `Codex Window` is not drift. It reads Task Actors in every form
+  `handoff.ps1` reads (`*` or `-`, any spacing, any letter case) and role rows in any letter
+  case; before, `* Implementer: Codex` was invisible to Bash and a self-review read ALLOWED.
+  Bash's section and Status readers were ported line by line from `Get-SectionLines` and
+  `Read-HandoffState`, and Bash `commit-check` now makes the commit audit of
+  `Get-CommitPlan` on the lines `Get-TaskActors` reads (exactly one distinct Implementer and
+  Reviewer, and not one tool under `separate-tool`) besides the checkpoint's own reading. A
+  blocked Bash `commit-check` exits non-zero, as PowerShell does. For a file containing a
+  character from a fixed refuse set (Unicode spaces, control characters, a lone CR, U+200B,
+  a U+FEFF that is not the BOM, and four letters .NET folds to ASCII: U+212A, U+017F,
+  U+0130, U+0131), Bash `commit-check` and `setup` refuse before reading anything else,
+  name the line and the character, and point to `handoff.ps1`. The refusal covers the whole
+  file: one no-break space in a free-text note is enough, and removing it is the way on
+  where PowerShell is not installed. What is tested: a differential table of 42 handoff
+  files, run through both shells, in which Bash never says ALLOWED or exits 0 where
+  PowerShell refuses and the legitimate ones (CRLF, a BOM, no final newline, Hebrew text)
+  pass in both; its rows cover heading spellings, repeated and fenced headings, empty,
+  missing and renamed sections, duplicate Reviewers, `*` and mixed bullets, duplicated
+  Status, lower-case keys, and the Unicode and lone-CR cases; and every character of the
+  refuse set is refused in three positions. The Bash scripts set `LC_ALL=C` themselves, so
+  the caller's locale does not reach their readers. This is a tested set, not a proof:
+  `handoff.ps1` remains the authority for a commit, and the known gaps below name a class
+  the refuse set does not cover. Other Bash commands (`status`, `next`, `start`, `adapters`) and `next-step.sh` only
+  route, and are not guarded. A second copy of `_canonical_tool` was removed.
+- **Fixed: the Skill's `setup.sh` always failed** at its last step with "Unknown command:
+  doctor": `handoff.sh` has no doctor. It runs `status` now, and `install.sh` names `status`
+  instead of `doctor` in its closing lines. Both setup scripts suggest an install commit
+  without a stale version number.
+- **Fixed: a `-Force` upgrade glued the binding table to the next line.** `install.ps1`'s
+  row pattern ran on through the line break, so the blank line under the table disappeared
+  and `Review Independence:` rendered as a table row. Two upgrades in a row now give the
+  same file.
+- **Docs.** The entry pointers and the README no longer claim a default binding. To fit the
+  Master's context budget, the role file lost one redundant sentence ("This note is not the
+  authority: run `handoff.ps1 adapters` ..."); the line above it says the same.
+- **Not verified:** against a live Codex or a live Claude Code turn. The picker window was
+  generated and parsed, never opened or clicked, by the author or by the tests. Bash was
+  run only under Git Bash on Windows. The console prompt (setup without flags at a person's
+  console) was not exercised by a test.
+- **Known gaps, tracked for a later release.** The gate guarantees that an install never
+  runs on a binding nobody chose; it does not defend against someone who edits or deletes
+  the role file by hand. A broken Setup line (two `Setup: pending` lines, say) sends
+  PowerShell `setup` down the configured path, so at a hand-written `REVIEW_DONE` it
+  reconfigures where Bash refuses; and a deleted role file returns both shells to the
+  built-in default binding, past the gate, with only `doctor` reporting FAIL. `commit-check`
+  still accepts placeholder Task Actors (`TBD`) at `REVIEW_DONE` when the binding has two
+  tools. Bash `commit-check` reads Changed Files with an exact heading match and, when that
+  list does not match `git status`, still says ALLOWED with only a WARNING where
+  PowerShell refuses; use `handoff.ps1 commit-check` for the guarded result. `next-step.sh`
+  routing can differ from `handoff.ps1` on a file with a character from the refuse set.
+  `handoff.ps1` compares headings with `-eq`, which is culture-sensitive: it ignores
+  invisible characters (a soft hyphen U+00AD, joiners, direction marks, variation
+  selectors) and equates some ligatures with plain letters. None of those is in the refuse
+  set, so on a hand-crafted file with such a character inside a `## Status` or
+  `## Task Actors` heading, Bash `commit-check` still says ALLOWED where PowerShell
+  refuses. This is as old as v3.17.0; `handoff.ps1 commit-check` gives the guarded result.
+  In Bash `setup`, a signal that lands after `AI_HANDOFF.md` is written and before setup
+  finishes restores the role file and says nothing was changed, although `AI_HANDOFF.md`
+  is already the new one; running setup again completes it.
+
 ## 3.17.0 - A Fresh Context, Not a Second Vendor
 
 - **Someone with only one tool could not get a review at all.** The protocol required the

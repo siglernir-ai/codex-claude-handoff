@@ -653,6 +653,340 @@ ri_code=$?
     tr -d '\r' < "$RI_ROLE_FILE2" | grep -q '^Review Independence: fresh-context$'
 check "bash --force upgrade keeps a mis-cased fresh-context line with two tools bound" $? "$ri_up"
 
+# --- v3.18.0: first setup - the gate, setup, the installer, and the unknown-tool fix ---
+echo "[bash] First setup (v3.18.0)"
+su_fixture() {
+    # su_fixture <setup-line or empty> [master reviewer implementer] -> fixture with the shipped handoff
+    local dir; dir="$(mktemp -d "$FIXTURE_ROOT/su.XXXXXX")"
+    mkdir -p "$dir/.ai/roles"
+    {
+        printf '# Role Assignment\n\n## Current Binding\n\n| Role | Tool |\n|---|---|\n'
+        printf '| Master | %s |\n| Reviewer | %s |\n| Implementer | %s |\n\n' "${2:-Codex}" "${3:-Codex}" "${4:-Claude Code}"
+        printf 'Review Independence: separate-tool\n'
+        if [ -n "$1" ]; then printf '%s\n' "$1"; fi
+        printf '\nThe User is always the approval point and is never one of these roles.\n'
+    } > "$dir/.ai/roles/ROLE_ASSIGNMENT.md"
+    tr -d '\r' < "$REPO_ROOT/templates/AI_HANDOFF.md" > "$dir/AI_HANDOFF.md"
+    echo "$dir"
+}
+su_hashes() { printf '%s/%s' "$(hash_file "$1/.ai/roles/ROLE_ASSIGNMENT.md")" "$(hash_file "$1/AI_HANDOFF.md")"; }
+
+SU_FX="$(su_fixture "Setup: pending")"
+su_before="$(su_hashes "$SU_FX")"
+su_miss=""
+for su_cmd in next start commit-check cycle doctor release-check adapters ""; do
+    if [ -n "$su_cmd" ]; then run_handoff "$SU_FX" "$su_cmd" </dev/null; else run_handoff "$SU_FX" </dev/null; fi
+    if ! { [ "$RH_CODE" -eq 14 ] && printf '%s' "$RH_OUT" | grep -q "Setup required: this project has not chosen its players and its Master yet." && printf '%s' "$RH_OUT" | grep -q "Nothing was started and nothing was changed."; }; then
+        su_miss="$su_miss [$su_cmd -> $RH_CODE]"
+    fi
+done
+[ -z "$su_miss" ] && [ "$(su_hashes "$SU_FX")" = "$su_before" ]
+check "bash: pending stops every command but status and setup with exit 14" $? "$su_miss"
+run_handoff "$SU_FX" status
+[ "$RH_CODE" -eq 0 ] && printf '%s' "$RH_OUT" | grep -q "^Setup:        NOT CONFIGURED" && ! printf '%s' "$RH_OUT" | grep -q "^Roles:        Master="
+check "bash: pending status says NOT CONFIGURED and hides the template binding" $? "$RH_OUT"
+run_handoff "$SU_FX" adapters
+[ "$RH_CODE" -eq 14 ] && ! printf '%s' "$RH_OUT" | grep -q "^Role:"
+check "bash: adapters is gated while pending, as in handoff.ps1" $? "$RH_OUT"
+run_handoff "$SU_FX" setup </dev/null
+[ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q 'setup --players "Claude Code,Codex" --master "Claude Code" --yes' && [ "$(su_hashes "$SU_FX")" = "$su_before" ]
+check "bash: setup without flags prints the flag form and changes nothing" $? "$RH_OUT"
+run_handoff "$SU_FX" setup --players "Codex" </dev/null
+[ "$RH_CODE" -eq 2 ] && [ "$(su_hashes "$SU_FX")" = "$su_before" ]
+check "bash: setup without --yes and nothing on input cancels with exit 2" $? "$RH_OUT"
+su_ref_fail=""
+while IFS='|' read -r su_p su_m su_want; do
+    if [ -n "$su_m" ]; then run_handoff "$SU_FX" setup --players "$su_p" --master "$su_m" --yes; else run_handoff "$SU_FX" setup --players "$su_p" --yes; fi
+    { [ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -qF "$su_want"; } || su_ref_fail="$su_ref_fail [$su_p/$su_m]"
+done <<'REFUSALS'
+Gemini||Unknown player 'Gemini'
+Codex|Claude Code|The Master must be one of the players
+Claude Code,Codex||No Master is chosen for you
+Claude Code,Codex|Gemini|Unknown Master 'Gemini'
+ , ||Choose at least one player
+REFUSALS
+[ -z "$su_ref_fail" ] && [ "$(su_hashes "$SU_FX")" = "$su_before" ]
+check "bash: setup refuses an unknown tool, a Master who is not a player, a missing Master and an empty list" $? "$su_ref_fail"
+
+run_handoff "$SU_FX" setup --players "Claude Code,Codex" --master "Claude Code" --yes
+su_text="$(tr -d '\r' < "$SU_FX/.ai/roles/ROLE_ASSIGNMENT.md")"
+[ "$RH_CODE" -eq 0 ] && [ "$(role_tool "$SU_FX/.ai/roles/ROLE_ASSIGNMENT.md" Master)" = "Claude Code" ] && \
+    [ "$(role_tool "$SU_FX/.ai/roles/ROLE_ASSIGNMENT.md" Implementer)" = "Claude Code" ] && \
+    [ "$(role_tool "$SU_FX/.ai/roles/ROLE_ASSIGNMENT.md" Reviewer)" = "Codex" ] && \
+    [ "$(printf '%s\n' "$su_text" | grep -c '^Setup:')" -eq 1 ] && printf '%s\n' "$su_text" | grep -q '^Setup: complete$' && \
+    printf '%s\n' "$su_text" | grep -q '| User (handoff.sh setup) |$'
+check "bash: setup writes the binding, Setup: complete and a history row" $? "$RH_OUT"
+grep -q '^- Implementer: Claude Code$' "$SU_FX/AI_HANDOFF.md" && grep -q '^- Reviewer: Codex$' "$SU_FX/AI_HANDOFF.md"
+check "bash: setup moves the install's Task Actors" $?
+run_handoff "$SU_FX" next
+[ "$RH_CODE" -eq 0 ]
+check "bash: next runs clean right after setup" $? "$RH_OUT"
+
+SU_SOLO="$(su_fixture "Setup: pending")"
+run_handoff "$SU_SOLO" setup --players "Codex" --yes
+[ "$RH_CODE" -eq 0 ] && tr -d '\r' < "$SU_SOLO/.ai/roles/ROLE_ASSIGNMENT.md" | grep -q '^Review Independence: fresh-context$' && \
+    [ "$(role_tool "$SU_SOLO/.ai/roles/ROLE_ASSIGNMENT.md" Reviewer)" = "Codex" ] && printf '%s' "$RH_OUT" | grep -q "Two tools remain the recommended setup"
+check "bash: one player is fresh-context, and the plan says it is weaker" $? "$RH_OUT"
+
+SU_BAD="$(su_fixture "Setup: maybe")"
+run_handoff "$SU_BAD" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "Invalid setup line: ROLE_ASSIGNMENT.md declares 'Setup: maybe'"
+check "bash: an unknown Setup value blocks through the role checkpoint" $? "$RH_OUT"
+run_handoff "$SU_BAD" setup --players "Codex" --yes
+[ "$RH_CODE" -eq 0 ] && [ "$(tr -d '\r' < "$SU_BAD/.ai/roles/ROLE_ASSIGNMENT.md" | grep -c '^Setup:')" -eq 1 ]
+check "bash: setup repairs a broken Setup line that is the only problem" $? "$RH_OUT"
+SU_DUP="$(su_fixture "Setup: complete")"
+printf 'Setup: complete\n' >> "$SU_DUP/.ai/roles/ROLE_ASSIGNMENT.md"
+run_handoff "$SU_DUP" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "declares 'Setup:' 2 times"
+check "bash: a duplicated Setup line fails closed" $? "$RH_OUT"
+
+# Security scan fix: an unknown tool fails the checkpoint, as in handoff.ps1.
+SU_GEM="$(su_fixture "" Gemini Gemini Gemini)"
+sed -i 's/^Review Independence: separate-tool$/Review Independence: fresh-context/' "$SU_GEM/.ai/roles/ROLE_ASSIGNMENT.md"
+printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: t\n\n## Task Actors\n- Implementer: Gemini\n- Reviewer: Gemini\n\n## Changed Files\n- a.txt\n' > "$SU_GEM/AI_HANDOFF.md"
+run_handoff "$SU_GEM" commit-check
+[ "$RH_CODE" -eq 12 ] && ! printf '%s' "$RH_OUT" | grep -q "ALLOWED" && printf '%s' "$RH_OUT" | grep -q "Unrecognized tool identity 'Gemini'"
+check "bash: one unknown tool in every role under fresh-context is refused, never ALLOWED" $? "$RH_OUT"
+SU_ALIAS="$(su_fixture "")"
+sed -i 's/^- Reviewer: Codex$/- Reviewer: Codex Window/' "$SU_ALIAS/AI_HANDOFF.md"
+run_handoff "$SU_ALIAS" next
+[ "$RH_CODE" -eq 0 ]
+check "bash: an alias Task Actor that is the bound tool is not drift" $? "$RH_OUT"
+SU_UNK="$(su_fixture "")"
+sed -i 's/^- Implementer: Claude Code$/- Implementer: Gemini/' "$SU_UNK/AI_HANDOFF.md"
+run_handoff "$SU_UNK" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "Unrecognized Task Actors Implementer='Gemini'"
+check "bash: an unknown Task Actor is refused" $? "$RH_OUT"
+
+# The installer: fresh is pending, flags configure it, an upgrade carries the line.
+SU_T1="$FIXTURE_ROOT/su-bash-target"
+su_out="$(bash "$SCRIPT_DIR/install.sh" "$SU_T1" 2>&1)"
+su_code=$?
+[ "$su_code" -eq 0 ] && printf '%s' "$su_out" | grep -q "Setup: NOT CONFIGURED" && tr -d '\r' < "$SU_T1/.ai/roles/ROLE_ASSIGNMENT.md" | grep -q '^Setup: pending$'
+check "bash: a fresh install is pending and says so" $? "$su_out"
+bash "$SCRIPT_DIR/install.sh" "$SU_T1" --force >/dev/null 2>&1
+[ "$(tr -d '\r' < "$SU_T1/.ai/roles/ROLE_ASSIGNMENT.md" | grep -c '^Setup: pending$')" -eq 1 ]
+check "bash: an upgrade of a pending install stays pending" $?
+sed -i '/^Setup:/d' "$SU_T1/.ai/roles/ROLE_ASSIGNMENT.md"
+bash "$SCRIPT_DIR/install.sh" "$SU_T1" --force >/dev/null 2>&1
+! tr -d '\r' < "$SU_T1/.ai/roles/ROLE_ASSIGNMENT.md" | grep -qi '^[[:space:]]*setup[[:space:]]*:'
+check "bash: an upgrade of a v3.17.0-shaped install gains no Setup line" $?
+SU_T2="$FIXTURE_ROOT/su-bash-target-flags"
+su_out="$(bash "$SCRIPT_DIR/install.sh" "$SU_T2" --players "Claude Code,Codex" --master "Codex" 2>&1)"
+su_code=$?
+[ "$su_code" -eq 0 ] && tr -d '\r' < "$SU_T2/.ai/roles/ROLE_ASSIGNMENT.md" | grep -q '^Setup: complete$' && [ "$(role_tool "$SU_T2/.ai/roles/ROLE_ASSIGNMENT.md" Master)" = "Codex" ]
+check "bash: install.sh --players --master configures the project" $? "$su_out"
+# "Claude Code" alone would bind Claude Code everywhere, so these values tell the two apart.
+su_out="$(bash "$SCRIPT_DIR/install.sh" "$SU_T2" --force --players "Claude Code" 2>&1)"
+printf '%s' "$su_out" | grep -q -- "--players ignored" && [ "$(role_tool "$SU_T2/.ai/roles/ROLE_ASSIGNMENT.md" Master)" = "Codex" ] && \
+    [ "$(role_tool "$SU_T2/.ai/roles/ROLE_ASSIGNMENT.md" Reviewer)" = "Claude Code" ] && [ "$(role_tool "$SU_T2/.ai/roles/ROLE_ASSIGNMENT.md" Implementer)" = "Codex" ]
+check "bash: --players on a configured project is ignored, with the way to change it" $? "$su_out"
+su_out="$(bash "$SCRIPT_DIR/install.sh" "$FIXTURE_ROOT/su-bash-target-bad" --players "Gemini" 2>&1)"
+su_code=$?
+[ "$su_code" -eq 1 ] && printf '%s' "$su_out" | grep -q "Unknown player 'Gemini'"
+check "bash: install.sh with an unknown player fails and says why" $? "$su_out"
+su_out="$(bash "$SCRIPT_DIR/install.sh" "$FIXTURE_ROOT/su-bash-target-m" --master "Codex" 2>&1)"
+su_code=$?
+[ "$su_code" -eq 1 ] && printf '%s' "$su_out" | grep -q -- "--master needs --players" && [ ! -d "$FIXTURE_ROOT/su-bash-target-m/.ai" ]
+check "bash: install.sh --master alone fails before anything is copied" $? "$su_out"
+
+# --- v3.18.0 review fixes ---
+echo "[bash] First setup: review fixes (v3.18.0)"
+SU_ADOPT="$(su_fixture "Setup: pending")"
+printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: hand made\n\n## Last Update\n- Verdict: APPROVED\n\n## Task Actors\n- Implementer: Codex\n- Reviewer: Claude Code\n\n## Changed Files\n- foo.txt\n' > "$SU_ADOPT/AI_HANDOFF.md"
+su_before="$(su_hashes "$SU_ADOPT")"
+run_handoff "$SU_ADOPT" setup --players "Claude Code,Codex" --master "Codex" --yes
+[ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q "setup does not adopt a record" && [ "$(su_hashes "$SU_ADOPT")" = "$su_before" ]
+check "bash: pending setup refuses to adopt a hand-written record" $? "$RH_OUT"
+SU_DONE="$(su_fixture "Setup: complete")"
+sed -i 's/^- State: .*/- State: REVIEW_DONE/; s/^- Current Task: .*/- Current Task: Finished/' "$SU_DONE/AI_HANDOFF.md"
+run_handoff "$SU_DONE" setup --players "Codex" --yes
+[ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q "requires PowerShell: pwsh scripts/handoff.ps1 setup"
+check "bash: reconfiguring after the first task is left to PowerShell" $? "$RH_OUT"
+su_miss=""
+for su_form in '* Implementer: Codex' '-Implementer: Codex' '  - Implementer: Codex' '- implementer: Codex'; do
+    SU_ACT="$(su_fixture "")"
+    printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: t\n\n## Task Actors\n%s\n- Reviewer: Codex\n\n## Changed Files\n- foo.txt\n' "$su_form" > "$SU_ACT/AI_HANDOFF.md"
+    run_handoff "$SU_ACT" commit-check
+    { [ "$RH_CODE" -eq 12 ] && ! printf '%s' "$RH_OUT" | grep -q "ALLOWED"; } || su_miss="$su_miss [$su_form]"
+done
+[ -z "$su_miss" ]
+check "bash: every Task Actors form handoff.ps1 reads is read, and a self-review is refused" $? "$su_miss"
+SU_LOW="$(su_fixture "")"
+printf '| Role | Tool |\n|---|---|\n| master | Codex |\n| reviewer | Claude Code |\n| implementer | Codex |\n' > "$SU_LOW/.ai/roles/ROLE_ASSIGNMENT.md"
+sed -i 's/^- Implementer: .*/- Implementer: Codex/; s/^- Reviewer: .*/- Reviewer: Claude Code/; s/^- State: .*/- State: READY_FOR_IMPLEMENTATION/; s/^- Waiting For: .*/- Waiting For: Implementer/' "$SU_LOW/AI_HANDOFF.md"
+run_handoff "$SU_LOW" next
+[ "$RH_CODE" -eq 0 ] && grep -q '^Actor: Codex (Implementer)$' "$SU_LOW/NEXT_TURN.md"
+check "bash: lower-case role rows are read, not replaced by the built-in default" $? "$RH_OUT"
+SU_NS="$(su_fixture "Setup: pending")"
+( cd "$SU_NS" && bash "$SCRIPT_DIR/next-step.sh" --prepare-file ) >/dev/null 2>&1
+su_code=$?
+[ "$su_code" -eq 14 ] && [ ! -f "$SU_NS/NEXT_TURN.md" ]
+check "bash: next-step.sh stops with exit 14 while setup is pending and writes nothing" $?
+run_handoff "$SU_NS" next
+printf '%s' "$RH_OUT" | grep -q "never chooses for them" && ! printf '%s' "$RH_OUT" | grep -q -- '--players "Claude Code,Codex" --master "Claude Code"'
+check "bash: the exit-14 block shows placeholders, not a ready-made choice" $? "$RH_OUT"
+
+# --- v3.18.0 second review ---
+echo "[bash] First setup: second review (v3.18.0)"
+SU_DUP2="$(su_fixture "Setup: pending")"
+printf 'Setup: pending\n' >> "$SU_DUP2/.ai/roles/ROLE_ASSIGNMENT.md"
+run_handoff "$SU_DUP2" next
+[ "$RH_CODE" -eq 12 ] && printf '%s' "$RH_OUT" | grep -q "<one of the players>" && printf '%s' "$RH_OUT" | grep -q "never chooses for them" && \
+    ! printf '%s' "$RH_OUT" | grep -Eq -- '--master "(Claude Code|Codex)"'
+check "bash: the exit-12 block for a broken Setup line shows placeholders and says an agent must ask" $? "$RH_OUT"
+su_miss=""
+while IFS='|' read -r su_name su_head su_extra su_want; do
+    SU_SEC="$(su_fixture "")"
+    printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: t\n\n%s\n- Implementer: Claude Code\n- Reviewer: Claude Code\n%s\n\n## Changed Files\n- foo.txt\n' "$su_head" "$su_extra" > "$SU_SEC/AI_HANDOFF.md"
+    run_handoff "$SU_SEC" commit-check
+    { [ "$RH_CODE" -eq "$su_want" ] && ! printf '%s' "$RH_OUT" | grep -q "ALLOWED"; } || su_miss="$su_miss [$su_name -> $RH_CODE]"
+done <<'SECTIONS'
+trailing space|## Task Actors ||12
+lower case|## task actors||12
+renamed|## Actors||1
+two Reviewers|## Task Actors|- Reviewer: Codex|1
+SECTIONS
+[ -z "$su_miss" ]
+check "bash: commit-check refuses a self-review however the Task Actors section is spelled, never ALLOWED" $? "$su_miss"
+SU_AD="$(su_fixture "Setup: pending")"
+run_handoff "$SU_AD" status
+! printf '%s' "$RH_OUT" | grep -q "Adapters:"
+check "bash: pending status does not offer the gated adapters command" $? "$RH_OUT"
+
+# --- v3.18.0 third review: the section reader and the commit audit (the full table runs in
+# protocol-tests.ps1, against handoff.ps1; these are the three reported cases) ---
+echo "[bash] First setup: third review (v3.18.0)"
+su_miss=""
+while IFS='|' read -r su_name su_want su_body; do
+    SU_T3="$(su_fixture "")"
+    printf '| Role | Tool |\n|---|---|\n| Master | Claude Code |\n| Reviewer | Codex |\n| Implementer | Claude Code |\n' > "$SU_T3/.ai/roles/ROLE_ASSIGNMENT.md"
+    printf "$su_body" > "$SU_T3/AI_HANDOFF.md"
+    run_handoff "$SU_T3" commit-check
+    { [ "$RH_CODE" -eq "$su_want" ] && ! printf '%s' "$RH_OUT" | grep -q "ALLOWED"; } || su_miss="$su_miss [$su_name -> $RH_CODE]"
+done <<'ROWS'
+adjacent duplicate Task Actors|12|# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n\n## Task Actors\n- Implementer: Claude Code\n- Reviewer: Codex\n## Task Actors\n- Reviewer: Claude Code\n\n## Changed Files\n- foo.txt\n
+adjacent duplicate Status|1|# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n## Status\n- State: IMPLEMENTING\n- Waiting For: Implementer\n\n## Task Actors\n- Implementer: Claude Code\n- Reviewer: Codex\n\n## Changed Files\n- foo.txt\n
+mixed bullets|1|# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n\n## Task Actors\n- Implementer: Claude Code\n- Reviewer: Claude Code\n* Reviewer: Codex\n\n## Changed Files\n- foo.txt\n
+ROWS
+[ -z "$su_miss" ]
+check "bash: the three cases of the third review are refused, never ALLOWED" $? "$su_miss"
+
+# --- v3.18.0 fourth review ---
+echo "[bash] First setup: fourth review (v3.18.0)"
+# The refuse set, kept HERE as a second, independent list (the guard in handoff.sh has its
+# own), so this test does not trust the code under test. Each entry: UTF-8 bytes as printf
+# octal escapes, then the code point the guard must name. C0 controls are generated below.
+su_set=""
+for su_n in 0 1 2 3 4 5 6 7 8 11 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 127; do
+    su_set="$su_set$(printf '\\%03o' "$su_n")|$(printf 'U+%04X' "$su_n")
+"
+done
+su_set="$su_set\\302\\205|U+0085
+\\302\\240|U+00A0
+\\341\\232\\200|U+1680
+\\341\\240\\216|U+180E
+\\342\\200\\200|U+2000
+\\342\\200\\201|U+2001
+\\342\\200\\202|U+2002
+\\342\\200\\203|U+2003
+\\342\\200\\204|U+2004
+\\342\\200\\205|U+2005
+\\342\\200\\206|U+2006
+\\342\\200\\207|U+2007
+\\342\\200\\210|U+2008
+\\342\\200\\211|U+2009
+\\342\\200\\212|U+200A
+\\342\\200\\213|U+200B
+\\342\\200\\250|U+2028
+\\342\\200\\251|U+2029
+\\342\\200\\257|U+202F
+\\342\\201\\237|U+205F
+\\343\\200\\200|U+3000
+\\357\\273\\277|U+FEFF
+\\342\\204\\252|U+212A
+\\305\\277|U+017F
+\\304\\260|U+0130
+\\304\\261|U+0131
+\\r|U+000D"
+SU_G="$(su_fixture "")"
+su_miss=""; su_count=0
+while IFS='|' read -r su_esc su_cp; do
+    [ -n "$su_esc" ] || continue
+    for su_pos in line hash value; do
+        case "$su_pos" in
+            line)  su_line="$su_esc- Reviewer: Codex" ;;
+            hash)  su_line="##${su_esc}x" ;;
+            value) if [ "$su_cp" = "U+000D" ]; then su_line="- Reviewer: ${su_esc}Codex"; else su_line="- Reviewer: $su_esc"; fi ;;
+        esac
+        printf "# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: t\n\n## Task Actors\n- Implementer: Claude Code\n- Reviewer: Codex\n$su_line\n\n## Changed Files\n- foo.txt\n" > "$SU_G/AI_HANDOFF.md"
+        run_handoff "$SU_G" commit-check </dev/null
+        su_count=$((su_count + 1))
+        { [ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q "contains $su_cp, a character handoff.sh does not read" && ! printf '%s' "$RH_OUT" | grep -q "Commit: ALLOWED"; } || su_miss="$su_miss [$su_cp $su_pos -> $RH_CODE]"
+    done
+done <<EOF
+$su_set
+EOF
+[ -z "$su_miss" ] && [ "$su_count" -eq 171 ]
+check "bash: commit-check refuses every refuse-set character in three positions, naming it, never ALLOWED ($su_count runs)" $? "$su_miss"
+
+# The role file is guarded too, for commit-check and for setup; nothing is written.
+su_miss=""
+for su_role_line in 'binding|| Master |\302\240Claude Code |' 'setup|Setup:\343\200\200pending'; do
+    SU_R="$(su_fixture "Setup: pending")"
+    su_what="${su_role_line%%|*}"; su_txt="${su_role_line#*|}"
+    if [ "$su_what" = "binding" ]; then
+        printf "# Role Assignment\n\n| Role | Tool |\n|---|---|\n$su_txt\n| Reviewer | Codex |\n| Implementer | Claude Code |\n\nSetup: pending\n" > "$SU_R/.ai/roles/ROLE_ASSIGNMENT.md"
+    else
+        printf "# Role Assignment\n\n| Role | Tool |\n|---|---|\n| Master | Codex |\n| Reviewer | Codex |\n| Implementer | Claude Code |\n\n$su_txt\n" > "$SU_R/.ai/roles/ROLE_ASSIGNMENT.md"
+    fi
+    su_before="$(su_hashes "$SU_R")"
+    run_handoff "$SU_R" commit-check </dev/null
+    { [ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q ".ai/roles/ROLE_ASSIGNMENT.md line [0-9]* contains U+" && ! printf '%s' "$RH_OUT" | grep -q "Commit: ALLOWED"; } || su_miss="$su_miss [$su_what commit-check -> $RH_CODE]"
+    run_handoff "$SU_R" setup --players "Codex" --yes </dev/null
+    { [ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q "setup: blocked" && printf '%s' "$RH_OUT" | grep -q "contains U+" && [ "$(su_hashes "$SU_R")" = "$su_before" ]; } || su_miss="$su_miss [$su_what setup -> $RH_CODE]"
+done
+[ -z "$su_miss" ]
+check "bash: a refuse-set character in the role file blocks commit-check and setup, and nothing is written" $? "$su_miss"
+
+# A lone CR that makes handoff.ps1 read a non-initial State, while Bash would read the install state.
+SU_CR="$(su_fixture "Setup: pending")"
+awk '{ print } /^- Current Task: Initial setup$/ { printf "- Note: x\r- State: REVIEW_DONE\n" }' "$SU_CR/AI_HANDOFF.md" > "$SU_CR/AI_HANDOFF.tmp" && mv "$SU_CR/AI_HANDOFF.tmp" "$SU_CR/AI_HANDOFF.md"
+su_before="$(su_hashes "$SU_CR")"
+run_handoff "$SU_CR" setup --players "Codex" --yes </dev/null
+[ "$RH_CODE" -eq 1 ] && printf '%s' "$RH_OUT" | grep -q "AI_HANDOFF.md line [0-9]* contains U+000D" && [ "$(su_hashes "$SU_CR")" = "$su_before" ] && [ ! -d "$SU_CR/.ai/handoff-history" ]
+check "bash: pending setup refuses a handoff PowerShell would read as non-initial through a lone CR; nothing written" $? "$RH_OUT"
+
+# A large handoff file (a long tail section) gets the same answers as a small one.
+SU_BIG="$(su_fixture "")"
+printf '| Role | Tool |\n|---|---|\n| Master | Claude Code |\n| Reviewer | Codex |\n| Implementer | Claude Code |\n' > "$SU_BIG/.ai/roles/ROLE_ASSIGNMENT.md"
+printf '# AI Handoff\n\n## Status\n- State: REVIEW_DONE\n- Waiting For: User\n- Current Task: t\n\n## Task Actors\n- Implementer: Claude Code\n- Reviewer: Codex\n\n## Changed Files\n- foo.txt\n' > "$SU_BIG/AI_HANDOFF.md"
+( cd "$SU_BIG" && git init -q && git config user.email t@e && git config user.name t && git add -A && git commit -qm base ) >/dev/null 2>&1
+printf 'x\n' > "$SU_BIG/foo.txt"
+su_answers() {
+    local c out
+    for c in status next commit-check; do
+        out="$(cd "$SU_BIG" && bash "$HANDOFF_SH" "$c" </dev/null 2>&1)"
+        printf '%s=%s|%s\n' "$c" "$?" "$(printf '%s\n' "$out" | grep -E '^(State:|Commit:|Open:|Next actor:)' | head -n 3 | tr '\n' ';')"
+    done
+    out="$(cd "$SU_BIG" && bash "$SCRIPT_DIR/next-step.sh" --prepare-file </dev/null 2>&1)"
+    printf 'next-step=%s|%s\n' "$?" "$(grep -E '^(Actor|State):' "$SU_BIG/NEXT_TURN.md" 2>/dev/null | tr '\n' ';')"
+}
+su_small="$(su_answers)"
+{ printf '\n## Notes\n'; su_i=0; while [ $su_i -lt 7000 ]; do printf -- '- note line %05d padded with enough text to make the file large\n' "$su_i"; su_i=$((su_i + 1)); done; } >> "$SU_BIG/AI_HANDOFF.md"
+su_size="$(wc -c < "$SU_BIG/AI_HANDOFF.md" | tr -d ' ')"
+su_large="$(su_answers)"
+[ "$su_size" -ge 400000 ] && [ "$su_small" = "$su_large" ] && printf '%s' "$su_large" | grep -q 'commit-check=0|'
+check "bash: a ${su_size}-byte handoff gives the same answers and exit codes as a small one (status, next, commit-check, next-step.sh)" $? "small=[$su_small] large=[$su_large]"
+
+# The test-only seam: 'restore' alone is a documented no-op, so setup succeeds.
+SU_SEAM="$(su_fixture "Setup: pending")"
+( cd "$SU_SEAM" && HANDOFF_TEST_SETUP_FAIL=restore bash "$HANDOFF_SH" setup --players "Codex" --yes </dev/null >/dev/null 2>&1 )
+su_code=$?
+[ "$su_code" -eq 0 ] && tr -d '\r' < "$SU_SEAM/.ai/roles/ROLE_ASSIGNMENT.md" | grep -q '^Setup: complete$'
+check "bash: HANDOFF_TEST_SETUP_FAIL=restore alone is a no-op, as documented" $?
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed."
 if [ "$FAIL" -gt 0 ]; then

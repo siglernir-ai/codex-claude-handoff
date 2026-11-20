@@ -27,10 +27,20 @@ if [ -f "$TARGET_PATH/.ai/skills/codex-claude-handoff/VERSION" ] && [ "$REFRESH"
 fi
 
 bash "$INSTALLER" "$TARGET_PATH" --force
+# v3.18.0: handoff.sh has no doctor command, so this step used to fail every setup with
+# "Unknown command: doctor". status is the read-only Bash health view.
 (
     cd "$TARGET_PATH"
-    bash scripts/handoff.sh doctor
+    bash scripts/handoff.sh status
 )
+
+# v3.18.0: a fresh install has not chosen its players and its Master. Say so; never choose.
+if tr -d '\r' < "$TARGET_PATH/.ai/roles/ROLE_ASSIGNMENT.md" | grep -Eiq '^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:[[:space:]]*pending[[:space:]]*$'; then
+    echo ""
+    echo "Setup: NOT CONFIGURED. Work commands are blocked (exit 14) until the players and the Master are chosen."
+    echo "Ask the user which tools work on this project and which one is the Master, then run in the project:"
+    echo "  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+fi
 
 echo ""
 echo "Skill setup complete. Review the installed files before committing them."
@@ -42,4 +52,4 @@ if [ -f "$TARGET_PATH/skills-lock.json" ]; then
 else
     echo "  git add .agents .ai .claude scripts .gitignore"
 fi
-echo '  git commit -m "Install codex-claude-handoff v3.3.2"'
+echo '  git commit -m "Install codex-claude-handoff"'

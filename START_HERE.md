@@ -30,12 +30,17 @@ nothing activated. The skill only wakes when you select `codex-claude-handoff` i
 `/skills`, mention `$codex-claude-handoff`, or name it. If nothing seems different
 after installing, that is correct.
 
+One thing is never chosen for you (since v3.18.0): which tools work on the project and
+which one is the Master. The install ends by asking, in a small window on Windows. Until
+you answer, work commands stop with exit code 14 and point to `handoff.ps1 setup`.
+
 ## Your first task
 
 Run everything from your project root.
 
 ```powershell
 .\scripts\handoff.ps1 doctor
+.\scripts\handoff.ps1 setup          # once: choose the players and the Master
 .\scripts\handoff.ps1 start "add a health check endpoint"
 .\scripts\handoff.ps1 work
 ```
@@ -53,7 +58,15 @@ that turn can run automatically. When the Reviewer approves:
 
 ## It blocked me
 
-It will. Blocking is the product, not a malfunction. These four come up first.
+It will. Blocking is the product, not a malfunction. These come up first.
+
+**`Setup required: this project has not chosen its players and its Master yet.`**
+
+A fresh install. Choose them once; without a window, pass them as flags. An agent must ask the user which players and which Master; it never chooses for them.
+
+```powershell
+.\scripts\handoff.ps1 setup -Players "<Claude Code, Codex, or both>" -Master "<one of the players>" -Yes
+```
 
 **`Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync.`**
 

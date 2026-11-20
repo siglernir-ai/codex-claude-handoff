@@ -13,7 +13,7 @@ description: >-
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.17.0"
+  version: "3.18.0"
 ---
 
 # Codex-Claude Handoff
@@ -67,6 +67,12 @@ If it is missing:
    bundled inside this skill.
 6. Report the doctor result and tell the user which stable files should be
    reviewed and committed. Do not commit them automatically.
+7. If `.ai/roles/ROLE_ASSIGNMENT.md` says `Setup: pending`, the protocol is not
+   configured yet and work commands stop with exit 14. ASK the user which tools
+   work on the project (Claude Code, Codex, or both) and, with two, which one is
+   the Master. Then run `scripts/handoff.ps1 setup -Players "<tools>" -Master "<tool>"`
+   (`bash scripts/handoff.sh setup --players ... --master ...` on macOS/Linux).
+   Never choose for the user, and never edit the Setup line by hand.
 
 ## Installed workflow
 
@@ -84,7 +90,10 @@ When the canonical protocol exists:
    heading instead of reading the protocol documents in full, and delegate
    repository investigation to the Implementer.
 
-The default binding is Codex as Master + Reviewer and Claude Code as Implementer.
+A new install has no binding until the user chooses one with `setup` (since
+v3.18.0): with two players the Master's tool implements and the other tool
+reviews. An install made earlier keeps its binding (by default Codex as
+Master + Reviewer, Claude Code as Implementer).
 Do not change the binding without explicit user approval. After an approved role
 swap, keep Reviewer and Implementer different and follow `ADAPTERS.md` for the
 automation supported by the new binding.

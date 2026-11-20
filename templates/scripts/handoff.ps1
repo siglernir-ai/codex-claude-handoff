@@ -13,6 +13,8 @@ param(
     [string]$SetRole,
     [string]$SetTool,
     [string]$ReviewIndependence,
+    [string]$Players,
+    [string]$Master,
     [string]$SupersededVersions,
     [string]$ModelProfile,
     [string]$Model,
@@ -518,15 +520,26 @@ function Resolve-Actor {
 # absent line is separate-tool, and any other value fails closed.
 $ReviewIndependenceValues = @("separate-tool", "fresh-context")
 
+# v3.18.0: 'Review Independence:' and 'Setup:' are read by one reader: an optional bullet,
+# a non-breaking space read as a space (v3.17.0 review fix, as the Bash readers do), and
+# the key and value without regard to case. Every value is returned in file order, so a
+# caller refuses a duplicated line instead of choosing one.
+function Get-RoleFileLineValues {
+    param([string]$Key)
+    $values = @()
+    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $rolesFile)) { return }
+    $pattern = '^\s*(?:[-*]\s+)?' + [regex]::Escape($Key) + '\s*:(.*)$'
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $rolesFile)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match $pattern) { $values += $Matches[1].Trim() }
+    }
+    # Unrolled on purpose: every caller wraps the call in @().
+    return $values
+}
+
 function Get-ReviewIndependence {
     $result = @{ Mode = "separate-tool"; Declared = $false; Ok = $true; Error = ""; Values = @() }
-    $rolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
-    if (-not (Test-Path -LiteralPath $rolesFile)) { return $result }
-    $values = @()
-    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $rolesFile)) {
-        # v3.17.0 (review fix): a non-breaking space counts as a space, as the Bash readers do.
-        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Review Independence\s*:(.*)$') { $values += $Matches[1].Trim() }
-    }
+    $values = @(Get-RoleFileLineValues -Key "Review Independence")
     if ($values.Count -eq 0) { return $result }
     $result.Declared = $true
     $result.Values = @($values | ForEach-Object { ([string]$_).ToLowerInvariant() })
@@ -543,6 +556,55 @@ function Get-ReviewIndependence {
     }
     $result.Mode = $value
     return $result
+}
+
+# --- v3.18.0: first setup is a choice, never a default ---
+#
+# A fresh install used to run on the template's binding (Master=Codex, Reviewer=Codex,
+# Implementer=Claude Code) without anyone having chosen it. The shipped role file now says
+# 'Setup: pending', and every work command refuses to run until the user has chosen the
+# players and the Master with 'handoff.ps1 setup'. The requirement is on the setting, not
+# on a window: a scripted install, an agent or a Linux shell passes the same choice as flags.
+#
+# No line means configured: every install made before v3.18.0, and every project that
+# upgrades, keeps working exactly as before. Any other value, or a second line, fails
+# closed through the role checkpoint, as an invalid Review Independence line does.
+$SetupLineValues = @("pending", "complete")
+
+function Get-SetupState {
+    $result = @{ Declared = $false; Ok = $true; Pending = $false; Value = ""; Error = "" }
+    $values = @(Get-RoleFileLineValues -Key "Setup")
+    if ($values.Count -eq 0) { return $result }
+    $result.Declared = $true
+    if ($values.Count -gt 1) {
+        $result.Ok = $false
+        $result.Error = "ROLE_ASSIGNMENT.md declares 'Setup:' $($values.Count) times. Keep exactly one line, 'Setup: pending' or 'Setup: complete'."
+        return $result
+    }
+    $value = ([string]$values[0]).ToLowerInvariant()
+    if ($SetupLineValues -notcontains $value) {
+        $result.Ok = $false
+        $result.Error = "ROLE_ASSIGNMENT.md declares 'Setup: $($values[0])'. The value must be pending or complete."
+        return $result
+    }
+    $result.Value = $value
+    $result.Pending = ($value -eq "pending")
+    return $result
+}
+
+function Write-SetupRequired {
+    Write-Host ""
+    Write-Host "Setup required: this project has not chosen its players and its Master yet."
+    Write-Host "Run:  .\scripts\handoff.ps1 setup"
+    Write-Host "      (without a window: .\scripts\handoff.ps1 setup -Players `"<Claude Code, Codex, or both>`" -Master `"<one of the players>`")"
+    Write-Host "An agent must ask the user which players and which Master; it never chooses for them."
+    Write-Host "Nothing was started and nothing was changed."
+    Write-Host ""
+}
+
+# The untouched install state: the handoff the installer ships, before any task.
+function Test-InitialHandoffState {
+    return ($State -eq "WAITING_FOR_USER" -and $WaitingFor -eq "User" -and $CurrentTask -eq "Initial setup")
 }
 
 # True only for a valid, declared fresh-context. An invalid line is never read as
@@ -658,6 +720,12 @@ function Test-RoleCheckpoint {
         $errors.Add("Invalid review independence: $($script:ReviewIndependenceState.Error)")
         $modeErrors++
     }
+    # v3.18.0: an unreadable Setup line is never read as configured or as pending.
+    $setupErrors = 0
+    if ($null -ne $script:SetupState -and -not $script:SetupState.Ok) {
+        $errors.Add("Invalid setup line: $($script:SetupState.Error)")
+        $setupErrors++
+    }
     # v3.17.0: under fresh-context one tool may hold both roles; its verdict then has to
     # come from the harness, which commit-check and release-check verify.
     if ((Test-SameToolIdentity -First $Binding.Reviewer -Second $Binding.Implementer) -and -not (Test-FreshContextReview)) {
@@ -709,6 +777,8 @@ function Test-RoleCheckpoint {
         # fresh-context: every non-empty value it carries is fresh-context. A broken
         # separate-tool line, or mixed values, is no way into fresh-context.
         RepairableByMode = ($modeErrors -gt 0 -and ($errors.Count -eq ($modeErrors + $(if (Test-BrokenLineAsksFreshContext) { $sameToolErrors } else { 0 }))))
+        # v3.18.0: 'setup' may rewrite a broken Setup line only when it is the sole problem.
+        RepairableBySetup = ($setupErrors -gt 0 -and $errors.Count -eq $setupErrors)
     }
 }
 
@@ -756,6 +826,16 @@ function Write-RoleCheckpointFailure {
             Write-Host "  Repair it by hand in .ai/roles/ROLE_ASSIGNMENT.md: keep one line, for example"
             Write-Host "  'Review Independence: separate-tool'. The roles command repairs it only when that"
             Write-Host "  line, and the one-tool binding it would allow, are the only problems."
+        }
+    }
+    if ($null -ne $script:SetupState -and -not $script:SetupState.Ok) {
+        Write-Host ""
+        Write-Host "  The 'Setup:' line must appear once and read pending or complete."
+        if ($Checkpoint.RepairableBySetup) {
+            Write-Host "  Repair it by choosing the players and the Master again: .\scripts\handoff.ps1 setup"
+        } else {
+            Write-Host "  Repair the other problems first; .\scripts\handoff.ps1 setup repairs the Setup line only"
+            Write-Host "  when that line is the only problem."
         }
     }
     Write-Host ""
@@ -1680,6 +1760,14 @@ function Test-RoleSwapAllowed {
         $result.Errors.Add("-SetTool is required, for example -SetTool `"Codex`".")
         return $result
     }
+    # v3.18.0 (review fix): a role is held by a tool. A placeholder (TBD), the User, or an
+    # unknown name was accepted here, and on a fresh install it then reached Task Actors.
+    $setIdentity = Resolve-ToolIdentity -Tool $Tool
+    if (-not $setIdentity.Ok -or $setIdentity.Kind -ne "tool") {
+        $result.Ok = $false
+        $result.Errors.Add("-SetTool must be a known tool ($(($CanonicalToolRegistry | ForEach-Object { $_.Display }) -join ', ')); '$Tool' is not one.")
+        return $result
+    }
     $proposed = @{ Master = $Binding.Master; Reviewer = $Binding.Reviewer; Implementer = $Binding.Implementer }
     $proposed[$Role] = $Tool
     # v3.17.0: under fresh-context one tool may hold both roles, so there is nothing to
@@ -1771,22 +1859,29 @@ function Set-RoleBinding {
     [System.IO.File]::WriteAllLines($rolesPath, $final.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
 
     if ($AlsoTaskActors -and (Test-Path $HandoffFile)) {
-        $handoffLines = @(Get-Content -Encoding UTF8 -Path $HandoffFile)
-        $updated = [System.Collections.Generic.List[string]]::new()
-        $inActors = $false
-        foreach ($line in $handoffLines) {
-            $emit = $line
-            if ($line.TrimEnd() -eq "## Task Actors") { $inActors = $true; $updated.Add($emit); continue }
-            if ($inActors -and $line -match '^##\s') { $inActors = $false }
-            if ($inActors) {
-                if ($line -match '^-\s*Implementer:') { $emit = "- Implementer: $($after.Implementer)" }
-                elseif ($line -match '^-\s*Reviewer:') { $emit = "- Reviewer: $($after.Reviewer)" }
-            }
-            $updated.Add($emit)
-        }
-        Set-Content -Path $HandoffFile -Value $updated.ToArray() -Encoding utf8 -ErrorAction Stop
+        Set-HandoffTaskActors -Implementer $after.Implementer -Reviewer $after.Reviewer
     }
     return @{ Ok = $true; Error = ""; Before = $before; After = $after }
+}
+
+# Rewrites the two Task Actors lines of AI_HANDOFF.md. Callers decide when that is allowed:
+# mid-task with a swap, or in the untouched install state; never on a finished task.
+function Set-HandoffTaskActors {
+    param([string]$Implementer, [string]$Reviewer)
+    $handoffLines = @(Get-Content -Encoding UTF8 -Path $HandoffFile)
+    $updated = [System.Collections.Generic.List[string]]::new()
+    $inActors = $false
+    foreach ($line in $handoffLines) {
+        $emit = $line
+        if ($line.TrimEnd() -eq "## Task Actors") { $inActors = $true; $updated.Add($emit); continue }
+        if ($inActors -and $line -match '^##\s') { $inActors = $false }
+        if ($inActors) {
+            if ($line -match '^-\s*Implementer:') { $emit = "- Implementer: $Implementer" }
+            elseif ($line -match '^-\s*Reviewer:') { $emit = "- Reviewer: $Reviewer" }
+        }
+        $updated.Add($emit)
+    }
+    Set-Content -Path $HandoffFile -Value $updated.ToArray() -Encoding utf8 -ErrorAction Stop
 }
 
 function Write-RolesView {
@@ -2002,11 +2097,17 @@ function Invoke-Roles {
     if ($check.ExchangeRole -ne "") {
         Write-Host "  Exchange:    $($check.ExchangeRole) takes $($check.ExchangeTool), because the Reviewer is never the Implementer."
     }
+    # v3.18.0: the untouched install state carries the template's Task Actors, which name no
+    # task anyone did. A swap there left them behind, and every command then stopped on role
+    # drift. They now follow the binding; a finished task's actors are history and never do.
+    $swapMovesActors = ($check.MidTask -or (Test-InitialHandoffState))
     if ($check.MidTask) {
         Write-Host "  Task:        '$CurrentTask' is in flight ($State). Task Actors will be updated with the binding,"
         Write-Host "               or the next command fails the role checkpoint."
+    } elseif ($swapMovesActors) {
+        Write-Host "  Task:        no task has started yet. The install's Task Actors follow the binding."
     }
-    Write-Host "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding + a history row)$(if ($check.MidTask) { ', and AI_HANDOFF.md Task Actors' })."
+    Write-Host "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding + a history row)$(if ($swapMovesActors) { ', and AI_HANDOFF.md Task Actors' })."
     Write-Host "  Never:       no git, deploy, database or secret action; no turn is started."
     Write-Host ""
     if ($Yes) {
@@ -2029,7 +2130,7 @@ function Invoke-Roles {
         }
         $script:Binding = Get-RoleBinding
     }
-    $applied = Set-RoleBinding -Role $SetRole -Tool $SetTool -AlsoTaskActors $check.MidTask
+    $applied = Set-RoleBinding -Role $SetRole -Tool $SetTool -AlsoTaskActors $swapMovesActors
     if (-not $applied.Ok) {
         Write-Host ""
         Write-Host "roles: blocked."
@@ -2088,19 +2189,38 @@ function Start-RolesWindow {
     if ($existing.Alive) { return $true }   # one window, never two
     Stop-RolesWindow
 
-    $workDir = (Get-Location).Path
     $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-roles-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    $body = New-RolesWindowScript -WorkDir (Get-Location).Path -HandoffScript $PSCommandPath -BackgroundMarker $BackgroundMarkerName -WindowMarker $RolesWindowMarkerName
+    [System.IO.File]::WriteAllText($scriptPath, $body, (New-Object System.Text.UTF8Encoding($true)))
+    $statusHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $statusHost)) { return $false }
+    try {
+        Start-Process -FilePath $statusHost -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$scriptPath`"") -WindowStyle Hidden | Out-Null
+    } catch { return $false }
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-RolesWindowState).Alive) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+# v3.18.0 (review fix): generation is split from launching, so the tests can parse exactly
+# what the indicator would run without ever showing it.
+function New-RolesWindowScript {
+    param([string]$WorkDir, [string]$HandoffScript, [string]$BackgroundMarker, [string]$WindowMarker)
+    $workDir = $WorkDir
     $body = @"
 `$ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $workDir)
-`$handoff = $(ConvertTo-PowerShellLiteral $PSCommandPath)
+`$handoff = $(ConvertTo-PowerShellLiteral $HandoffScript)
 `$project = $(ConvertTo-PowerShellLiteral (Split-Path -Leaf $workDir))
-`$markerPath = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $BackgroundMarkerName)
+`$markerPath = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $BackgroundMarker)
 `$rolesPath = Join-Path (Get-Location) '.ai/roles/ROLE_ASSIGNMENT.md'
 `$handoffPath = Join-Path (Get-Location) 'AI_HANDOFF.md'
-`$uiMarker = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $RolesWindowMarkerName)
+`$uiMarker = Join-Path (Get-Location) $(ConvertTo-PowerShellLiteral $WindowMarker)
 `$utf8 = New-Object System.Text.UTF8Encoding(`$false)
 `$started = (Get-Process -Id `$PID).StartTime.ToUniversalTime()
 [System.IO.File]::WriteAllText(`$uiMarker, ([ordered]@{ processId = `$PID; startTicks = `$started.Ticks } | ConvertTo-Json), `$utf8)
@@ -2255,6 +2375,24 @@ foreach (`$role in `$roleOrder) {
 `$hint.Text = (Get-RuleHint)
 `$form.Controls.Add(`$hint)
 
+# v3.18.0: the picker for players and Master. The command owns the rules and the write.
+`$setupButton = New-Object System.Windows.Forms.Button
+`$setupButton.Text = 'setup'
+`$setupButton.Size = New-Object System.Drawing.Size(62, 22)
+`$setupButton.Location = New-Object System.Drawing.Point(286, (`$y + 28))
+`$setupButton.Anchor = 'Top,Right'
+`$setupButton.FlatStyle = 'Flat'
+`$setupButton.ForeColor = `$white
+`$setupButton.BackColor = [System.Drawing.Color]::FromArgb(39, 39, 42)
+`$setupButton.Add_Click({
+    `$out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$handoff setup -Window 2>&1 | Out-String
+    if (`$out -match 'setup: blocked') {
+        `$reason = (`$out -split "`r?`n" | Where-Object { `$_ -match 'Reason:' }) -join "`n"
+        [void][System.Windows.Forms.MessageBox]::Show(`$reason, 'HANDOFF - not changed', 'OK', 'Warning')
+    }
+})
+`$form.Controls.Add(`$setupButton)
+
 `$timer = New-Object System.Windows.Forms.Timer
 `$timer.Interval = 1000
 `$timer.Add_Tick({
@@ -2273,9 +2411,11 @@ foreach (`$role in `$roleOrder) {
         `$runLabel.ForeColor = `$green
         `$runLabel.Text = `$run.Command + '  running  ' + ('{0:mm\:ss}' -f `$elapsed)
         foreach (`$role in `$roleOrder) { `$roleButtons[`$role].Enabled = `$false }
+        `$setupButton.Enabled = `$false
         `$hint.Text = 'a turn is running - roles are locked'
     } else {
         foreach (`$role in `$roleOrder) { `$roleButtons[`$role].Enabled = `$true }
+        `$setupButton.Enabled = `$true
         `$hint.Text = (Get-RuleHint)
         if (`$run.Finished) {
             if (`$run.ExitCode -eq '0') { `$runLabel.ForeColor = `$green; `$runLabel.Text = `$run.Command + '  finished  exit 0' }
@@ -2291,18 +2431,714 @@ foreach (`$role in `$roleOrder) {
 [void]`$form.ShowDialog()
 Remove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue
 "@
-    [System.IO.File]::WriteAllText($scriptPath, $body, (New-Object System.Text.UTF8Encoding($true)))
-    $statusHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path -LiteralPath $statusHost)) { return $false }
-    try {
-        Start-Process -FilePath $statusHost -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$scriptPath`"") -WindowStyle Hidden | Out-Null
-    } catch { return $false }
-    $deadline = (Get-Date).AddSeconds(15)
-    while ((Get-Date) -lt $deadline) {
-        if ((Get-RolesWindowState).Alive) { return $true }
-        Start-Sleep -Milliseconds 250
+    return $body
+}
+
+# --- v3.18.0: setup - the players and the Master are chosen, never assumed ---
+#
+# One rule decides everything, Resolve-SetupChoice. The flags, the text prompt and the
+# picker window all end in the same apply path; the window owns no rules and writes no
+# files, it only returns a choice. With two players the Master and the Reviewer are
+# different tools: the Master's tool implements, the other tool reviews. With one player
+# all three roles are that tool, under Review Independence: fresh-context.
+
+function Get-NpxCommand {
+    $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
+    if (-not $npxCmd) { $npxCmd = Get-Command npx.cmd -ErrorAction SilentlyContinue }
+    return $npxCmd
+}
+
+function Test-TurnRunning {
+    return ((Get-RunMarkerState).Alive -or (Get-BackgroundRunState).Alive)
+}
+
+# The known tools, from the registry, in a stable display order.
+function Get-SetupTools {
+    return @($CanonicalToolRegistry | Sort-Object -Property @{ Expression = { $_.Display } } | ForEach-Object { @{ Canonical = $_.Canonical; Display = $_.Display } })
+}
+
+function Resolve-SetupChoice {
+    param([string]$Players, [string]$Master)
+    $result = @{ Ok = $false; Errors = [System.Collections.Generic.List[string]]::new(); Players = @(); Master = ""; Implementer = ""; Reviewer = ""; Mode = ""; SingleVendor = $false }
+    $tools = @(Get-SetupTools)
+    $known = ($tools | ForEach-Object { $_.Display }) -join ", "
+    $names = @()
+    if (-not [string]::IsNullOrWhiteSpace($Players)) {
+        $names = @($Players -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
     }
-    return $false
+    if ($names.Count -eq 0) {
+        $result.Errors.Add("Choose at least one player. Known tools: $known. For example: -Players `"<Claude Code, Codex, or both>`".")
+        return $result
+    }
+    $chosen = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($name in $names) {
+        $identity = Resolve-ToolIdentity -Tool $name
+        if (-not $identity.Ok -or $identity.Kind -ne "tool") {
+            $result.Errors.Add("Unknown player '$name'. Known tools: $known.")
+            continue
+        }
+        if (@($chosen | Where-Object { $_.Canonical -eq $identity.Canonical }).Count -eq 0) {
+            $chosen.Add(@{ Canonical = $identity.Canonical; Display = $identity.Display })
+        }
+    }
+    if ($result.Errors.Count -gt 0) { return $result }
+    $result.Players = @($chosen | ForEach-Object { $_.Display })
+    if ($chosen.Count -gt 2) {
+        # The rule is stated for one player or two. A third tool needs its own rule first.
+        $result.Errors.Add("setup binds one player or two; $($chosen.Count) were given ($($result.Players -join ', ')).")
+        return $result
+    }
+    $masterIdentity = $null
+    if (-not [string]::IsNullOrWhiteSpace($Master)) {
+        $masterIdentity = Resolve-ToolIdentity -Tool $Master
+        if (-not $masterIdentity.Ok -or $masterIdentity.Kind -ne "tool") {
+            $result.Errors.Add("Unknown Master '$Master'. Known tools: $known.")
+            return $result
+        }
+        if (@($chosen | Where-Object { $_.Canonical -eq $masterIdentity.Canonical }).Count -eq 0) {
+            $result.Errors.Add("The Master must be one of the players. '$($masterIdentity.Display)' is not in the players ($($result.Players -join ', ')).")
+            return $result
+        }
+    }
+    if ($chosen.Count -eq 1) {
+        $only = $chosen[0]
+        # v3.17.0 precondition: fresh-context needs a Reviewer the harness can start itself.
+        $reviewerAdapter = Get-AdapterProfile -Role "Reviewer" -Tool $only.Display
+        if (-not $reviewerAdapter.Callable) {
+            $result.Errors.Add("With one player, $($only.Display) reviews under fresh-context, in a separate read-only run the harness starts, and $($only.Display) has no callable Reviewer adapter. Choose two players.")
+            return $result
+        }
+        $result.Master = $only.Display
+        $result.Implementer = $only.Display
+        $result.Reviewer = $only.Display
+        $result.Mode = "fresh-context"
+        $result.SingleVendor = $true
+    } else {
+        if ($null -eq $masterIdentity) {
+            $result.Errors.Add("With two players, choose the Master: -Master `"$($chosen[0].Display)`" or -Master `"$($chosen[1].Display)`". No Master is chosen for you.")
+            return $result
+        }
+        $other = @($chosen | Where-Object { $_.Canonical -ne $masterIdentity.Canonical })[0]
+        $result.Master = $masterIdentity.Display
+        $result.Implementer = $masterIdentity.Display
+        $result.Reviewer = $other.Display
+        $result.Mode = "separate-tool"
+    }
+    $result.Ok = $true
+    return $result
+}
+
+# The review rule a choice leads to, in the words the plan and the window use.
+function Get-SetupRuleLines {
+    param([hashtable]$Choice)
+    if ($Choice.Mode -eq "fresh-context") {
+        return @(
+            "fresh-context - $($Choice.Reviewer) reviews in a separate read-only run the harness starts (review-run, then review-apply), never in the Implementer's context.",
+            "Weaker:      one vendor reviewing its own vendor's work misses what a second vendor would catch.",
+            "             Two tools remain the recommended setup."
+        )
+    }
+    return @("separate-tool - $($Choice.Reviewer) reviews what $($Choice.Implementer) writes; the Reviewer is never the Implementer's tool.")
+}
+
+function Get-SetupRuleShort {
+    param([hashtable]$Choice)
+    if ($Choice.Mode -eq "fresh-context") {
+        return "Single-vendor review: $($Choice.Reviewer) reviews in a separate read-only run. Weaker than two vendors; two tools remain the recommended setup."
+    }
+    return "$($Choice.Reviewer) reviews what $($Choice.Implementer) writes. The Reviewer is never the Implementer's tool."
+}
+
+# Pure on purpose: the caller passes the facts, so the decision can be tested without a
+# window ever being shown.
+function Test-SetupWindowPossible {
+    param([bool]$ExplicitWindow, [bool]$IsWindows, [bool]$NoWindowEnv, [bool]$InputRedirected, [bool]$IsAgent)
+    if (-not $IsWindows -or $NoWindowEnv) { return $false }
+    if ($ExplicitWindow) { return $true }
+    return (-not $InputRedirected -and -not $IsAgent)
+}
+
+function Test-SetupAllowed {
+    $result = @{ Ok = $true; Errors = [System.Collections.Generic.List[string]]::new() }
+    if (Test-TurnRunning) {
+        $result.Ok = $false
+        $result.Errors.Add("A turn is running now. Wait for it ('handoff.ps1 wait') or stop it ('handoff.ps1 stop') before choosing the players.")
+    }
+    if ($SetupState.Pending) {
+        # v3.18.0 (review fix): a pending project gets the free path only in the untouched
+        # install state. Anything else in AI_HANDOFF.md was written before anyone chose the
+        # players, and setup would otherwise adopt it - a hand-written REVIEW_DONE included.
+        if (-not (Test-InitialHandoffState)) {
+            $result.Ok = $false
+            $result.Errors.Add((Get-SetupAdoptRefusal))
+        }
+    } else {
+        # A configured project reconfigures only at a finished task, the state the start
+        # drift recovery retires. v3.18.0 (review fix): WAITING_FOR_USER mid-task was allowed
+        # here, and afterwards start, setup and roles all stopped on role drift.
+        $atBoundary = (Test-InitialHandoffState) -or (($WaitingFor -eq "User") -and (@("REVIEW_DONE", "BLOCKED") -contains $State))
+        if (-not $atBoundary) {
+            $result.Ok = $false
+            $result.Errors.Add("'$CurrentTask' is in flight ($State / Waiting For: $WaitingFor). setup changes every role at once, which is allowed only at a finished task (REVIEW_DONE or BLOCKED, Waiting For: User). To change one role now: handoff.ps1 roles -SetRole <role> -SetTool <tool>.")
+        }
+    }
+    return $result
+}
+
+function Get-SetupAdoptRefusal {
+    return "AI_HANDOFF.md is not the untouched install state ('$CurrentTask', $State / Waiting For: $WaitingFor). setup does not adopt a record written before the players were chosen. To keep it, move AI_HANDOFF.md into .ai/handoff-history/ (local and gitignored there); then re-run the installer with -Force (install.sh --force) to restore a clean AI_HANDOFF.md, and run setup."
+}
+
+function Write-SetupBlocked {
+    param($Errors)
+    Write-Host ""
+    Write-Host "setup: blocked."
+    foreach ($err in $Errors) { Write-Host "Reason:      $err" }
+    Write-Host "Nothing was changed."
+    Write-Host ""
+}
+
+function Write-SetupFlagUsage {
+    Write-Host ""
+    Write-Host "setup: choose the players and the Master."
+    Write-Host "No window can open here and nobody can be asked, so pass the choice as flags."
+    Write-Host "Examples only - the choice is the user's; an agent asks the user and never chooses:"
+    Write-Host ""
+    Write-Host "  .\scripts\handoff.ps1 setup -Players `"Claude Code,Codex`" -Master `"Claude Code`" -Yes"
+    Write-Host "  .\scripts\handoff.ps1 setup -Players `"Claude Code,Codex`" -Master `"Codex`" -Yes"
+    Write-Host "  .\scripts\handoff.ps1 setup -Players `"Codex`" -Yes"
+    Write-Host ""
+    Write-Host "Players: one or both of $((Get-SetupTools | ForEach-Object { $_.Display }) -join ', ')."
+    Write-Host "Two players: -Master is required. The Master's tool implements; the other tool reviews."
+    Write-Host "One player:  that tool holds every role and reviews in a separate read-only run (fresh-context)."
+    Write-Host "An agent installing this protocol asks the user; it never chooses for them."
+    Write-Host "Nothing was changed."
+    Write-Host ""
+}
+
+# Builds the new role file in memory. Nothing is written here.
+function New-SetupRoleFileLines {
+    param([string[]]$Lines, [hashtable]$Choice, [string]$BeforeText)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $rowCount = @{ Master = 0; Reviewer = 0; Implementer = 0 }
+    $roleNames = @{ master = "Master"; reviewer = "Reviewer"; implementer = "Implementer" }
+    $reviewIndex = -1
+    $setupWritten = $false
+    $setupIndex = -1
+    $lastRoleRow = -1
+    foreach ($line in $Lines) {
+        $probe = $line.Replace([string][char]0x00A0, ' ')
+        if ($probe -match '^\s*(?:[-*]\s+)?Review Independence\s*:') {
+            if ($reviewIndex -lt 0) { $out.Add("Review Independence: $($Choice.Mode)"); $reviewIndex = $out.Count - 1 }
+            continue
+        }
+        if ($probe -match '^\s*(?:[-*]\s+)?Setup\s*:') {
+            if (-not $setupWritten) { $out.Add("Setup: complete"); $setupWritten = $true; $setupIndex = $out.Count - 1 }
+            continue
+        }
+        if ($line -match '^\|\s*(Master|Reviewer|Implementer)\s*\|\s*(.+?)\s*\|') {
+            $role = $roleNames[$Matches[1].ToLowerInvariant()]
+            $rowCount[$role]++
+            $out.Add("| $role | $($Choice[$role]) |")
+            $lastRoleRow = $out.Count - 1
+            continue
+        }
+        $out.Add($line)
+    }
+    foreach ($role in @("Master", "Reviewer", "Implementer")) {
+        if ($rowCount[$role] -ne 1) {
+            return @{ Ok = $false; Error = "ROLE_ASSIGNMENT.md must have exactly one '| $role | <tool> |' row (found $($rowCount[$role])). Repair the table, or re-run the installer with -Force." }
+        }
+    }
+    if ($reviewIndex -lt 0 -and $setupWritten -and $setupIndex -gt $lastRoleRow) {
+        # Keep the two lines together: the missing review line goes just above Setup.
+        $out.Insert($setupIndex, "Review Independence: $($Choice.Mode)")
+        $reviewIndex = $setupIndex
+    } elseif ($reviewIndex -lt 0) {
+        $out.Insert($lastRoleRow + 1, "Review Independence: $($Choice.Mode)")
+        $out.Insert($lastRoleRow + 1, "")
+        $reviewIndex = $lastRoleRow + 2
+    }
+    if (-not $setupWritten) { $out.Insert($reviewIndex + 1, "Setup: complete") }
+    $afterText = "Master=$($Choice.Master), Reviewer=$($Choice.Reviewer), Implementer=$($Choice.Implementer), Review Independence=$($Choice.Mode), Setup=complete"
+    $historyRow = "| $((Get-Date).ToString('yyyy-MM-dd')) | $BeforeText | $afterText | User (handoff.ps1 setup) |"
+    $final = Add-RoleSwapHistoryRow -Lines $out -Row $historyRow
+    return @{ Ok = $true; Error = ""; Lines = $final.ToArray() }
+}
+
+function Invoke-SetupApply {
+    param([hashtable]$Choice, [bool]$Confirmed)
+    $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+    if (-not (Test-Path -LiteralPath $rolesPath)) {
+        Write-SetupBlocked -Errors @("ROLE_ASSIGNMENT.md is missing. Re-run the installer.")
+        exit 1
+    }
+    $currentMode = if ($ReviewIndependenceState.Ok) { $ReviewIndependenceState.Mode } else { "invalid" }
+    $currentSetup = if (-not $SetupState.Ok) { "invalid" } elseif ($SetupState.Declared) { $SetupState.Value } else { "none" }
+    $sameBinding = (Test-SameToolIdentity -First $Binding.Master -Second $Choice.Master) -and (Test-SameToolIdentity -First $Binding.Reviewer -Second $Choice.Reviewer) -and (Test-SameToolIdentity -First $Binding.Implementer -Second $Choice.Implementer)
+    if ($currentSetup -eq "complete" -and $sameBinding -and $currentMode -eq $Choice.Mode) {
+        Write-Host ""
+        Write-Host "setup: this project already has these players and this Master. Nothing to change."
+        Write-Host ""
+        return
+    }
+    # Task Actors move with the binding only in the untouched install state. A finished
+    # task's actors are the record of who did it; the start drift recovery retires it.
+    $moveActors = Test-InitialHandoffState
+
+    Write-Host ""
+    if ($SetupState.Pending) { Write-Host "First setup: the players and the Master for this project." } else { Write-Host "Reconfiguring the players and the Master for this project." }
+    Write-Host "  Players:     $($Choice.Players -join ', ')"
+    Write-Host "  Master:      $($Choice.Master)   (decides the next task and routes it)"
+    Write-Host "  Implementer: $($Choice.Implementer)   (writes the code)"
+    Write-Host "  Reviewer:    $($Choice.Reviewer)   (checks it and gives the verdict)"
+    $ruleLines = @(Get-SetupRuleLines -Choice $Choice)
+    Write-Host "  Review:      $($ruleLines[0])"
+    for ($i = 1; $i -lt $ruleLines.Count; $i++) { Write-Host "  $($ruleLines[$i])" }
+    Write-Host "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding, Review Independence, Setup: complete, a history row)$(if ($moveActors) { ', and AI_HANDOFF.md Task Actors' })."
+    Write-Host "  Never:       no git, deploy, database or secret action; no turn is started."
+    Write-Host ""
+    if ($Confirmed) {
+        Write-Host "Confirmation: given; applying without a further prompt."
+    } else {
+        $confirm = Read-Host 'Type "yes" to save this setup, or press Enter to cancel'
+        if ($null -eq $confirm -or $confirm.Trim() -ne "yes") {
+            Write-Host "Cancelled. Nothing was changed."
+            if ($SetupState.Pending) { Write-Host "Setup is still pending. Run .\scripts\handoff.ps1 setup when you are ready." }
+            exit 2
+        }
+    }
+
+    $beforeText = "Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer), Review Independence=$currentMode, Setup=$currentSetup"
+    $built = New-SetupRoleFileLines -Lines @(Get-Content -Encoding UTF8 -LiteralPath $rolesPath) -Choice $Choice -BeforeText $beforeText
+    if (-not $built.Ok) {
+        Write-SetupBlocked -Errors @($built.Error)
+        exit 1
+    }
+    # Written beside the file and swapped in, so a failure leaves the old file whole.
+    $originalBytes = [System.IO.File]::ReadAllBytes($rolesPath)
+    $tempPath = "$rolesPath.setup-$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$rolesPath.backup-$([Guid]::NewGuid().ToString('N'))"
+    $writeError = ""
+    try {
+        [System.IO.File]::WriteAllLines($tempPath, $built.Lines, (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::Replace($tempPath, $rolesPath, $backupPath)
+    } catch {
+        $writeError = $_.Exception.Message
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($writeError -ne "") {
+        Write-SetupBlocked -Errors @("ROLE_ASSIGNMENT.md could not be written: $writeError")
+        exit 1
+    }
+    if ($moveActors) {
+        try {
+            Set-HandoffTaskActors -Implementer $Choice.Implementer -Reviewer $Choice.Reviewer
+        } catch {
+            [System.IO.File]::WriteAllBytes($rolesPath, $originalBytes)
+            Write-SetupBlocked -Errors @("AI_HANDOFF.md Task Actors could not be written, so the role file was restored: $($_.Exception.Message)")
+            exit 1
+        }
+    }
+    $script:Binding = Get-RoleBinding
+    $script:ReviewIndependenceState = Get-ReviewIndependence
+    $script:SetupState = Get-SetupState
+
+    Write-Host ""
+    Write-Host "setup: complete."
+    Write-Host "  Master:      $($Binding.Master)"
+    Write-Host "  Implementer: $($Binding.Implementer)"
+    Write-Host "  Reviewer:    $($Binding.Reviewer)"
+    Write-Host "  Review:      Review Independence: $($ReviewIndependenceState.Mode)"
+    if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
+        Write-Host "  $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
+    }
+    Write-Host ""
+    Write-Host "Recorded in the Role Swap History table. No turn was started and no git action was run."
+    $actorsDrift = $false
+    if (-not $moveActors) {
+        $actors = Get-TaskActors
+        foreach ($role in @("Implementer", "Reviewer")) {
+            $actorIdentity = Resolve-ToolIdentity -Tool $actors[$role]
+            if ($actorIdentity.Ok -and $actorIdentity.Kind -eq "sentinel") { continue }
+            if ([string]::IsNullOrWhiteSpace($actors[$role])) { continue }
+            if (-not (Test-SameToolIdentity -First $actors[$role] -Second $Binding[$role])) { $actorsDrift = $true }
+        }
+        if ($actorsDrift) {
+            Write-Host "'$CurrentTask' keeps its Task Actors (Implementer=$($actors.Implementer), Reviewer=$($actors.Reviewer)): they record"
+            Write-Host "who did it. Until a new task is open, work stops on role drift."
+            Write-Host "Next: .\scripts\handoff.ps1 start `"<your next request>`""
+        }
+    }
+    # v3.18.0 (review fix): work would stop on role drift until start retires the record.
+    if (-not $actorsDrift) { Write-Host "Next: .\scripts\handoff.ps1 work" }
+    Write-Host ""
+}
+
+# The text prompt for a console with a person at it and no window.
+function Read-SetupChoiceFromPrompt {
+    $tools = @(Get-SetupTools)
+    Write-Host ""
+    Write-Host "Which tools will work on this project?"
+    for ($i = 0; $i -lt $tools.Count; $i++) { Write-Host "  $($i + 1). $($tools[$i].Display) only" }
+    Write-Host "  $($tools.Count + 1). All of them: $(($tools | ForEach-Object { $_.Display }) -join ' and ') (recommended)"
+    $answer = Read-Host "Choose 1-$($tools.Count + 1), or press Enter to cancel"
+    $n = 0
+    if ($null -eq $answer -or -not [int]::TryParse($answer.Trim(), [ref]$n) -or $n -lt 1 -or $n -gt ($tools.Count + 1)) { return @{ Cancelled = $true } }
+    if ($n -le $tools.Count) { return @{ Cancelled = $false; Players = $tools[$n - 1].Display; Master = "" } }
+    Write-Host ""
+    Write-Host "Which tool is the Master? It routes the work and implements it; the other tool reviews."
+    for ($i = 0; $i -lt $tools.Count; $i++) { Write-Host "  $($i + 1). $($tools[$i].Display)" }
+    $answer = Read-Host "Choose 1-$($tools.Count), or press Enter to cancel"
+    $m = 0
+    if ($null -eq $answer -or -not [int]::TryParse($answer.Trim(), [ref]$m) -or $m -lt 1 -or $m -gt $tools.Count) { return @{ Cancelled = $true } }
+    return @{ Cancelled = $false; Players = (($tools | ForEach-Object { $_.Display }) -join ","); Master = $tools[$m - 1].Display }
+}
+
+# Every combination the window can show, computed here by Resolve-SetupChoice, so the
+# window looks results up instead of carrying a second copy of the rules.
+function Get-SetupChoiceTable {
+    param([object[]]$Tools)
+    $table = [ordered]@{}
+    $n = $Tools.Count
+    for ($mask = 1; $mask -lt (1 -shl $n); $mask++) {
+        $members = @()
+        for ($i = 0; $i -lt $n; $i++) { if ($mask -band (1 -shl $i)) { $members += $Tools[$i] } }
+        $masterOptions = @("") + @($members | ForEach-Object { $_.Canonical })
+        foreach ($masterCanonical in $masterOptions) {
+            $masterDisplay = ""
+            foreach ($t in $Tools) { if ($t.Canonical -eq $masterCanonical) { $masterDisplay = $t.Display } }
+            $choice = Resolve-SetupChoice -Players (($members | ForEach-Object { $_.Display }) -join ",") -Master $masterDisplay
+            $entry = @{ Ok = [bool]$choice.Ok; Implementer = $choice.Implementer; Reviewer = $choice.Reviewer; Rule = ""; Error = "" }
+            if ($choice.Ok) { $entry.Rule = Get-SetupRuleShort -Choice $choice } else { $entry.Error = [string]$choice.Errors[0] }
+            $table["$mask|$masterCanonical"] = $entry
+        }
+    }
+    return $table
+}
+
+# Generates the picker script. Text only: it shows nothing and starts nothing, so the
+# tests can parse exactly what a user would run.
+function New-SetupWindowScript {
+    param([string]$ResultPath, [string]$Project, [object[]]$Tools, $Table, [bool]$NoneDetected)
+    $toolLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($t in $Tools) {
+        $toolLines.Add("    @{ Canonical = $(ConvertTo-PowerShellLiteral $t.Canonical); Display = $(ConvertTo-PowerShellLiteral $t.Display); Detected = `$$([bool]$t.Detected) }")
+    }
+    $choiceLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $Table.Keys) {
+        $e = $Table[$key]
+        $choiceLines.Add("`$choices[$(ConvertTo-PowerShellLiteral $key)] = @{ Ok = `$$([bool]$e.Ok); Implementer = $(ConvertTo-PowerShellLiteral $e.Implementer); Reviewer = $(ConvertTo-PowerShellLiteral $e.Reviewer); Rule = $(ConvertTo-PowerShellLiteral $e.Rule); Error = $(ConvertTo-PowerShellLiteral $e.Error) }")
+    }
+    $noneLine = if ($NoneDetected) { "Neither tool was found on this machine, so both are ticked. Untick a tool you will not use." } else { "Ticked: the tools found on this machine. You may tick a tool that was not found." }
+    $body = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+# v3.18.0: the first-setup picker. It owns no rules and writes no project file: every
+# result below was computed by handoff.ps1 setup, and Save only returns the choice to it.
+`$resultPath = $(ConvertTo-PowerShellLiteral $ResultPath)
+`$project = $(ConvertTo-PowerShellLiteral $Project)
+`$tools = @(
+$($toolLines -join ",`r`n")
+)
+`$choices = @{}
+$($choiceLines -join "`r`n")
+`$detectNote = $(ConvertTo-PowerShellLiteral $noneLine)
+
+`$white = [System.Drawing.Color]::FromArgb(250, 250, 250)
+`$grey  = [System.Drawing.Color]::FromArgb(161, 161, 170)
+`$red   = [System.Drawing.Color]::FromArgb(248, 113, 113)
+`$panelColor = [System.Drawing.Color]::FromArgb(39, 39, 42)
+
+function New-Text {
+    param(`$x, `$y, `$w, `$h, `$color, `$size, `$style)
+    `$l = New-Object System.Windows.Forms.Label
+    `$l.AutoSize = `$false
+    `$l.Size = New-Object System.Drawing.Size(`$w, `$h)
+    `$l.Location = New-Object System.Drawing.Point(`$x, `$y)
+    `$l.ForeColor = `$color
+    `$l.Font = New-Object System.Drawing.Font('Segoe UI', `$size, `$style)
+    return `$l
+}
+
+`$form = New-Object System.Windows.Forms.Form
+`$form.Text = 'HANDOFF - first setup - ' + `$project
+`$form.FormBorderStyle = 'FixedDialog'
+`$form.MaximizeBox = `$false
+`$form.MinimizeBox = `$false
+`$form.TopMost = `$true
+`$form.StartPosition = 'CenterScreen'
+`$form.ClientSize = New-Object System.Drawing.Size(440, 262)
+`$form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27)
+
+`$title = New-Text 12 10 416 22 `$white 10 ([System.Drawing.FontStyle]::Bold)
+`$title.Text = 'Who works on ' + `$project + '?'
+`$form.Controls.Add(`$title)
+`$sub = New-Text 12 34 416 18 `$grey 9 ([System.Drawing.FontStyle]::Regular)
+`$sub.Text = 'Nothing runs until you save. You can change this later with handoff.ps1 setup.'
+`$form.Controls.Add(`$sub)
+
+`$playersLabel = New-Text 12 66 96 20 `$grey 9 ([System.Drawing.FontStyle]::Regular)
+`$playersLabel.Text = '1. Players:'
+`$form.Controls.Add(`$playersLabel)
+`$masterLabel = New-Text 12 98 96 20 `$grey 9 ([System.Drawing.FontStyle]::Regular)
+`$masterLabel.Text = '2. Master:'
+`$form.Controls.Add(`$masterLabel)
+
+`$radioPanel = New-Object System.Windows.Forms.Panel
+`$radioPanel.Location = New-Object System.Drawing.Point(112, 94)
+`$radioPanel.Size = New-Object System.Drawing.Size(316, 26)
+`$form.Controls.Add(`$radioPanel)
+
+`$boxes = @()
+`$radios = @()
+`$anyDetected = `$false
+foreach (`$t in `$tools) { if (`$t.Detected) { `$anyDetected = `$true } }
+for (`$i = 0; `$i -lt `$tools.Count; `$i++) {
+    `$box = New-Object System.Windows.Forms.CheckBox
+    `$box.Text = `$tools[`$i].Display
+    `$box.ForeColor = `$white
+    `$box.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular)
+    `$box.Location = New-Object System.Drawing.Point((112 + 140 * `$i), 64)
+    `$box.Size = New-Object System.Drawing.Size(136, 24)
+    `$box.Checked = (`$tools[`$i].Detected -or -not `$anyDetected)
+    `$form.Controls.Add(`$box)
+    `$boxes += `$box
+    `$radio = New-Object System.Windows.Forms.RadioButton
+    `$radio.Text = `$tools[`$i].Display
+    `$radio.ForeColor = `$white
+    `$radio.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular)
+    `$radio.Location = New-Object System.Drawing.Point((140 * `$i), 2)
+    `$radio.Size = New-Object System.Drawing.Size(136, 22)
+    `$radio.Checked = `$false
+    `$radioPanel.Controls.Add(`$radio)
+    `$radios += `$radio
+}
+
+`$note = New-Text 12 126 416 18 `$grey 8 ([System.Drawing.FontStyle]::Regular)
+`$note.Text = `$detectNote
+`$form.Controls.Add(`$note)
+`$preview = New-Text 12 154 416 20 `$white 9 ([System.Drawing.FontStyle]::Bold)
+`$form.Controls.Add(`$preview)
+`$rule = New-Text 12 176 416 36 `$grey 8 ([System.Drawing.FontStyle]::Regular)
+`$form.Controls.Add(`$rule)
+
+`$save = New-Object System.Windows.Forms.Button
+`$save.Text = 'Save'
+`$save.Size = New-Object System.Drawing.Size(84, 28)
+`$save.Location = New-Object System.Drawing.Point(252, 222)
+`$save.FlatStyle = 'Flat'
+`$save.ForeColor = `$white
+`$save.BackColor = `$panelColor
+`$save.Enabled = `$false
+`$form.Controls.Add(`$save)
+`$cancel = New-Object System.Windows.Forms.Button
+`$cancel.Text = 'Cancel'
+`$cancel.Size = New-Object System.Drawing.Size(84, 28)
+`$cancel.Location = New-Object System.Drawing.Point(344, 222)
+`$cancel.FlatStyle = 'Flat'
+`$cancel.ForeColor = `$white
+`$cancel.BackColor = `$panelColor
+`$form.Controls.Add(`$cancel)
+`$form.CancelButton = `$cancel
+
+`$script:updating = `$false
+`$script:lastCount = -1
+`$script:selection = `$null
+function Update-View {
+    if (`$script:updating) { return }
+    `$script:updating = `$true
+    try {
+        `$mask = 0
+        `$count = 0
+        for (`$i = 0; `$i -lt `$tools.Count; `$i++) { if (`$boxes[`$i].Checked) { `$mask = `$mask -bor (1 -shl `$i); `$count++ } }
+        for (`$i = 0; `$i -lt `$tools.Count; `$i++) {
+            if (-not `$boxes[`$i].Checked) { `$radios[`$i].Checked = `$false }
+            `$radios[`$i].Enabled = (`$boxes[`$i].Checked -and `$count -gt 1)
+        }
+        # One player: the Master is that player. Two: nothing is preselected, ever.
+        if (`$count -eq 1) { for (`$i = 0; `$i -lt `$tools.Count; `$i++) { `$radios[`$i].Checked = `$boxes[`$i].Checked } }
+        elseif (`$count -gt 1 -and `$script:lastCount -eq 1) { foreach (`$r in `$radios) { `$r.Checked = `$false } }
+        `$script:lastCount = `$count
+        `$masterKey = ''
+        `$masterDisplay = ''
+        for (`$i = 0; `$i -lt `$tools.Count; `$i++) { if (`$radios[`$i].Checked) { `$masterKey = `$tools[`$i].Canonical; `$masterDisplay = `$tools[`$i].Display } }
+        `$script:selection = `$null
+        `$save.Enabled = `$false
+        `$preview.ForeColor = `$white
+        if (`$count -eq 0) { `$preview.Text = 'Tick at least one player.'; `$rule.Text = ''; return }
+        if (`$count -gt 1 -and `$masterKey -eq '') { `$preview.Text = 'Choose the Master. No Master is chosen for you.'; `$rule.Text = 'The Master routes the work and implements it; the other tool reviews.'; return }
+        `$key = [string]`$mask + '|' + `$masterKey
+        if (-not `$choices.ContainsKey(`$key)) { `$preview.ForeColor = `$red; `$preview.Text = 'This choice is not available.'; `$rule.Text = ''; return }
+        `$c = `$choices[`$key]
+        if (-not `$c.Ok) { `$preview.ForeColor = `$red; `$preview.Text = 'Not available'; `$rule.Text = `$c.Error; return }
+        `$preview.Text = 'Implementer: ' + `$c.Implementer + '      Reviewer: ' + `$c.Reviewer
+        `$rule.Text = `$c.Rule
+        `$players = @()
+        for (`$i = 0; `$i -lt `$tools.Count; `$i++) { if (`$boxes[`$i].Checked) { `$players += `$tools[`$i].Display } }
+        `$script:selection = [ordered]@{ players = (`$players -join ','); master = `$masterDisplay }
+        `$save.Enabled = `$true
+    } finally { `$script:updating = `$false }
+}
+foreach (`$b in `$boxes) { `$b.Add_CheckedChanged({ Update-View }) }
+foreach (`$r in `$radios) { `$r.Add_CheckedChanged({ Update-View }) }
+`$script:saved = `$false
+`$save.Add_Click({
+    if (`$null -eq `$script:selection) { return }
+    `$script:saved = `$true
+    [System.IO.File]::WriteAllText(`$resultPath, (`$script:selection | ConvertTo-Json), (New-Object System.Text.UTF8Encoding(`$false)))
+    `$form.Close()
+})
+`$cancel.Add_Click({ `$form.Close() })
+# A cancel says so. No result at all means the window failed, never that the user cancelled.
+`$form.Add_FormClosed({ if (-not `$script:saved) { [System.IO.File]::WriteAllText(`$resultPath, '{"cancelled": true}', (New-Object System.Text.UTF8Encoding(`$false))) } })
+Update-View
+[void]`$form.ShowDialog()
+"@
+    return $body
+}
+
+# v3.18.0 (review fix): what the picker left behind. A cancel is a file that says so; a
+# choice is a file with players; a non-zero exit, no file, or anything else is a failure,
+# never reported as a cancel. Pure, so the tests can feed it every case.
+function Read-SetupWindowResult {
+    param([int]$ExitCode, [string]$ResultPath)
+    $result = @{ Cancelled = $false; Failed = $false; Players = ""; Master = ""; Error = "" }
+    if ($ExitCode -ne 0) { $result.Failed = $true; $result.Error = "the picker exited with code $ExitCode"; return $result }
+    if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) { $result.Failed = $true; $result.Error = "the picker closed without writing a result"; return $result }
+    try {
+        $data = Get-Content -Encoding UTF8 -Raw -LiteralPath $ResultPath | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        $result.Failed = $true; $result.Error = "the picker wrote a result that is not valid JSON"; return $result
+    }
+    if ($null -eq $data) { $result.Failed = $true; $result.Error = "the picker wrote an empty result"; return $result }
+    $names = @($data.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($names -contains "cancelled" -and $data.cancelled -eq $true -and $names.Count -eq 1) { $result.Cancelled = $true; return $result }
+    if (($names -contains "players") -and ($data.players -is [string]) -and -not [string]::IsNullOrWhiteSpace($data.players) -and (($names -notcontains "master") -or ($null -eq $data.master) -or ($data.master -is [string]))) {
+        $result.Players = [string]$data.players
+        $result.Master = [string]$data.master
+        return $result
+    }
+    $result.Failed = $true
+    $result.Error = "the picker wrote a result this version does not understand"
+    return $result
+}
+
+# Shows the picker and waits for it. Returns the choice, or Cancelled, or Failed.
+function Invoke-SetupWindow {
+    $result = @{ Cancelled = $false; Failed = $false; Players = ""; Master = ""; Error = "" }
+    $statusHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $statusHost)) { $result.Failed = $true; $result.Error = "Windows PowerShell was not found."; return $result }
+    # Detection is advisory and reuses what doctor checks: npx for Claude Code, the Codex CLI.
+    $codexFound = $false
+    try { $codexFound = [bool](Resolve-CodexCli).Ok } catch { $codexFound = $false }
+    $claudeFound = ($null -ne (Get-NpxCommand))
+    $tools = @(Get-SetupTools | ForEach-Object {
+        $found = if ($_.Canonical -eq "codex") { $codexFound } elseif ($_.Canonical -eq "claude-code") { $claudeFound } else { $false }
+        @{ Canonical = $_.Canonical; Display = $_.Display; Detected = $found }
+    })
+    $noneDetected = (@($tools | Where-Object { $_.Detected }).Count -eq 0)
+    $table = Get-SetupChoiceTable -Tools $tools
+    $stamp = [Guid]::NewGuid().ToString("N")
+    $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-setup-result-" + $stamp + ".json")
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("handoff-setup-" + $stamp + ".ps1")
+    $body = New-SetupWindowScript -ResultPath $resultPath -Project (Split-Path -Leaf (Get-Location).Path) -Tools $tools -Table $table -NoneDetected $noneDetected
+    try {
+        [System.IO.File]::WriteAllText($scriptPath, $body, (New-Object System.Text.UTF8Encoding($true)))
+        $proc = Start-Process -FilePath $statusHost -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', "`"$scriptPath`"") -WindowStyle Hidden -Wait -PassThru
+        $parsed = Read-SetupWindowResult -ExitCode $proc.ExitCode -ResultPath $resultPath
+        $result.Cancelled = $parsed.Cancelled
+        $result.Failed = $parsed.Failed
+        $result.Error = $parsed.Error
+        $result.Players = $parsed.Players
+        $result.Master = $parsed.Master
+    } catch {
+        $result.Failed = $true
+        $result.Error = $_.Exception.Message
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+    }
+    return $result
+}
+
+function Invoke-Setup {
+    if (-not [string]::IsNullOrWhiteSpace($Master) -and -not $ScriptBoundParameters.ContainsKey('Players')) {
+        Write-SetupBlocked -Errors @("-Master needs -Players: -Players `"<Claude Code, Codex, or both>`" -Master `"$Master`".")
+        exit 1
+    }
+    $allowed = Test-SetupAllowed
+    if (-not $allowed.Ok) {
+        Write-SetupBlocked -Errors $allowed.Errors
+        exit 1
+    }
+    if ($SetupCheckpointExempt -and -not $SetupState.Pending) {
+        Write-Host ""
+        Write-Host "Role checkpoint: repairing the Setup line; no other role-dependent action runs."
+        foreach ($checkpointError in $RoleCheckpoint.Errors) { Write-Host "  $checkpointError" }
+    }
+    $chosenPlayers = $Players
+    $chosenMaster = $Master
+    $confirmed = [bool]$Yes
+    if (-not $ScriptBoundParameters.ContainsKey('Players')) {
+        $inputRedirected = $true
+        try { $inputRedirected = [Console]::IsInputRedirected } catch { $inputRedirected = $true }
+        $isAgent = (Get-AgentShell).IsAgent
+        $windowPossible = Test-SetupWindowPossible -ExplicitWindow ([bool]$Window) -IsWindows ($env:OS -eq "Windows_NT") -NoWindowEnv (-not [string]::IsNullOrEmpty($env:HANDOFF_BACKGROUND_NO_WINDOW)) -InputRedirected $inputRedirected -IsAgent $isAgent
+        $picked = $null
+        if ($windowPossible) {
+            Write-Host ""
+            Write-Host "setup: a window is open to choose the players and the Master. Save there, or Cancel."
+            $picked = Invoke-SetupWindow
+            if ($picked.Cancelled) {
+                Write-Host "setup: cancelled in the window. Nothing was changed."
+                if ($SetupState.Pending) { Write-Host "Setup is still pending. Run .\scripts\handoff.ps1 setup when you are ready." }
+                Write-Host ""
+                exit 2
+            }
+            if ($picked.Failed) {
+                # v3.18.0 (review fix): a failure is not a cancel, and it never falls back to a
+                # console prompt: from the indicator that console is hidden and would hang.
+                Write-Host "setup: FAILED - the picker window did not return a choice ($($picked.Error))."
+                Write-Host "Nothing was changed. Choose with flags instead: .\scripts\handoff.ps1 setup -Players `"<Claude Code, Codex, or both>`" -Master `"<one of the players>`""
+                Write-Host ""
+                exit 3
+            }
+            # The Save click is the confirmation.
+            $chosenPlayers = $picked.Players
+            $chosenMaster = $picked.Master
+            $confirmed = $true
+        }
+        if ($null -eq $picked) {
+            if ($Window) {
+                # An explicit -Window (the indicator's button) never falls back to a prompt.
+                Write-SetupFlagUsage
+                exit 1
+            }
+            if (-not $inputRedirected -and -not $isAgent) {
+                $prompted = Read-SetupChoiceFromPrompt
+                if ($prompted.Cancelled) {
+                    Write-Host "Cancelled. Nothing was changed."
+                    if ($SetupState.Pending) { Write-Host "Setup is still pending. Run .\scripts\handoff.ps1 setup when you are ready." }
+                    exit 2
+                }
+                $chosenPlayers = $prompted.Players
+                $chosenMaster = $prompted.Master
+            } else {
+                Write-SetupFlagUsage
+                exit 1
+            }
+        }
+    }
+    $choice = Resolve-SetupChoice -Players $chosenPlayers -Master $chosenMaster
+    if (-not $choice.Ok) {
+        Write-SetupBlocked -Errors $choice.Errors
+        exit 1
+    }
+    Invoke-SetupApply -Choice $choice -Confirmed $confirmed
 }
 
 # --- The plan, the next task, and what a stop means (v3.14.0) ---
@@ -2983,7 +3819,11 @@ function Set-BackgroundRunFinished {
 function ConvertTo-PowerShellLiteral {
     param($Value)
     $text = [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
-    return "'" + $text.Replace("'", "''") + "'"
+    # v3.18.0 (review fix): PowerShell also closes a single-quoted string on the typographic
+    # quotes U+2018..U+201B, so doubling only the ASCII quote let a folder name written with
+    # U+2019 break, or inject code into, a generated window script. The parser's own escaper
+    # doubles every character it treats as a single-quote.
+    return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($text) + "'"
 }
 
 function Get-BackgroundArgumentText {
@@ -4084,6 +4924,7 @@ function Write-LoopLog {
 
 $Binding = Get-RoleBinding
 $ReviewIndependenceState = Get-ReviewIndependence
+$SetupState = Get-SetupState
 
 $HandoffStatus = Read-HandoffState -Lines $Lines
 $State         = $HandoffStatus.State
@@ -4124,7 +4965,25 @@ $ReviewIndependenceRepair = (
     $RoleCheckpoint.RepairableByMode
 )
 
-if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models') -and -not $RoleRecoveryAllowed -and -not $ReviewIndependenceRepair) {
+# v3.18.0: until the players and the Master are chosen, nothing runs on a binding nobody
+# chose. The gate comes before the role checkpoint: a pending project is not out of sync,
+# it is not configured, and the one instruction is the command that configures it. The
+# no-command menu and every form of roles are gated too. Exit code 14 is this stop only.
+if ($SetupState.Pending -and $Command -notin @('setup', 'doctor', 'status', 'models')) {
+    Write-SetupRequired
+    exit 14
+}
+
+# In the pending state setup rewrites the binding wholesale, so the template's binding
+# cannot block it. When setup is complete, a reconfiguration passes the checkpoint like
+# any other role-dependent command, except for the one repair: a broken Setup line that
+# is the only problem.
+$SetupCheckpointExempt = (
+    $Command -eq 'setup' -and
+    ($SetupState.Pending -or (-not $RoleCheckpoint.Ok -and $RoleCheckpoint.RepairableBySetup))
+)
+
+if (-not $RoleCheckpoint.Ok -and $Command -notin @('doctor', 'status', 'models') -and -not $RoleRecoveryAllowed -and -not $ReviewIndependenceRepair -and -not $SetupCheckpointExempt) {
     Write-RoleCheckpointFailure -Checkpoint $RoleCheckpoint
     exit 12
 }
@@ -4244,7 +5103,7 @@ function Invoke-UserNext {
         Write-Host "Command:"
         Write-Host "  .\scripts\handoff.ps1 start `"Describe the change you want`""
         Write-Host ""
-        Write-Host "Then paste the printed Master prompt into Codex."
+        Write-Host "Then paste the printed Master prompt into $($Binding.Master)."
         Write-Host ""
         return
     }
@@ -4337,7 +5196,7 @@ function Invoke-Work {
         Write-Host "Run:"
         Write-Host "  .\scripts\handoff.ps1 start `"Describe the change you want`""
         Write-Host ""
-        Write-Host "Then paste the printed Master prompt into Codex."
+        Write-Host "Then paste the printed Master prompt into $($Binding.Master)."
         Write-Host ""
         return
     }
@@ -4831,10 +5690,13 @@ function Invoke-Doctor {
     }
 
     $rolesPath = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
-    if (Test-Path $rolesPath) {
-        Write-DoctorLine "OK" "Role assignment: Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
-    } else {
+    if (-not (Test-Path $rolesPath)) {
         Write-DoctorLine "FAIL" "Role assignment file missing: .ai/roles/ROLE_ASSIGNMENT.md"
+    } elseif ($SetupState.Pending) {
+        # v3.18.0: a warning, not a failure: the install is whole, it is just not chosen yet.
+        Write-DoctorLine "WARN" "Setup: NOT CONFIGURED - the players and the Master have not been chosen, so work commands are blocked (exit 14). Run: .\scripts\handoff.ps1 setup"
+    } else {
+        Write-DoctorLine "OK" "Role assignment: Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
     }
     # v3.17.0: information, never a failure. An invalid Review Independence line fails
     # through the role checkpoint below.
@@ -4844,7 +5706,8 @@ function Invoke-Doctor {
             Write-DoctorLine "INFO" (Get-SingleVendorReviewLine -Tool $Binding.Reviewer)
         }
     }
-    $doctorAdvisory = Get-MasterReviewerAdvisoryLine
+    # The template's binding is not a choice, so there is nothing to advise on while pending.
+    $doctorAdvisory = if ($SetupState.Pending) { "" } else { Get-MasterReviewerAdvisoryLine }
     if ($doctorAdvisory -ne "") { Write-DoctorLine "INFO" $doctorAdvisory }
     if ($RoleCheckpoint.Ok) {
         Write-DoctorLine "OK" "Role checkpoint: binding and derived Task Actors are synchronized."
@@ -4996,8 +5859,7 @@ function Invoke-Doctor {
         }
     }
 
-    $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
-    if (-not $npxCmd) { $npxCmd = Get-Command npx.cmd -ErrorAction SilentlyContinue }
+    $npxCmd = Get-NpxCommand
     if ($npxCmd) {
         $npxVersion = ""
         try { $npxVersion = (& $npxCmd.Source --version 2>$null | Out-String).Trim() } catch { }
@@ -5063,11 +5925,19 @@ function Invoke-Status {
     Write-Host "State:        $State"
     Write-Host "Waiting For:  $WaitingFor"
     Write-Host "Task:         $CurrentTask"
-    Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    if ($SetupState.Pending) {
+        # v3.18.0: the template's binding is not shown as if someone had chosen it.
+        Write-Host "Setup:        NOT CONFIGURED - this project has not chosen its players and its Master yet."
+        Write-Host "              Run:  .\scripts\handoff.ps1 setup"
+        Write-Host "Roles:        not chosen yet; work commands are blocked until setup is done."
+    } else {
+        Write-Host "Roles:        Master=$($Binding.Master), Reviewer=$($Binding.Reviewer), Implementer=$($Binding.Implementer)"
+    }
     if (Test-SingleVendorReview -Reviewer $Binding.Reviewer -Implementer $Binding.Implementer) {
         Write-Host "Review:       $(Get-SingleVendorReviewLine -Tool $Binding.Reviewer)"
     }
-    Write-Host "Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status"
+    # adapters is gated while setup is pending, so it is not offered then.
+    if (-not $SetupState.Pending) { Write-Host "Adapters:     run 'handoff.ps1 adapters' for callable/manual automation status" }
     $statusCommitBlock = Get-SingleVendorCommitBlock
     if ($statusCommitBlock -ne "") {
         Write-Host "Commit:       Blocked - commit-check refuses this single-vendor REVIEW_DONE. $statusCommitBlock"
@@ -8607,7 +9477,8 @@ function Invoke-Menu {
     Write-Host "14. Apply captured Codex verdict  - apply review-run verdict to AI_HANDOFF.md (review-apply)"
     Write-Host "15. Check Codex Master            - dry-run Codex Master capture plan (master-check)"
     Write-Host "16. Apply captured Master route   - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
-    Write-Host "17. Exit"
+    Write-Host "17. Choose players and Master     - reconfigure who holds every role (setup)"
+    Write-Host "18. Exit"
     Write-Host ""
     $choice = Read-Host "Select"
 
@@ -8637,7 +9508,8 @@ function Invoke-Menu {
         "14" { Invoke-ReviewApply }
         "15" { Invoke-MasterCheck }
         "16" { Invoke-MasterApply }
-        "17" { }
+        "17" { Invoke-Setup }
+        "18" { }
         default {
             Write-Host ""
             Write-Host "Invalid selection: $choice"
@@ -9701,6 +10573,7 @@ switch ($Command) {
     "user-next"    { Invoke-UserNext }
     "adapters"     { Invoke-Adapters }
     "roles"        { Invoke-Roles }
+    "setup"        { Invoke-Setup }
     "next"         { Invoke-Next }
     "start"        { Invoke-Start -Request $Request }
     "commit-check" { Invoke-CommitCheck }
@@ -9749,6 +10622,11 @@ switch ($Command) {
             Write-Host "                            A swap is refused while a turn runs and, under separate-tool, whenever Reviewer"
             Write-Host "                            would equal Implementer. -ReviewIndependence fresh-context lets one tool hold both:"
             Write-Host "                            it then reviews in a separate read-only run started by review-run."
+            Write-Host "  setup [-Players `"<tool[,tool]>`"] [-Master `"<tool>`"] [-Window] [-Yes]"
+            Write-Host "                            Choose the players and the Master. A fresh install is 'Setup: pending' and every"
+            Write-Host "                            work command stops with exit 14 until this is done. Without -Players it opens a"
+            Write-Host "                            picker window (Windows), or asks in the console. Two players: the Master's tool"
+            Write-Host "                            implements and the other reviews. One player: fresh-context. No turn is started."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
             Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
             Write-Host "  commit-check [-Message `"<msg>`"]"

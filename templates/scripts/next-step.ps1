@@ -10,6 +10,31 @@ if (-not (Test-Path $HandoffFile)) {
 
 $Lines = Get-Content -Encoding UTF8 -Path $HandoffFile
 
+# v3.18.0 (review fix): the Setup line, read the way handoff.ps1 reads it. While setup is
+# pending nothing is prepared for a binding nobody chose; an unreadable line fails closed.
+$setupRolesFile = Join-Path (Get-Location) ".ai/roles/ROLE_ASSIGNMENT.md"
+$setupValues = @()
+if (Test-Path -LiteralPath $setupRolesFile) {
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $setupRolesFile)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Setup\s*:(.*)$') { $setupValues += $Matches[1].Trim().ToLowerInvariant() }
+    }
+}
+if ($setupValues.Count -gt 1 -or ($setupValues.Count -eq 1 -and @("pending", "complete") -notcontains $setupValues[0])) {
+    Write-Host ""
+    Write-Host "Role checkpoint: BLOCKED - the 'Setup:' line in .ai/roles/ROLE_ASSIGNMENT.md must appear once and read pending or complete."
+    Write-Host "Repair it with: .\scripts\handoff.ps1 setup. NEXT_TURN.md was not written."
+    exit 12
+}
+if ($setupValues.Count -eq 1 -and $setupValues[0] -eq "pending") {
+    Write-Host ""
+    Write-Host "Setup required: this project has not chosen its players and its Master yet."
+    Write-Host "Run:  .\scripts\handoff.ps1 setup"
+    Write-Host "      (without a window: .\scripts\handoff.ps1 setup -Players `"<Claude Code, Codex, or both>`" -Master `"<one of the players>`")"
+    Write-Host "An agent must ask the user which players and which Master; it never chooses for them."
+    Write-Host "Nothing was started and nothing was changed."
+    exit 14
+}
+
 function Get-SectionLines {
     param([string[]]$Lines, [string]$Heading)
     $inSection = $false

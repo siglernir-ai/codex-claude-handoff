@@ -1,13 +1,19 @@
 param(
     [string]$Project = (Get-Location).Path,
-    [string]$Version = "v3.17.0",
+    [string]$Version = "v3.18.0",
     [switch]$Force,
     [switch]$AlwaysOn,
     [switch]$DisableAlwaysOn,
-    [string]$PackageRoot
+    [string]$PackageRoot,
+    [string]$Players,
+    [string]$Master,
+    [switch]$NoSetupWindow
 )
 
 $ErrorActionPreference = "Stop"
+
+# The installer function below sees only its own bound parameters, so keep the script's.
+$BootstrapBoundParameters = @{} + $PSBoundParameters
 
 function Invoke-PackageInstaller {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -22,6 +28,10 @@ function Invoke-PackageInstaller {
     if ($Force) { $arguments += "-Force" }
     if ($AlwaysOn) { $arguments += "-AlwaysOn" }
     if ($DisableAlwaysOn) { $arguments += "-DisableAlwaysOn" }
+    # v3.18.0: the first-setup choice travels with the install.
+    if ($BootstrapBoundParameters.ContainsKey('Players')) { $arguments += @("-Players", $Players) }
+    if ($BootstrapBoundParameters.ContainsKey('Master')) { $arguments += @("-Master", $Master) }
+    if ($NoSetupWindow) { $arguments += "-NoSetupWindow" }
 
     & powershell.exe @arguments
     if ($LASTEXITCODE -ne 0) {

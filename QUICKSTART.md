@@ -45,7 +45,7 @@ After setup, review and commit the installed project-local files. Include
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore skills-lock.json
-git commit -m "Install codex-claude-handoff v3.17.0"
+git commit -m "Install codex-claude-handoff v3.18.0"
 ```
 
 ## Windows alternative: install the pinned release
@@ -54,17 +54,42 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.17.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.18.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
 files and does not change normal Codex behavior.
 
+## First setup: choose the players and the Master
+
+A new install does not choose for you (since v3.18.0). At the end of the install a small
+window asks which tools work on the project and which one is the Master. Until that is
+saved, every work command stops with exit code 14 and tells you to run:
+
+```powershell
+.\scripts\handoff.ps1 setup
+```
+
+No window (a script, an agent, macOS/Linux)? Pass the choice as flags. With two players
+the Master's tool implements and the other tool reviews; with one player it does both and
+reviews in a separate read-only run, which is weaker than two vendors.
+Examples only, for a user who chose both tools. An agent must ask the user which players and
+which Master; it never chooses for them.
+```powershell
+.\scripts\handoff.ps1 setup -Players "Claude Code,Codex" -Master "Claude Code" -Yes
+bash scripts/handoff.sh setup --players "Claude Code,Codex" --master "Codex" --yes
+```
+
+The installers accept the same choice up front: `bootstrap.ps1` / `install.ps1 -Players
+"<tools>" -Master "<tool>"` (add `-NoSetupWindow` to skip the window) and
+`install.sh --players ... --master ...`. An agent that installs the protocol asks you
+which players and which Master; it never chooses for you.
+
 Commit the installed project-local files before starting real work:
 
 ```powershell
 git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.17.0"
+git commit -m "Install codex-claude-handoff v3.18.0"
 ```
 
 Check the installation:
@@ -163,13 +188,13 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.17.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.18.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-v3.17.0 packages a self-contained public beta Skill. From a clean Git project, run:
+v3.18.0 packages a self-contained public beta Skill. From a clean Git project, run:
 
 ```powershell
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy

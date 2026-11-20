@@ -4,7 +4,10 @@ param(
     [switch]$AlwaysOn,
     [switch]$RolesWindow,
     [switch]$NoRolesWindow,
-    [switch]$DisableAlwaysOn
+    [switch]$DisableAlwaysOn,
+    [string]$Players,
+    [string]$Master,
+    [switch]$NoSetupWindow
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +55,46 @@ function Get-InstalledReviewIndependence {
     }
     $result.Mode = $value
     return $result
+}
+
+# v3.18.0: the Setup line, read the way handoff.ps1 reads it. Returns @{ Ok; Declared; Value;
+# Error }. No line is a configured project; two lines or any other value refuse the upgrade.
+function Get-InstalledSetupLine {
+    param([string]$Path)
+    $result = @{ Ok = $true; Declared = $false; Value = ""; Error = "" }
+    if (-not (Test-Path -LiteralPath $Path)) { return $result }
+    $values = @()
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $Path)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Setup\s*:(.*)$') { $values += $Matches[1].Trim() }
+    }
+    if ($values.Count -eq 0) { return $result }
+    $result.Declared = $true
+    $value = ([string]$values[0]).ToLowerInvariant()
+    if ($values.Count -gt 1 -or @("pending", "complete") -notcontains $value) {
+        $result.Ok = $false
+        $result.Error = "the 'Setup:' line must appear once and read pending or complete"
+        return $result
+    }
+    $result.Value = $value
+    return $result
+}
+
+# The template ships 'Setup: pending' for a first install. An upgrade carries the installed
+# project's own line instead, or no line at all when it had none: an install made before
+# v3.18.0 is configured and must not become pending because the template changed.
+function Set-MergedSetupLine {
+    param([string]$Content, [string]$Value)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $written = $false
+    foreach ($line in ($Content -split "`r?`n")) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Setup\s*:') {
+            if (-not $written -and $Value -ne "") { $out.Add("Setup: $Value") }
+            $written = $true
+            continue
+        }
+        $out.Add($line)
+    }
+    return ($out -join "`r`n")
 }
 
 # Keep exactly one 'Review Independence:' line - the first, which is the template's own
@@ -141,7 +184,10 @@ function Get-MergedRoleAssignmentContent {
     param([string]$TemplatePath, [hashtable]$Binding, [string]$InstalledPath)
     $content = Get-Content -Raw -LiteralPath $TemplatePath
     foreach ($role in @('Master', 'Reviewer', 'Implementer')) {
-        $pattern = '(?m)^\|\s*' + [regex]::Escape($role) + '\s*\|\s*.+?\s*\|\s*$'
+        # v3.18.0 (review fix): the row ends at its own line end. A trailing \s* here ran on
+        # through the line break into the blank line below, so every -Force upgrade joined
+        # the table to the 'Review Independence:' line and it rendered as a table row.
+        $pattern = '(?m)^\|[ \t]*' + [regex]::Escape($role) + '[ \t]*\|[ \t]*[^\r\n|]+?[ \t]*\|[ \t]*(?=\r?$)'
         $replacement = "| $role | $($Binding[$role]) |"
         $content = [regex]::Replace($content, $pattern, $replacement)
     }
@@ -149,7 +195,17 @@ function Get-MergedRoleAssignmentContent {
     $merged = Add-PreservedRoleSections -MergedContent $content -ExistingContent $existingRoleContent
     $installedMode = Get-InstalledReviewIndependence -Path $InstalledPath
     if ($installedMode.Declared) { $merged = Set-MergedReviewIndependence -Content $merged -Mode $installedMode.Mode }
+    $installedSetup = Get-InstalledSetupLine -Path $InstalledPath
+    $carriedSetup = if ($installedSetup.Declared) { $installedSetup.Value } else { "" }
+    $merged = Set-MergedSetupLine -Content $merged -Value $carriedSetup
     return $merged
+}
+
+# v3.18.0 (review fix): a flag combination that cannot be applied is refused before anything
+# is written, as install.sh does.
+if ($PSBoundParameters.ContainsKey('Master') -and -not $PSBoundParameters.ContainsKey('Players')) {
+    Write-Host "install.ps1: -Master needs -Players, for example -Players `"<Claude Code, Codex, or both>`" -Master `"$Master`". Nothing was installed."
+    exit 1
 }
 
 if (-not (Test-Path -LiteralPath $templateRoot)) {
@@ -183,8 +239,12 @@ $alwaysOnFiles = @("AGENTS.md", "CLAUDE.md")
 $preserveOnForceFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "DECISIONS.md")
 $roleAssignmentRelative = ".ai\roles\ROLE_ASSIGNMENT.md"
 $installedRolePath = Join-Path $targetRoot $roleAssignmentRelative
+# v3.18.0: decided before anything is copied. An existing role file is an existing install;
+# -Force alone does not mean upgrade, because the skill's setup.ps1 passes -Force on a
+# first install too.
+$isExistingInstall = Test-Path -LiteralPath $installedRolePath
 $preservedRoleBinding = $null
-if ($Force -and (Test-Path -LiteralPath $installedRolePath)) {
+if ($Force -and $isExistingInstall) {
     $preservedRoleBinding = Get-InstalledRoleBinding -Path $installedRolePath
     if (-not $preservedRoleBinding) {
         throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $installedRolePath"
@@ -192,6 +252,10 @@ if ($Force -and (Test-Path -LiteralPath $installedRolePath)) {
     $preservedReviewIndependence = Get-InstalledReviewIndependence -Path $installedRolePath
     if (-not $preservedReviewIndependence.Ok) {
         throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md is invalid: $($preservedReviewIndependence.Error). Repair it before updating: $installedRolePath"
+    }
+    $preservedSetup = Get-InstalledSetupLine -Path $installedRolePath
+    if (-not $preservedSetup.Ok) {
+        throw "Refusing -Force update: existing ROLE_ASSIGNMENT.md is invalid: $($preservedSetup.Error). Repair it with handoff.ps1 setup before updating: $installedRolePath"
     }
     # v3.17.0: one tool in both roles is a valid binding when the project declared
     # fresh-context; the upgrade keeps both the binding and the declaration.
@@ -490,6 +554,60 @@ if ($null -ne $uiEnabled) {
     [System.IO.File]::WriteAllText($uiSettingsPath, ([ordered]@{ rolesWindow = [bool]$uiEnabled } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     Write-Host ""
     Write-Host "Roles indicator: $(if ($uiEnabled) { 'on - it opens with handoff.ps1 work, or now with: handoff.ps1 roles -Window' } else { 'off - turn it on any time with: handoff.ps1 roles -Window' })"
+}
+
+# v3.18.0: the first choice is the user's. A fresh install is 'Setup: pending', and work
+# commands stop until the players and the Master are chosen. The choice is made by the
+# installed handoff.ps1 setup, through the same code path whichever way it is reached.
+$installedSetupState = Get-InstalledSetupLine -Path $installedRolePath
+$setupPending = ($installedSetupState.Ok -and $installedSetupState.Value -eq "pending")
+$installedHandoffScript = Join-Path $targetRoot "scripts\handoff.ps1"
+$currentHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$playersGiven = $PSBoundParameters.ContainsKey('Players')
+function Write-SetupPendingNotice {
+    Write-Host ""
+    Write-Host "Setup: NOT CONFIGURED. The players and the Master have not been chosen, so work commands"
+    Write-Host "are blocked (exit 14) until you run, in the project:"
+    Write-Host "  .\scripts\handoff.ps1 setup"
+    Write-Host "Without a window:  .\scripts\handoff.ps1 setup -Players `"<Claude Code, Codex, or both>`" -Master `"<one of the players>`""
+    Write-Host "An agent must ask the user which players and which Master; it never chooses for them."
+}
+if ($playersGiven -and -not $setupPending) {
+    Write-Host ""
+    Write-Host "-Players ignored: this project has already chosen its players and its Master."
+    Write-Host "To change them: .\scripts\handoff.ps1 setup"
+} elseif ($setupPending -and $playersGiven) {
+    $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installedHandoffScript, "setup", "-Players", $Players)
+    if ($PSBoundParameters.ContainsKey('Master')) { $setupArgs += @("-Master", $Master) }
+    $setupArgs += "-Yes"
+    Push-Location -LiteralPath $targetRoot
+    try {
+        & $currentHost @setupArgs
+        $setupCode = $LASTEXITCODE
+    } finally { Pop-Location }
+    if ($setupCode -ne 0) {
+        Write-Host ""
+        Write-Host "install.ps1: the files are installed, but setup refused the choice (exit $setupCode); the reason is above."
+        Write-Host "The project is NOT CONFIGURED. Run: .\scripts\handoff.ps1 setup -Players `"<tools>`" -Master `"<tool>`""
+        exit 1
+    }
+} elseif ($setupPending) {
+    # The cheap half of handoff.ps1's agent check; the setup command repeats the full one.
+    $agentEnv = ($env:HANDOFF_RUN_MODE -eq "background") -or ($env:CLAUDECODE -eq "1") -or (-not [string]::IsNullOrEmpty($env:CODEX_CI)) -or (-not [string]::IsNullOrEmpty($env:CODEX_SANDBOX))
+    if ($env:HANDOFF_RUN_MODE -eq "foreground") { $agentEnv = $false }
+    $windowPossible = ($env:OS -eq "Windows_NT") -and (-not [System.Console]::IsInputRedirected) -and (-not $NoSetupWindow) -and [string]::IsNullOrEmpty($env:HANDOFF_BACKGROUND_NO_WINDOW) -and (-not $agentEnv)
+    if ($windowPossible) {
+        Write-Host ""
+        Write-Host "First setup: choose the players and the Master in the window that opens now."
+        Push-Location -LiteralPath $targetRoot
+        try {
+            & $currentHost -NoProfile -ExecutionPolicy Bypass -File $installedHandoffScript setup
+            $setupCode = $LASTEXITCODE
+        } finally { Pop-Location }
+        if ($setupCode -ne 0) { Write-SetupPendingNotice }
+    } else {
+        Write-SetupPendingNotice
+    }
 }
 
 Write-Host ""

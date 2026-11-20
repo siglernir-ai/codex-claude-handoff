@@ -13,6 +13,7 @@ file is the single place that records which tool currently holds each role.
 | Implementer | Claude Code |
 
 Review Independence: separate-tool
+Setup: pending
 
 The User is always the approval point and is never one of these roles.
 
@@ -44,6 +45,8 @@ The User is always the approval point and is never one of these roles.
     run the harness starts (`review-run`, then `review-apply`); commit and release refuse
     any other verdict. A second vendor is the stronger check; two tools are recommended.
 - Change it with `handoff.ps1 roles -ReviewIndependence <value>` (recorded in the history).
+- `Setup:` (since v3.18.0): a fresh install is `pending` and work commands stop (exit 14)
+  until `handoff.ps1 setup` records the user's choice. No line = configured.
 
 ## Switching Roles
 
@@ -65,8 +68,6 @@ The User is always the approval point and is never one of these roles.
 - Since v3.5.0 the adapter registry covers every role/tool combination. `cycle`
   (alias `run-next`) and `loop` automate `READY_FOR_IMPLEMENTATION` and
   `NEEDS_INVESTIGATION` for an Implementer bound to either Claude Code or Codex.
-  This note is not the authority: run `handoff.ps1 adapters` for the resolved
-  status, because the registry is what the commands actually read.
 - `cycle` and `loop` enforce the invariant above in their preflight: under
   `separate-tool`, if the Reviewer and the Implementer resolve to the same tool, they
   block before any automation turn runs.

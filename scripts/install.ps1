@@ -3,7 +3,12 @@ param(
     [string]$TargetPath,
     [switch]$Force,
     [switch]$AlwaysOn,
-    [switch]$DisableAlwaysOn
+    [switch]$DisableAlwaysOn,
+    [switch]$RolesWindow,
+    [switch]$NoRolesWindow,
+    [string]$Players,
+    [string]$Master,
+    [switch]$NoSetupWindow
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +19,12 @@ $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer, 
 if ($Force) { $arguments += "-Force" }
 if ($AlwaysOn) { $arguments += "-AlwaysOn" }
 if ($DisableAlwaysOn) { $arguments += "-DisableAlwaysOn" }
+if ($RolesWindow) { $arguments += "-RolesWindow" }
+if ($NoRolesWindow) { $arguments += "-NoRolesWindow" }
+# v3.18.0: the first-setup choice travels with the install.
+if ($PSBoundParameters.ContainsKey('Players')) { $arguments += @("-Players", $Players) }
+if ($PSBoundParameters.ContainsKey('Master')) { $arguments += @("-Master", $Master) }
+if ($NoSetupWindow) { $arguments += "-NoSetupWindow" }
 
 Write-Host "scripts/install.ps1 delegates to the current project installer."
 & powershell.exe @arguments

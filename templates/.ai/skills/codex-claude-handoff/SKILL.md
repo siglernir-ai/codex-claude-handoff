@@ -36,7 +36,10 @@ Bounded CLI automation is available only for the states and adapters documented 
 
 The protocol is organized around three roles, plus the User. Roles are bound to concrete tools in `.ai/roles/ROLE_ASSIGNMENT.md`, so they can be reassigned (with user approval) without rewriting the protocol.
 
-The default binding is Codex as Master + Reviewer and Claude Code as Implementer.
+A new install has no binding until the user chooses one with `setup` (since
+v3.18.0): with two players the Master's tool implements and the other tool
+reviews. An install made earlier keeps its binding (by default Codex as
+Master + Reviewer, Claude Code as Implementer).
 With explicit user approval, the tools can exchange Master and Implementer
 responsibilities. Reviewer and Implementer never share a context: by default they
 are different tools, and under `Review Independence: fresh-context` one tool may hold both and
@@ -49,7 +52,7 @@ tool.
 - **Reviewer** - independent review of implementation against approved scope, plus the Verification Gate.
 - **The User** - the approval point. Never one of the three roles.
 
-**Default binding:** Master = Codex, Reviewer = Codex, Implementer = Claude Code. This is behaviorally identical to earlier versions of the protocol.
+**Default binding:** none for a new install (since v3.18.0). The role file ships `Setup: pending`, work commands stop with exit 14, and `handoff.ps1 setup` records the user's choice of players and Master. An install made earlier keeps Master = Codex, Reviewer = Codex, Implementer = Claude Code unless changed.
 
 **Invariant:** the Reviewer never shares a context with the Implementer (an implementer cannot be the sole reviewer of its own work). By default the Reviewer is a different tool; with `Review Independence: fresh-context` in `.ai/roles/ROLE_ASSIGNMENT.md` (since v3.17.0) it may be the same tool, reviewing in a separate read-only run the harness starts (`review-run`, then `review-apply`), and commit and release accept only that verdict. A single-vendor review is a weaker check than a second vendor's; two tools remain the recommended setup. Switching roles requires explicit user approval. See `.ai/roles/ROLE_ASSIGNMENT.md`.
 

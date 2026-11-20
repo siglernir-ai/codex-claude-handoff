@@ -25,12 +25,20 @@ The important files are:
 
 ## Roles
 
-- **Codex as Master** routes requests and writes clear task instructions.
-- **Claude Code as Implementer** investigates or edits files.
-- **Codex as Reviewer** checks scope and verification.
+- **Master** routes requests and writes clear task instructions.
+- **Implementer** investigates or edits files.
+- **Reviewer** checks scope and verification.
 - **User** approves commits, pushes, tags, releases, deploys, secrets, and production decisions.
 
 The Implementer never approves its own work.
+
+Which tool holds which role is the user's first choice (since v3.18.0). A fresh install
+is `Setup: pending` and work commands stop with exit code 14 until `handoff.ps1 setup`
+records it, through a small window on Windows or as flags (`-Players`, `-Master`). With
+two players the Master's tool implements and the other tool reviews, so the Reviewer
+questions the plan as well as the code. With one player that tool holds every role under
+`fresh-context`. Installs made before v3.18.0 keep their binding (by default Codex as
+Master and Reviewer, Claude Code as Implementer).
 
 ## Switching Roles
 

@@ -58,6 +58,22 @@ finally {
     Pop-Location
 }
 
+# v3.18.0: a fresh install has not chosen its players and its Master. Say so; never choose.
+$roleFile = Join-Path $targetRoot ".ai\roles\ROLE_ASSIGNMENT.md"
+$setupPending = $false
+if (Test-Path -LiteralPath $roleFile) {
+    foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath $roleFile)) {
+        if ($line.Replace([string][char]0x00A0, ' ') -match '^\s*(?:[-*]\s+)?Setup\s*:\s*pending\s*$') { $setupPending = $true }
+    }
+}
+if ($setupPending) {
+    Write-Host ""
+    Write-Host "Setup: NOT CONFIGURED. Work commands are blocked (exit 14) until the players and the Master are chosen."
+    Write-Host "Ask the user which tools work on this project and which one is the Master, then run in the project:"
+    Write-Host "  .\scripts\handoff.ps1 setup -Players `"<Claude Code, Codex, or both>`" -Master `"<one of the players>`""
+    Write-Host "A person at the machine can run .\scripts\handoff.ps1 setup to choose in a window."
+}
+
 Write-Host ""
 Write-Host "Skill setup complete. Review the installed files before committing them."
 Write-Host "No git commit, push, tag, release, deploy, database, or secret action was run."
@@ -69,4 +85,4 @@ if (Test-Path -LiteralPath (Join-Path $targetRoot "skills-lock.json")) {
 else {
     Write-Host "  git add .agents .ai .claude scripts .gitignore"
 }
-Write-Host "  git commit -m `"Install codex-claude-handoff v3.3.2`""
+Write-Host "  git commit -m `"Install codex-claude-handoff`""

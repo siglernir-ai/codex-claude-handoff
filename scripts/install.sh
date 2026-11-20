@@ -4,9 +4,12 @@
 
 set -euo pipefail
 
+# v3.18.0: byte-wise readers, so a UTF-8 locale on another machine cannot change a match.
+export LC_ALL=C
+
 TARGET_PATH="${1:-}"
 if [ -z "$TARGET_PATH" ]; then
-    echo "Usage: bash scripts/install.sh <target-project-path> [--force] [--always-on|--disable-always-on]"
+    echo "Usage: bash scripts/install.sh <target-project-path> [--force] [--always-on|--disable-always-on] [--players <list> [--master <tool>]]"
     exit 1
 fi
 shift
@@ -14,14 +17,30 @@ shift
 FORCE=false
 ALWAYS_ON=false
 DISABLE_ALWAYS_ON=false
-for arg in "$@"; do
-    case "$arg" in
+# v3.18.0: the first-setup choice, for a scripted install.
+SETUP_PLAYERS=""
+SETUP_PLAYERS_SET=false
+SETUP_MASTER=""
+SETUP_MASTER_SET=false
+while [ $# -gt 0 ]; do
+    case "$1" in
         --force) FORCE=true ;;
         --always-on) ALWAYS_ON=true ;;
         --disable-always-on) DISABLE_ALWAYS_ON=true ;;
-        *) echo "Unknown option: $arg"; exit 1 ;;
+        --players)
+            [ $# -ge 2 ] || { echo "--players needs a value: --players \"<Claude Code, Codex, or both>\""; exit 1; }
+            SETUP_PLAYERS="$2"; SETUP_PLAYERS_SET=true; shift ;;
+        --master)
+            [ $# -ge 2 ] || { echo "--master needs a value: --master \"<one of the players>\""; exit 1; }
+            SETUP_MASTER="$2"; SETUP_MASTER_SET=true; shift ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
+    shift
 done
+if $SETUP_MASTER_SET && ! $SETUP_PLAYERS_SET; then
+    echo "--master needs --players: --players \"<Claude Code, Codex, or both>\" --master \"$SETUP_MASTER\""
+    exit 1
+fi
 
 if $ALWAYS_ON && $DISABLE_ALWAYS_ON; then
     echo "Choose either --always-on or --disable-always-on, not both."
@@ -55,18 +74,19 @@ if $FORCE && [ -f "$ROLE_FILE" ]; then
     master_count=0 reviewer_count=0 implementer_count=0
     while IFS='=' read -r role tool; do
         case "$role" in
-            Master) master_count=$((master_count + 1)); PRESERVED_MASTER="$tool" ;;
-            Reviewer) reviewer_count=$((reviewer_count + 1)); PRESERVED_REVIEWER="$tool" ;;
-            Implementer) implementer_count=$((implementer_count + 1)); PRESERVED_IMPLEMENTER="$tool" ;;
+            master) master_count=$((master_count + 1)); PRESERVED_MASTER="$tool" ;;
+            reviewer) reviewer_count=$((reviewer_count + 1)); PRESERVED_REVIEWER="$tool" ;;
+            implementer) implementer_count=$((implementer_count + 1)); PRESERVED_IMPLEMENTER="$tool" ;;
         esac
-    done < <(awk -F'|' '
-        /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/ {
-            role=$2; tool=$3
+    # v3.18.0 (review fix): role names without regard to case, as install.ps1 reads them.
+    done < <(tr -d '\r' < "$ROLE_FILE" | awk -F'|' '
+        tolower($0) ~ /^\|[[:space:]]*(master|reviewer|implementer)[[:space:]]*\|/ {
+            role=tolower($2); tool=$3
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", role)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", tool)
             if (role != "" && tool != "") print role "=" tool
         }
-    ' "$ROLE_FILE")
+    ')
     if [ "$master_count" -ne 1 ] || [ "$reviewer_count" -ne 1 ] || [ "$implementer_count" -ne 1 ]; then
         echo "Refusing --force update: existing ROLE_ASSIGNMENT.md cannot be parsed exactly. Repair it before updating: $ROLE_FILE"
         exit 1
@@ -94,6 +114,25 @@ if $FORCE && [ -f "$ROLE_FILE" ]; then
     if [ "$PRESERVED_REVIEWER" = "$PRESERVED_IMPLEMENTER" ] && [ "$PRESERVED_REVIEW_INDEPENDENCE" != "fresh-context" ]; then
         echo "Refusing --force update: existing role binding violates Reviewer != Implementer. Repair it before updating: $ROLE_FILE"
         exit 1
+    fi
+    # v3.18.0: the Setup line is carried across too. No line (an install made before
+    # v3.18.0) stays no line, so the upgrade cannot turn a configured project pending.
+    setup_lines="$(tr -d '\r' < "$ROLE_FILE" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }')"
+    setup_count="$(printf '%s' "$setup_lines" | grep -c '^<' || true)"
+    setup_value="${setup_lines#<}"; setup_value="${setup_value%>}"
+    setup_value="$(printf '%s' "$setup_value" | tr '[:upper:]' '[:lower:]')"
+    PRESERVED_SETUP=""
+    if [ "$setup_count" -gt 1 ]; then
+        echo "Refusing --force update: existing ROLE_ASSIGNMENT.md is invalid: the 'Setup:' line must appear once and read pending or complete. Repair it with handoff.sh setup before updating: $ROLE_FILE"
+        exit 1
+    elif [ "$setup_count" -eq 1 ]; then
+        case "$setup_value" in
+            pending|complete) PRESERVED_SETUP="$setup_value" ;;
+            *)
+                echo "Refusing --force update: existing ROLE_ASSIGNMENT.md is invalid: the 'Setup:' line must appear once and read pending or complete. Repair it with handoff.sh setup before updating: $ROLE_FILE"
+                exit 1
+                ;;
+        esac
     fi
     PRESERVE_ROLE_BINDING=true
 fi
@@ -260,6 +299,19 @@ while IFS= read -r -d '' src; do
             ' "$role_tmp" > "$_ri_tmp"
             mv -f -- "$_ri_tmp" "$role_tmp"
         fi
+        # v3.18.0: the installed project's own Setup line, or none; never the template's
+        # 'pending'. PowerShell does the same in Set-MergedSetupLine.
+        _setup_tmp="$role_tmp.setup.$$"
+        awk -v value="${PRESERVED_SETUP:-}" -v nbsp="$(printf '\302\240')" '
+            { line=$0; sub(/\r$/, "", line); gsub(nbsp, " ", line) }
+            tolower(line) ~ /^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:/ {
+                if (!done && value != "") { cr = ($0 ~ /\r$/) ? "\r" : ""; print "Setup: " value cr }
+                done=1
+                next
+            }
+            { print }
+        ' "$role_tmp" > "$_setup_tmp"
+        mv -f -- "$_setup_tmp" "$role_tmp"
         mv -f -- "$role_tmp" "$TARGET_PATH/$rel"
         echo "Preserved current role binding while refreshing role instructions."
     else
@@ -366,10 +418,40 @@ echo ""
 echo "codex-claude-handoff installed into:"
 echo "  $TARGET_PATH"
 echo "Activation mode: $MODE"
+
+# v3.18.0: the first choice is the user's. A fresh install is 'Setup: pending' and work
+# commands stop until the players and the Master are chosen, by the installed handoff.sh.
+INSTALLED_SETUP="$(tr -d '\r' < "$ROLE_FILE" | awk -v nbsp="$(printf '\302\240')" '{ l = $0; gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print tolower(v) }')"
+setup_pending_notice() {
+    echo ""
+    echo "Setup: NOT CONFIGURED. The players and the Master have not been chosen, so work commands"
+    echo "are blocked (exit 14) until you run, in the project:"
+    echo "  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+    echo "An agent must ask the user which players and which Master; it never chooses for them."
+    echo "With PowerShell, .\\scripts\\handoff.ps1 setup can open a window."
+}
+if $SETUP_PLAYERS_SET && [ "$INSTALLED_SETUP" != "pending" ]; then
+    echo ""
+    echo "--players ignored: this project has already chosen its players and its Master."
+    echo "To change them: bash scripts/handoff.sh setup --players <list> --master <tool>"
+elif $SETUP_PLAYERS_SET; then
+    setup_args=(setup --players "$SETUP_PLAYERS")
+    $SETUP_MASTER_SET && setup_args+=(--master "$SETUP_MASTER")
+    setup_args+=(--yes)
+    if ! ( cd "$TARGET_PATH" && bash scripts/handoff.sh "${setup_args[@]}" ); then
+        echo ""
+        echo "install.sh: the files are installed, but setup refused the choice; the reason is above."
+        echo "The project is NOT CONFIGURED. Run: bash scripts/handoff.sh setup --players <list> --master <tool>"
+        exit 1
+    fi
+elif [ "$INSTALLED_SETUP" = "pending" ]; then
+    setup_pending_notice
+fi
+
 echo ""
 echo "Check the installation:"
 echo "  cd \"$TARGET_PATH\""
-echo "  bash scripts/handoff.sh doctor"
+echo "  bash scripts/handoff.sh status"
 echo ""
 
 if $ALWAYS_ON; then

@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# v3.18.0: byte-wise readers, so a UTF-8 locale on another machine cannot change a match.
+export LC_ALL=C
+
 COPY_PROMPT=false
 PREPARE_FILE=false
 for _arg in "$@"; do
@@ -27,21 +30,32 @@ fi
 # ---------------------------------------------------------------------------
 
 _section_content() {
-    local h="## $1"
+    # v3.18.0: the same port of handoff.ps1's Get-SectionLines as handoff.sh: a repeated
+    # heading is skipped, any other "##" heading ends the reading, "###" is content.
+    local h; h="$(printf '## %s' "$1" | tr '[:upper:]' '[:lower:]')"
     tr -d '\r' < "$HANDOFF_FILE" | \
-    awk -v h="$h" '$0==h{s=1;next} s&&/^## /{s=0} s{print}'
+    awk -v h="$h" -v bom="$(printf '\357\273\277')" '
+        done { next }
+        { l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); t = l; sub(/[[:space:]]+$/, "", t) }
+        tolower(t) == h { s = 1; next }
+        s { if (l ~ /^##[[:space:]]/) { done = 1; next } print l }'
+}
+
+# One Status field, read as handoff.ps1's Read-HandoffState reads it (see handoff.sh).
+_status_field() {
+    printf '%s\n' "$1" | awk -v k="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" '
+        { low = tolower($0) }
+        index(low, "- " k ":") == 1 && length($0) > length(k) + 3 { v = substr($0, length(k) + 4); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); val = v; found = 1 }
+        END { if (found) printf "%s", val; else exit 1 }'
 }
 
 _parse_status() {
     STATE="(unknown)" WAITING_FOR="(unknown)" CURRENT_TASK="(unknown)"
-    local line
-    while IFS= read -r line; do
-        case "$line" in
-            "- State: "*)        STATE="${line#- State: }" ;;
-            "- Waiting For: "*)  WAITING_FOR="${line#- Waiting For: }" ;;
-            "- Current Task: "*) CURRENT_TASK="${line#- Current Task: }" ;;
-        esac
-    done < <(_section_content "Status")
+    local status v
+    status="$(_section_content "Status")"
+    if v="$(_status_field "$status" "State")"; then STATE="$v"; fi
+    if v="$(_status_field "$status" "Waiting For")"; then WAITING_FOR="$v"; fi
+    if v="$(_status_field "$status" "Current Task")"; then CURRENT_TASK="$v"; fi
     case "$STATE" in
         QUESTION_FOR_CODEX)  STATE="QUESTION_FOR_MASTER" ;;
         QUESTION_FOR_CLAUDE) STATE="QUESTION_FOR_IMPLEMENTER" ;;
@@ -53,18 +67,19 @@ _get_role_binding() {
     local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
     [ -f "$rf" ] || return 0
     local parsed role tool
+    # v3.18.0 (review fix): role names without regard to case, as handoff.ps1 reads them.
     parsed=$(tr -d '\r' < "$rf" | awk -F'|' '
-        /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/{
-            r=$2; t=$3
+        tolower($0) ~ /^\|[[:space:]]*(master|reviewer|implementer)[[:space:]]*\|/{
+            r=tolower($2); t=$3
             gsub(/^[[:space:]]+|[[:space:]]+$/,"",r)
             gsub(/^[[:space:]]+|[[:space:]]+$/,"",t)
             if(r!=""&&t!="") print r"="t
         }')
     while IFS='=' read -r role tool; do
         case "$role" in
-            Master)      MASTER_TOOL="$tool" ;;
-            Reviewer)    REVIEWER_TOOL="$tool" ;;
-            Implementer) IMPLEMENTER_TOOL="$tool" ;;
+            master)      MASTER_TOOL="$tool" ;;
+            reviewer)    REVIEWER_TOOL="$tool" ;;
+            implementer) IMPLEMENTER_TOOL="$tool" ;;
         esac
     done <<< "$parsed"
 }
@@ -138,6 +153,29 @@ _after_text() {
 # ---------------------------------------------------------------------------
 
 _parse_status
+
+# v3.18.0 (review fix): the Setup line, read the way handoff.sh reads it. While setup is
+# pending nothing is prepared for a binding nobody chose; an unreadable line fails closed.
+_setup_file="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
+if [ -f "$_setup_file" ]; then
+    _setup_lines="$(tr -d '\r' < "$_setup_file" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" tolower(v) ">" }')"
+    _setup_count="$(printf '%s' "$_setup_lines" | grep -c '^<' || true)"
+    if [ "$_setup_count" -gt 1 ] || { [ "$_setup_count" -eq 1 ] && [ "$_setup_lines" != "<pending>" ] && [ "$_setup_lines" != "<complete>" ]; }; then
+        echo ""
+        echo "Role checkpoint: BLOCKED - the 'Setup:' line in .ai/roles/ROLE_ASSIGNMENT.md must appear once and read pending or complete."
+        echo "Repair it with: bash scripts/handoff.sh setup. NEXT_TURN.md was not written."
+        exit 12
+    fi
+    if [ "$_setup_lines" = "<pending>" ]; then
+        echo ""
+        echo "Setup required: this project has not chosen its players and its Master yet."
+        echo "Run:  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+        echo "An agent must ask the user which players and which Master; it never chooses for them."
+        echo "Nothing was started and nothing was changed."
+        exit 14
+    fi
+fi
+
 _get_role_binding
 
 # v3.17.0: the review rule, read the way handoff.ps1 reads it (absent = separate-tool).

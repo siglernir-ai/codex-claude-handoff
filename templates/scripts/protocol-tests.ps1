@@ -61,6 +61,12 @@ Get-ChildItem Env: | Where-Object { $_.Name -match '^HANDOFF_(CLAUDE|CODEX)_MODE
 # the background path set the mode themselves.
 $env:HANDOFF_RUN_MODE = "foreground"
 
+# v3.18.0: with HANDOFF_RUN_MODE=foreground the agent check is off, so a child that thinks
+# a person is at the console could open a window on the developer's desktop: the setup
+# picker, the roles indicator, the status window of a background run. Nothing in this
+# suite may show a window; the window code is tested by parsing what it would run.
+$env:HANDOFF_BACKGROUND_NO_WINDOW = "1"
+
 # --- Resolve repo paths (this script lives in scripts/) ---
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot    = Split-Path -Parent $ScriptDir
@@ -1149,7 +1155,9 @@ $rolesAfterForce = Get-Content -Raw -Path $installedRoles
 $managedScriptRefreshed = (Get-FileHash -Algorithm SHA256 -Path $installedScript).Hash -eq (Get-FileHash -Algorithm SHA256 -Path (Join-Path $RepoRoot "templates/scripts/handoff.ps1")).Hash
 $normalizedRolesAfter = $rolesAfterForce -replace '(?m)^\|\s*(Master|Reviewer|Implementer)\s*\|\s*.+?\s*\|\s*$', '| $1 | <tool> |'
 $templateRoleText = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md")
-$normalizedRoleTemplate = $templateRoleText -replace '(?m)^\|\s*(Master|Reviewer|Implementer)\s*\|\s*.+?\s*\|\s*$', '| $1 | <tool> |'
+# v3.18.0: the template ships 'Setup: pending' for a first install; an upgrade of a file
+# without the line carries no line, so the comparison leaves that one line out.
+$normalizedRoleTemplate = ($templateRoleText -replace '(?m)^Setup: pending\r?\n', '') -replace '(?m)^\|\s*(Master|Reviewer|Implementer)\s*\|\s*.+?\s*\|\s*$', '| $1 | <tool> |'
 Push-Location $installTarget
 try {
     $installedNextOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $installedScript next 2>&1 | Out-String
@@ -4589,10 +4597,13 @@ Check "a duplicated line fails closed, even when both copies agree" (($r.Code -e
 # --- The shipped template leaves behavior unchanged ---
 $riTemplate = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md")
 Check "the shipped role file declares separate-tool, exactly once" ((([regex]::Matches($riTemplate, '(?m)^\s*(?:[-*]\s+)?Review Independence\s*:')).Count -eq 1) -and ($riTemplate -match '(?m)^Review Independence: separate-tool\r?$'))
-$riFx = New-RiFixture -Roles $riTemplate -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+# v3.18.0: the shipped file is 'Setup: pending', which blocks every work command by design;
+# these two checks are about the review rule, so they run on the file after setup.
+$riTemplateConfigured = $riTemplate -replace 'Setup: pending', 'Setup: complete'
+$riFx = New-RiFixture -Roles $riTemplateConfigured -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
 $r = Invoke-Handoff -WorkDir $riFx -Arguments @("roles")
 Check "the shipped role file keeps today's rule" (($r.Code -eq 0) -and ($r.Out -match "Rule:\s+the Reviewer is never the Implementer"))
-$riFx = New-RiFixture -Roles ($riTemplate -replace '\| Implementer \| Claude Code \|', '| Implementer | Codex |') -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
+$riFx = New-RiFixture -Roles ($riTemplateConfigured -replace '\| Implementer \| Claude Code \|', '| Implementer | Codex |') -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -NoGit
 $r = Invoke-Handoff -WorkDir $riFx -Arguments @("next")
 Check "the shipped role file still refuses one tool in both roles" (($r.Code -eq 12) -and ($r.Out -match "Invalid role binding"))
 
@@ -5219,6 +5230,1043 @@ foreach ($riCase in $riParityCases) {
         $riNextOk = (Get-RiFile -Dir $riPFx -Rel "NEXT_TURN.md") -match "## Review Independence"
     } finally { Pop-Location; [System.Environment]::CurrentDirectory = $riPrevCwd3 }
     Check "handoff.ps1, handoff.sh and next-step.sh all read fresh-context with $($riCase.Name)" ($riPsOk -and $riShOk -and $riNextOk) "ps=$riPsOk sh=$riShOk next=$riNextOk $riShOut3"
+}
+
+# --- v3.18.0: the first choice is the user's ---
+Write-Host "[4D-8] First setup: the players and the Master are chosen, never assumed (v3.18.0)"
+
+Check "the suite runs with windows switched off" ($env:HANDOFF_BACKGROUND_NO_WINDOW -eq "1")
+
+# Same as Invoke-Handoff, with text on standard input. Every setup call without -Players or
+# without -Yes goes through here: input is then redirected, so nothing can wait on a console.
+function Invoke-HandoffInput {
+    param([string]$WorkDir, [string[]]$Arguments, [string]$InputText = "")
+    $prevPwd = (Get-Location).Path
+    $prevEnv = [System.Environment]::CurrentDirectory
+    try {
+        Set-Location $WorkDir
+        [System.Environment]::CurrentDirectory = $WorkDir
+        $combined = $InputText | & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $HandoffScript @Arguments 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    } finally {
+        Set-Location $prevPwd
+        [System.Environment]::CurrentDirectory = $prevEnv
+    }
+    return @{ Code = $code; Out = $combined }
+}
+
+function New-SuRoles {
+    param([string]$SetupLine = "Setup: pending", [string]$Master = "Codex", [string]$Reviewer = "Codex", [string]$Implementer = "Claude Code", [string]$ModeLine = "Review Independence: separate-tool")
+    $text = "# Role Assignment`n`n## Current Binding`n`n| Role | Tool |`n|---|---|`n| Master | $Master |`n| Reviewer | $Reviewer |`n| Implementer | $Implementer |`n`n"
+    if ($ModeLine -ne "") { $text += "$ModeLine`n" }
+    if ($SetupLine -ne "") { $text += "$SetupLine`n" }
+    $text += "`nThe User is always the approval point and is never one of these roles.`n"
+    return $text
+}
+
+$suInitialHandoff = Get-Content -Encoding UTF8 -Raw -Path (Join-Path $RepoRoot "templates/AI_HANDOFF.md")
+function New-SuFixture {
+    param([string]$Roles, [string]$Handoff = $suInitialHandoff)
+    $dir = New-Fixture -Files @{ "AI_HANDOFF.md" = $Handoff; ".ai/roles/ROLE_ASSIGNMENT.md" = $Roles } -InitGit
+    Initialize-FixtureGitBaseline -Dir $dir
+    return $dir
+}
+function Get-SuFile { param([string]$Dir, [string]$Rel) return [System.IO.File]::ReadAllText((Join-Path $Dir $Rel), [System.Text.Encoding]::UTF8) }
+function Get-SuHashes { param([string]$Dir) return ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Dir ".ai/roles/ROLE_ASSIGNMENT.md")).Hash + "/" + (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Dir "AI_HANDOFF.md")).Hash) }
+function Get-SuRow { param([string]$Text, [string]$Role) if ($Text -match "(?m)^\| $Role \| (.+?) \|\r?$") { return $Matches[1] } return "" }
+
+# --- The marker: absent = configured, complete = configured, pending = not configured ---
+$suFx = New-SuFixture -Roles $DefaultRoles
+$r = Invoke-Handoff -WorkDir $suFx -Arguments @("work")
+Check "no Setup line is a configured project: work runs as before" (($r.Code -eq 0) -and ($r.Out -notmatch "Setup required") -and ($r.Out -match "start the first task"))
+$r = Invoke-Handoff -WorkDir $suFx -Arguments @("status")
+Check "no Setup line: status prints nothing new" (($r.Out -match "Roles:\s+Master=Codex, Reviewer=Codex, Implementer=Claude Code") -and ($r.Out -notmatch "Setup:"))
+$suFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete")
+$r = Invoke-Handoff -WorkDir $suFx -Arguments @("work")
+Check "Setup: complete is a configured project" (($r.Code -eq 0) -and ($r.Out -notmatch "Setup required"))
+$suFx = New-SuFixture -Roles (New-SuRoles -SetupLine "setup: Complete")
+$r = Invoke-Handoff -WorkDir $suFx -Arguments @("work")
+Check "the Setup line is read without regard to letter case" (($r.Code -eq 0) -and ($r.Out -notmatch "Setup required"))
+$suFx = New-SuFixture -Roles (New-SuRoles -SetupLine ("- Setup:" + [string][char]0x00A0 + "pending"))
+$r = Invoke-Handoff -WorkDir $suFx -Arguments @("work")
+Check "a bulleted Setup line with a non-breaking space is still read" ($r.Code -eq 14)
+
+# --- pending: every work command stops with exit 14 and one instruction ---
+$suPendFx = New-SuFixture -Roles (New-SuRoles)
+$suPendBefore = Get-SuHashes -Dir $suPendFx
+$suGated = @(
+    @("work"), @("next"), @("start", "add a feature"), @("user-next"), @("adapters"), @("roles"),
+    @("roles", "-Window"), @("roles", "-WindowOff"), @("roles", "-SetRole", "Master", "-SetTool", "Claude Code", "-Yes"),
+    @("roles", "-ReviewIndependence", "fresh-context", "-Yes"), @("commit-check"), @("commit-approved", "-Message", "x", "-Authorize", "I_AUTHORIZE_COMMIT"),
+    @("cycle", "-Yes"), @("run-next", "-Yes"), @("loop", "-Yes"), @("review-check"), @("review-run", "-Yes"), @("review-apply", "-Yes"),
+    @("master-check"), @("master-run", "-Yes"), @("master-apply", "-Yes"), @("release-check", "-Version", "v9.9.9"),
+    @("task-next", "-Yes"), @("sequence-add", "-NextTask", "x"), @("stop"), @("wait", "-TimeoutSeconds", "1"), @("no-such-command")
+)
+$suGateMisses = @()
+foreach ($suArgs in $suGated) {
+    $r = Invoke-HandoffInput -WorkDir $suPendFx -Arguments $suArgs
+    if (-not (($r.Code -eq 14) -and ($r.Out -match "Setup required: this project has not chosen its players and its Master yet\.") -and ($r.Out -match "Run:\s+\.\\scripts\\handoff\.ps1 setup") -and ($r.Out -match "Nothing was started and nothing was changed\."))) {
+        $suGateMisses += "$($suArgs -join ' ') -> $($r.Code)"
+    }
+}
+Check "pending: every work command, every form of roles and an unknown command stop with exit 14" ($suGateMisses.Count -eq 0) ($suGateMisses -join "; ")
+$r = Invoke-HandoffInput -WorkDir $suPendFx -Arguments @() -InputText "18"
+Check "pending: the no-command menu is gated too" (($r.Code -eq 14) -and ($r.Out -notmatch "Select"))
+Check "pending: the gated commands changed nothing" ((Get-SuHashes -Dir $suPendFx) -eq $suPendBefore)
+Check "pending: nothing was written by a gated command" (-not (Test-Path (Join-Path $suPendFx "NEXT_TURN.md")) -and -not (Test-Path (Join-Path $suPendFx "USER_REQUEST.md")) -and -not (Test-Path (Join-Path $suPendFx "HANDOFF_UI.json")))
+$r = Invoke-Handoff -WorkDir $suPendFx -Arguments @("status")
+Check "pending: status says NOT CONFIGURED and names the command" (($r.Code -eq 0) -and ($r.Out -match "Setup:\s+NOT CONFIGURED") -and ($r.Out -match "Run:\s+\.\\scripts\\handoff\.ps1 setup"))
+Check "pending: status does not show the template binding as a choice" ($r.Out -notmatch "Roles:\s+Master=")
+$r = Invoke-Handoff -WorkDir $suPendFx -Arguments @("models")
+Check "pending: models still runs" (($r.Code -eq 0) -and ($r.Out -notmatch "Setup required"))
+$suSrc = Get-Content -Raw -Path $HandoffScript
+Check "exit 14 is used by the setup gate and nothing else" (([regex]::Matches($suSrc, '(?m)^\s*exit 14\s*$')).Count -eq 1)
+Check "the setup gate is evaluated before the role checkpoint" ($suSrc -match '(?s)if \(\$SetupState\.Pending -and \$Command -notin @\(''setup'', ''doctor'', ''status'', ''models''\)\).{0,1200}if \(-not \$RoleCheckpoint\.Ok -and')
+
+# doctor warns and still passes, on a real fresh install.
+$suInstTarget = Join-Path $FixtureRoot "su-install-fresh"
+New-Item -ItemType Directory -Path $suInstTarget -Force | Out-Null
+& git -C $suInstTarget init -q 2>&1 | Out-Null
+$suInstOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suInstTarget -NoRolesWindow 2>&1 | Out-String
+$suInstCode = $LASTEXITCODE
+$suInstRoles = Join-Path $suInstTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "a fresh install succeeds and is Setup: pending" (($suInstCode -eq 0) -and (([regex]::Matches((Get-Content -Raw -LiteralPath $suInstRoles), '(?m)^Setup: pending\r?$')).Count -eq 1))
+Check "a fresh install without a window says NOT CONFIGURED and names the command" (($suInstOut -match "Setup: NOT CONFIGURED") -and ($suInstOut -match "\.\\scripts\\handoff\.ps1 setup") -and ($suInstOut -match "exit 14"))
+$r = Invoke-Handoff -WorkDir $suInstTarget -Arguments @("doctor")
+Check "pending: doctor warns, never fails, and names the command" (($r.Code -eq 0) -and ($r.Out -match "WARN  Setup: NOT CONFIGURED") -and ($r.Out -match "Doctor result: PASS") -and ($r.Out -notmatch "FAIL  "))
+Check "pending: doctor gives no advice about a binding nobody chose" ($r.Out -notmatch "Advisory: Master and Reviewer")
+$r = Invoke-Handoff -WorkDir $suInstTarget -Arguments @("work")
+Check "a fresh install blocks work with exit 14" ($r.Code -eq 14)
+
+# --- setup: the rule, through the command ---
+$suCases = @(
+    @{ Name = "two players, Claude Code as Master"; Players = "Claude Code,Codex"; Master = "Claude Code"; M = "Claude Code"; I = "Claude Code"; R = "Codex"; Mode = "separate-tool" },
+    @{ Name = "two players, Codex as Master"; Players = "Claude Code,Codex"; Master = "Codex"; M = "Codex"; I = "Codex"; R = "Claude Code"; Mode = "separate-tool" },
+    @{ Name = "two players given in the other order"; Players = "Codex,Claude Code"; Master = "Claude Code"; M = "Claude Code"; I = "Claude Code"; R = "Codex"; Mode = "separate-tool" },
+    @{ Name = "aliases resolve to display names"; Players = "claude-code, codex window"; Master = "codex cli"; M = "Codex"; I = "Codex"; R = "Claude Code"; Mode = "separate-tool" },
+    @{ Name = "one player, Codex"; Players = "Codex"; Master = ""; M = "Codex"; I = "Codex"; R = "Codex"; Mode = "fresh-context" },
+    @{ Name = "one player, Claude Code, Master named"; Players = "Claude Code"; Master = "Claude Code"; M = "Claude Code"; I = "Claude Code"; R = "Claude Code"; Mode = "fresh-context" },
+    @{ Name = "a duplicated player collapses to one"; Players = "Codex,codex"; Master = ""; M = "Codex"; I = "Codex"; R = "Codex"; Mode = "fresh-context" }
+)
+foreach ($suCase in $suCases) {
+    $suCaseFx = New-SuFixture -Roles (New-SuRoles)
+    $suArgs = @("setup", "-Players", $suCase.Players)
+    if ($suCase.Master -ne "") { $suArgs += @("-Master", $suCase.Master) }
+    $r = Invoke-HandoffInput -WorkDir $suCaseFx -Arguments ($suArgs + @("-Yes"))
+    $suText = Get-SuFile -Dir $suCaseFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+    $suOk = ($r.Code -eq 0) -and ((Get-SuRow $suText "Master") -eq $suCase.M) -and ((Get-SuRow $suText "Implementer") -eq $suCase.I) -and ((Get-SuRow $suText "Reviewer") -eq $suCase.R) -and ($suText -match "(?m)^Review Independence: $($suCase.Mode)\r?$")
+    Check "setup: $($suCase.Name)" $suOk "code=$($r.Code) $($r.Out)"
+}
+
+$suRefusals = @(
+    @{ Name = "an unknown tool"; Args = @("setup", "-Players", "Claude Code,Gemini", "-Master", "Claude Code", "-Yes"); Want = "Unknown player 'Gemini'\. Known tools: Claude Code, Codex\." },
+    @{ Name = "a Master who is not a player"; Args = @("setup", "-Players", "Codex", "-Master", "Claude Code", "-Yes"); Want = "The Master must be one of the players" },
+    @{ Name = "an unknown Master"; Args = @("setup", "-Players", "Claude Code,Codex", "-Master", "Gemini", "-Yes"); Want = "Unknown Master 'Gemini'" },
+    @{ Name = "an empty list"; Args = @("setup", "-Players", " ", "-Yes"); Want = "Choose at least one player" },
+    @{ Name = "a list of commas"; Args = @("setup", "-Players", " , ", "-Yes"); Want = "Choose at least one player" },
+    @{ Name = "two players without a Master"; Args = @("setup", "-Players", "Claude Code,Codex", "-Yes"); Want = "With two players, choose the Master.*No Master is chosen for you" },
+    @{ Name = "-Master without -Players"; Args = @("setup", "-Master", "Codex", "-Yes"); Want = "-Master needs -Players" }
+)
+foreach ($suRef in $suRefusals) {
+    $suRefFx = New-SuFixture -Roles (New-SuRoles)
+    $suRefBefore = Get-SuHashes -Dir $suRefFx
+    $r = Invoke-HandoffInput -WorkDir $suRefFx -Arguments $suRef.Args
+    Check "setup refuses $($suRef.Name) and changes nothing" (($r.Code -eq 1) -and ($r.Out -match "setup: blocked") -and ($r.Out -match $suRef.Want) -and ($r.Out -match "Nothing was changed") -and ((Get-SuHashes -Dir $suRefFx) -eq $suRefBefore)) "code=$($r.Code) $($r.Out)"
+}
+
+# What is written, on the untouched install state.
+$suWriteFx = New-SuFixture -Roles (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md"))
+$r = Invoke-HandoffInput -WorkDir $suWriteFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+$suWritten = Get-SuFile -Dir $suWriteFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+$suWrittenHandoff = Get-SuFile -Dir $suWriteFx -Rel "AI_HANDOFF.md"
+Check "setup on the shipped file writes the three rows with display names" (($r.Code -eq 0) -and ($suWritten -match "(?m)^\| Master \| Codex \|\r?$") -and ($suWritten -match "(?m)^\| Implementer \| Codex \|\r?$") -and ($suWritten -match "(?m)^\| Reviewer \| Claude Code \|\r?$"))
+Check "setup writes one Review Independence line and one Setup: complete line, together" ((([regex]::Matches($suWritten, '(?mi)^\s*(?:[-*]\s+)?Review Independence\s*:')).Count -eq 1) -and (([regex]::Matches($suWritten, '(?mi)^\s*(?:[-*]\s+)?Setup\s*:')).Count -eq 1) -and ($suWritten -match '(?m)^Review Independence: separate-tool\r?\nSetup: complete\r?$'))
+Check "setup records a Role Swap History row decided by the user through setup" ($suWritten -match '(?m)^\| \d{4}-\d{2}-\d{2} \| Master=Codex, Reviewer=Codex, Implementer=Claude Code, Review Independence=separate-tool, Setup=pending \| Master=Codex, Reviewer=Claude Code, Implementer=Codex, Review Independence=separate-tool, Setup=complete \| User \(handoff\.ps1 setup\) \|\r?$')
+Check "setup keeps the rest of the shipped role file" (($suWritten -match "## Role Meanings") -and ($suWritten -match "## Invariant \(must always hold\)") -and ($suWritten -match "## Tooling Note"))
+Check "setup moves the install's Task Actors to the new binding" (($suWrittenHandoff -match "(?m)^- Implementer: Codex\r?$") -and ($suWrittenHandoff -match "(?m)^- Reviewer: Claude Code\r?$"))
+Check "setup leaves no temporary or backup file beside the role file" (@(Get-ChildItem -LiteralPath (Join-Path $suWriteFx ".ai/roles") -Force).Count -eq 1)
+Check "setup names what it changed and what it never does" (($r.Out -match "Changes:\s+\.ai/roles/ROLE_ASSIGNMENT\.md .*and AI_HANDOFF\.md Task Actors") -and ($r.Out -match "no turn is started") -and ($r.Out -match "setup: complete"))
+$r = Invoke-Handoff -WorkDir $suWriteFx -Arguments @("work")
+Check "work runs clean right after setup on a fresh install (two players)" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift") -and ($r.Out -notmatch "Setup required") -and ($r.Out -match "paste the printed Master prompt into Codex"))
+$r = Invoke-HandoffInput -WorkDir $suWriteFx -Arguments @("setup", "-Players", "Codex,Claude Code", "-Master", "codex", "-Yes")
+Check "setup with the same choice again changes nothing" (($r.Code -eq 0) -and ($r.Out -match "Nothing to change"))
+
+$suSoloFx = New-SuFixture -Roles (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md"))
+$r = Invoke-HandoffInput -WorkDir $suSoloFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "one player: the plan says single-vendor review is weaker" (($r.Code -eq 0) -and ($r.Out -match "one vendor reviewing its own vendor's work misses what a second vendor would catch") -and ($r.Out -match "Two tools remain the recommended setup"))
+$suSoloText = Get-SuFile -Dir $suSoloFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "one player: every role is that tool under fresh-context" (((Get-SuRow $suSoloText "Master") -eq "Codex") -and ((Get-SuRow $suSoloText "Reviewer") -eq "Codex") -and ((Get-SuRow $suSoloText "Implementer") -eq "Codex") -and ($suSoloText -match '(?m)^Review Independence: fresh-context\r?\nSetup: complete\r?$'))
+$r = Invoke-Handoff -WorkDir $suSoloFx -Arguments @("work")
+Check "work runs clean right after setup on a fresh install (one player)" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift") -and ($r.Out -match "Single-vendor review: Codex"))
+
+# A role file with no Review Independence line gets one, under the binding.
+$suNoModeFx = New-SuFixture -Roles (New-SuRoles -ModeLine "")
+$r = Invoke-HandoffInput -WorkDir $suNoModeFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Claude Code", "-Yes")
+Check "setup adds a missing Review Independence line above the Setup line" (($r.Code -eq 0) -and ((Get-SuFile -Dir $suNoModeFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -match '(?m)^Review Independence: separate-tool\r?\nSetup: complete\r?$'))
+
+# Cancel, and no choice possible: nothing changes.
+$suCancelFx = New-SuFixture -Roles (New-SuRoles)
+$suCancelBefore = Get-SuHashes -Dir $suCancelFx
+$r = Invoke-HandoffInput -WorkDir $suCancelFx -Arguments @("setup", "-Players", "Codex") -InputText "no"
+Check "cancelling the confirmation exits 2 and changes nothing" (($r.Code -eq 2) -and ($r.Out -match "Cancelled") -and ($r.Out -match "Setup is still pending") -and ((Get-SuHashes -Dir $suCancelFx) -eq $suCancelBefore))
+$suTempBefore = @(Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter "handoff-setup-*" -ErrorAction SilentlyContinue).Count
+$r = Invoke-HandoffInput -WorkDir $suCancelFx -Arguments @("setup")
+Check "no flags and nobody to ask: setup prints the flag form and exits 1" (($r.Code -eq 1) -and ($r.Out -match "pass the choice as flags") -and ($r.Out -match 'setup -Players "Claude Code,Codex" -Master "Claude Code" -Yes') -and ((Get-SuHashes -Dir $suCancelFx) -eq $suCancelBefore))
+$r = Invoke-HandoffInput -WorkDir $suCancelFx -Arguments @("setup", "-Window")
+Check "-Window with windows switched off opens nothing and falls back to the flag form" (($r.Code -eq 1) -and ($r.Out -match "pass the choice as flags") -and ($r.Out -notmatch "a window is open"))
+$suTempAfter = @(Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter "handoff-setup-*" -ErrorAction SilentlyContinue).Count
+Check "no picker script was even written while windows are switched off" ($suTempAfter -eq $suTempBefore)
+
+# Guards: a running turn, and a configured project mid-task.
+$suLiveFx = New-SuFixture -Roles (New-SuRoles)
+$suLiveBefore = Get-SuHashes -Dir $suLiveFx
+$suSleeper = Start-Process -FilePath $PwshExe -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 45") -WindowStyle Hidden -PassThru
+try {
+    Start-Sleep -Milliseconds 500
+    $suMarker = [ordered]@{ processId = $suSleeper.Id; startTicks = $suSleeper.StartTime.ToUniversalTime().Ticks; command = "cycle"; startedUtc = "2026-11-19T10:00:00Z"; log = "HANDOFF_BACKGROUND.log"; finishedUtc = $null; exitCode = $null }
+    [System.IO.File]::WriteAllText((Join-Path $suLiveFx "HANDOFF_BACKGROUND.json"), ($suMarker | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    $r = Invoke-HandoffInput -WorkDir $suLiveFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+    Check "setup is refused while a turn is running" (($r.Code -eq 1) -and ($r.Out -match "A turn is running now") -and ((Get-SuHashes -Dir $suLiveFx) -eq $suLiveBefore))
+    if (Get-Command bash -ErrorAction SilentlyContinue) {
+        $suShLive = Invoke-RiIn -Dir $suLiveFx -Block { & (Get-Command bash).Source ((Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/') setup --players Codex --yes; "exit=$LASTEXITCODE" }
+        Check "handoff.sh setup is refused while a run marker says a turn is running" (($suShLive -match "exit=1") -and ($suShLive -match "A turn may be running now") -and ((Get-SuHashes -Dir $suLiveFx) -eq $suLiveBefore)) $suShLive
+    }
+} finally {
+    try { Stop-Process -Id $suSleeper.Id -Force -ErrorAction SilentlyContinue } catch { }
+}
+$suMidFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete") -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "work in flight")
+$suMidBefore = Get-SuHashes -Dir $suMidFx
+$r = Invoke-HandoffInput -WorkDir $suMidFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "a reconfiguration is refused mid-task and points to roles -SetRole" (($r.Code -eq 1) -and ($r.Out -match "allowed only at a finished task") -and ($r.Out -match "roles -SetRole") -and ((Get-SuHashes -Dir $suMidFx) -eq $suMidBefore))
+
+# A reconfiguration at a finished task keeps that task's Task Actors: they are its record.
+$suDoneFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete" -Master "Codex" -Reviewer "Codex" -Implementer "Claude Code") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+$suDoneHandoffBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suDoneFx "AI_HANDOFF.md")).Hash
+$r = Invoke-HandoffInput -WorkDir $suDoneFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+Check "a reconfiguration at a finished task is allowed" (($r.Code -eq 0) -and ($r.Out -match "Reconfiguring the players and the Master") -and ((Get-SuRow (Get-SuFile -Dir $suDoneFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md") "Implementer") -eq "Codex"))
+Check "a finished task's Task Actors are never rewritten" (((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suDoneFx "AI_HANDOFF.md")).Hash -eq $suDoneHandoffBefore) -and ($r.Out -notmatch "and AI_HANDOFF\.md Task Actors"))
+Check "the reconfiguration says how to open the next task, and only that" (($r.Out -match "(?s)keeps its Task Actors.{0,300}Next: \.\\scripts\\handoff\.ps1 start") -and ($r.Out -notmatch "Next: \.\\scripts\\handoff\.ps1 work"))
+$r = Invoke-Handoff -WorkDir $suDoneFx -Arguments @("work")
+Check "after it, the finished record is reported as drift, for start to retire" (($r.Code -eq 12) -and ($r.Out -match "Role drift"))
+
+# The roles command on the untouched install state: Task Actors now follow the binding.
+$suSwapFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete" -Master "Codex" -Reviewer "Codex" -Implementer "Claude Code")
+$r = Invoke-Handoff -WorkDir $suSwapFx -Arguments @("roles", "-SetRole", "Implementer", "-SetTool", "Codex", "-Yes")
+$suSwapHandoff = Get-SuFile -Dir $suSwapFx -Rel "AI_HANDOFF.md"
+Check "roles -SetRole on a fresh install moves Task Actors with the binding" (($r.Code -eq 0) -and ($suSwapHandoff -match "(?m)^- Implementer: Codex\r?$") -and ($suSwapHandoff -match "(?m)^- Reviewer: Claude Code\r?$") -and ($r.Out -match "no task has started yet"))
+$r = Invoke-Handoff -WorkDir $suSwapFx -Arguments @("work")
+Check "after a swap on a fresh install, work runs without role drift" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift"))
+
+# --- Invalid and duplicated Setup lines: fail closed, repairable only by setup ---
+$suBadFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: maybe")
+$r = Invoke-Handoff -WorkDir $suBadFx -Arguments @("work")
+Check "an unknown Setup value blocks through the role checkpoint (exit 12)" (($r.Code -eq 12) -and ($r.Out -match "Invalid setup line: ROLE_ASSIGNMENT\.md declares 'Setup: maybe'\. The value must be pending or complete\.") -and ($r.Out -match "Repair it by choosing the players and the Master again: \.\\scripts\\handoff\.ps1 setup"))
+$r = Invoke-Handoff -WorkDir $suBadFx -Arguments @("doctor")
+Check "doctor fails the role checkpoint on an invalid Setup line" ($r.Out -match "FAIL  Role checkpoint")
+$suBadBefore = Get-SuHashes -Dir $suBadFx
+$r = Invoke-Handoff -WorkDir $suBadFx -Arguments @("roles", "-ReviewIndependence", "fresh-context", "-Yes")
+Check "roles cannot repair a broken Setup line" (($r.Code -eq 12) -and ((Get-SuHashes -Dir $suBadFx) -eq $suBadBefore))
+$r = Invoke-HandoffInput -WorkDir $suBadFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Claude Code", "-Yes")
+$suBadText = Get-SuFile -Dir $suBadFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+Check "setup repairs a broken Setup line when it is the only problem" (($r.Code -eq 0) -and ($r.Out -match "repairing the Setup line") -and (([regex]::Matches($suBadText, '(?mi)^\s*(?:[-*]\s+)?Setup\s*:')).Count -eq 1) -and ($suBadText -match '(?m)^Setup: complete\r?$') -and ($suBadText -match 'Setup=invalid \|'))
+$suDupFx = New-SuFixture -Roles ((New-SuRoles -SetupLine "Setup: complete") + "`nSetup: complete`n")
+$r = Invoke-Handoff -WorkDir $suDupFx -Arguments @("next")
+Check "a duplicated Setup line fails closed, even when both copies agree" (($r.Code -eq 12) -and ($r.Out -match "declares 'Setup:' 2 times"))
+$r = Invoke-HandoffInput -WorkDir $suDupFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "setup repairs a duplicated Setup line to one" (($r.Code -eq 0) -and (([regex]::Matches((Get-SuFile -Dir $suDupFx -Rel ".ai/roles/ROLE_ASSIGNMENT.md"), '(?m)^Setup:')).Count -eq 1))
+$suBadTwoFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: maybe" -Reviewer "Gemini")
+$suBadTwoBefore = Get-SuHashes -Dir $suBadTwoFx
+$r = Invoke-HandoffInput -WorkDir $suBadTwoFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "setup does not repair a Setup line that is not the only problem" (($r.Code -eq 12) -and ($r.Out -match "Unrecognized tool identity 'Gemini'") -and ((Get-SuHashes -Dir $suBadTwoFx) -eq $suBadTwoBefore))
+$suBadDoneFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: maybe") -Handoff (New-Handoff -State "READY_FOR_REVIEW" -WaitingFor "Reviewer" -CurrentTask "in flight")
+$suBadDoneBefore = Get-SuHashes -Dir $suBadDoneFx
+$r = Invoke-HandoffInput -WorkDir $suBadDoneFx -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "a Setup-line repair is still refused mid-task" (($r.Code -eq 1) -and ($r.Out -match "allowed only at a finished task") -and ((Get-SuHashes -Dir $suBadDoneFx) -eq $suBadDoneBefore))
+
+# --- The picker window: generated, parsed, never shown ---
+$suParseTokens = $null
+$suParseErrors = $null
+$suAst = [System.Management.Automation.Language.Parser]::ParseFile($HandoffScript, [ref]$suParseTokens, [ref]$suParseErrors)
+$suWanted = @("ConvertTo-PowerShellLiteral", "New-SetupWindowScript", "Test-SetupWindowPossible", "New-RolesWindowScript", "Read-SetupWindowResult",
+    "Get-SetupChoiceTable", "Resolve-SetupChoice", "Get-SetupTools", "Get-SetupRuleShort", "Resolve-ToolIdentity", "Get-AdapterProfile", "Test-FreshContextReview")
+$suFns = @($suAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($suWanted -contains $n.Name) }, $true))
+Check "the window generators, the window decision and the result reader are separate functions" ($suFns.Count -eq $suWanted.Count)
+# The registry the rules read, taken from handoff.ps1 itself.
+$suVars = @($suAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.AssignmentStatementAst]) -and ($n.Left.Extent.Text -in @('$CanonicalToolRegistry', '$ToolIdentitySentinels')) -and ($n.Parent.Parent -is [System.Management.Automation.Language.ScriptBlockAst]) }, $true))
+. ([scriptblock]::Create(((@($suVars) + @($suFns)) | ForEach-Object { $_.Extent.Text }) -join "`n`n"))
+$suTools = @(
+    @{ Canonical = "claude-code"; Display = "Claude Code"; Detected = $true },
+    @{ Canonical = "codex"; Display = "Codex"; Detected = $false }
+)
+# The real table: every combination, computed by Resolve-SetupChoice, as Invoke-SetupWindow builds it.
+$suTable = Get-SetupChoiceTable -Tools $suTools
+Check "the real choice table covers every combination of players and Master" (@($suTable.Keys).Count -eq 7)
+Check "the real table: two players with no Master is not a valid choice" ((-not $suTable["3|"].Ok) -and ($suTable["3|"].Error -match "No Master is chosen for you"))
+Check "the real table: the Master's tool implements and the other reviews" (($suTable["3|codex"].Ok) -and ($suTable["3|codex"].Implementer -eq "Codex") -and ($suTable["3|codex"].Reviewer -eq "Claude Code") -and ($suTable["3|claude-code"].Reviewer -eq "Codex"))
+Check "the real table: one player reviews its own work, said to be weaker" (($suTable["1|"].Ok) -and ($suTable["1|"].Reviewer -eq "Claude Code") -and ($suTable["1|"].Rule -match "Weaker than two vendors") -and ($suTable["2|codex"].Implementer -eq "Codex"))
+foreach ($suNone in @($false, $true)) {
+    $suWindowText = New-SetupWindowScript -ResultPath (Join-Path $FixtureRoot "it's a result.json") -Project "proj 'quoted' `$x" -Tools $suTools -Table $suTable -NoneDetected $suNone
+    $suWindowPath = Join-Path $FixtureRoot ("setup-window-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    [System.IO.File]::WriteAllText($suWindowPath, $suWindowText, (New-Object System.Text.UTF8Encoding($true)))
+    $suWinTokens = $null
+    $suWinErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($suWindowPath, [ref]$suWinTokens, [ref]$suWinErrors)
+    Check "the generated picker script parses with zero errors (none detected: $suNone)" ($suWinErrors.Count -eq 0) (($suWinErrors | ForEach-Object { $_.Message }) -join "; ")
+}
+Check "the picker carries every result it shows, computed by the parent" (($suWindowText -match [regex]::Escape("`$choices['3|codex'] = @{ Ok = `$True; Implementer = 'Codex'; Reviewer = 'Claude Code'")) -and ($suWindowText -match [regex]::Escape("`$choices['3|'] = @{ Ok = `$False")) -and ($suWindowText -match "two tools remain the recommended setup"))
+Check "the picker preselects no Master and keeps Save disabled until a valid choice" (($suWindowText -match [regex]::Escape("`$radio.Checked = `$false")) -and ($suWindowText -match [regex]::Escape("`$save.Enabled = `$false")) -and ($suWindowText -match "No Master is chosen for you"))
+Check "the picker collapses the Master to the only player" ($suWindowText -match [regex]::Escape("if (`$count -eq 1) { for (`$i = 0; `$i -lt `$tools.Count; `$i++) { `$radios[`$i].Checked = `$boxes[`$i].Checked } }"))
+Check "the picker writes only its result file, never a project file" ((@([regex]::Matches($suWindowText, 'WriteAllText\(')).Count -eq @([regex]::Matches($suWindowText, 'WriteAllText\(\$resultPath,')).Count) -and ($suWindowText -notmatch "ROLE_ASSIGNMENT") -and ($suWindowText -notmatch "AI_HANDOFF"))
+Check "the picker says so when no tool was found, and ticks both" ($suWindowText -match "Neither tool was found on this machine, so both are ticked")
+Check "the window decision: a person at a Windows console gets a window" (Test-SetupWindowPossible -ExplicitWindow $false -IsWindows $true -NoWindowEnv $false -InputRedirected $false -IsAgent $false)
+Check "the window decision: never with HANDOFF_BACKGROUND_NO_WINDOW, even with -Window" ((-not (Test-SetupWindowPossible -ExplicitWindow $false -IsWindows $true -NoWindowEnv $true -InputRedirected $false -IsAgent $false)) -and (-not (Test-SetupWindowPossible -ExplicitWindow $true -IsWindows $true -NoWindowEnv $true -InputRedirected $false -IsAgent $false)))
+Check "the window decision: never with redirected input or from an agent, unless -Window" ((-not (Test-SetupWindowPossible -ExplicitWindow $false -IsWindows $true -NoWindowEnv $false -InputRedirected $true -IsAgent $false)) -and (-not (Test-SetupWindowPossible -ExplicitWindow $false -IsWindows $true -NoWindowEnv $false -InputRedirected $false -IsAgent $true)) -and (Test-SetupWindowPossible -ExplicitWindow $true -IsWindows $true -NoWindowEnv $false -InputRedirected $true -IsAgent $true))
+Check "the window decision: never off Windows" (-not (Test-SetupWindowPossible -ExplicitWindow $true -IsWindows $false -NoWindowEnv $false -InputRedirected $false -IsAgent $false))
+Check "the command feeds the real facts into the window decision" ($suSrc -match '(?s)\$windowPossible = Test-SetupWindowPossible -ExplicitWindow \(\[bool\]\$Window\) -IsWindows \(\$env:OS -eq "Windows_NT"\) -NoWindowEnv \(-not \[string\]::IsNullOrEmpty\(\$env:HANDOFF_BACKGROUND_NO_WINDOW\)\) -InputRedirected \$inputRedirected -IsAgent \$isAgent')
+Check "the window's table comes from Resolve-SetupChoice, not from a second copy of the rules" (($suSrc -match '(?s)function Get-SetupChoiceTable.{0,1500}Resolve-SetupChoice -Players') -and ($suSrc -match '\$table = Get-SetupChoiceTable -Tools \$tools'))
+Check "the Save choice goes through the same apply path as the flags" ($suSrc -match '(?s)\$chosenPlayers = \$picked\.Players.{0,400}\$confirmed = \$true.{0,2500}\$choice = Resolve-SetupChoice -Players \$chosenPlayers -Master \$chosenMaster.{0,300}Invoke-SetupApply -Choice \$choice -Confirmed \$confirmed')
+Check "detection reuses what doctor checks, no second detector" (($suSrc -match '\$codexFound = \[bool\]\(Resolve-CodexCli\)\.Ok') -and ($suSrc -match '\$claudeFound = \(\$null -ne \(Get-NpxCommand\)\)') -and ($suSrc -match '\$npxCmd = Get-NpxCommand'))
+Check "the indicator has a setup button that runs setup -Window and is locked while a turn runs" (($suSrc -match "handoff setup -Window") -and ($suSrc -match [regex]::Escape('`$setupButton.Enabled = `$false')))
+$suIndicatorParseOk = $true
+foreach ($suFile in @($HandoffScript, (Join-Path $RepoRoot "install.ps1"), (Join-Path $RepoRoot "bootstrap.ps1"), (Join-Path $RepoRoot "scripts/install.ps1"), (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/scripts/setup.ps1"))) {
+    $suT = $null; $suE = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($suFile, [ref]$suT, [ref]$suE)
+    if ($suE.Count -gt 0) { $suIndicatorParseOk = $false }
+}
+Check "every changed PowerShell script parses with zero errors" $suIndicatorParseOk
+
+# --- Installers ---
+$suUpTarget = Join-Path $FixtureRoot "su-upgrade-v317"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suUpTarget -NoRolesWindow 2>&1
+$suUpRoles = Join-Path $suUpTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+[System.IO.File]::WriteAllText($suUpRoles, ((Get-Content -Raw -LiteralPath $suUpRoles) -replace '(?m)^Setup: pending\r?\n', ''), (New-Object System.Text.UTF8Encoding($false)))
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suUpTarget -Force -NoRolesWindow 2>&1
+$suUpText = Get-Content -Raw -LiteralPath $suUpRoles
+Check "an upgrade of a v3.17.0-shaped install gains no Setup line" (($LASTEXITCODE -eq 0) -and ($suUpText -notmatch '(?mi)^\s*Setup\s*:'))
+$r = Invoke-Handoff -WorkDir $suUpTarget -Arguments @("work")
+Check "and stays configured: work runs" (($r.Code -eq 0) -and ($r.Out -notmatch "Setup required"))
+$suKeepTarget = Join-Path $FixtureRoot "su-upgrade-pending"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suKeepTarget -NoRolesWindow 2>&1
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suKeepTarget -Force -NoRolesWindow 2>&1
+Check "an upgrade of a pending install stays pending, once" (([regex]::Matches((Get-Content -Raw -LiteralPath (Join-Path $suKeepTarget ".ai/roles/ROLE_ASSIGNMENT.md")), '(?m)^Setup: pending\r?$')).Count -eq 1)
+
+$suFlagTarget = Join-Path $FixtureRoot "su-install-flags"
+New-Item -ItemType Directory -Path $suFlagTarget -Force | Out-Null
+& git -C $suFlagTarget init -q 2>&1 | Out-Null
+$suFlagOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suFlagTarget -NoRolesWindow -Players "Claude Code,Codex" -Master "Codex" 2>&1 | Out-String
+$suFlagCode = $LASTEXITCODE
+$suFlagText = Get-Content -Raw -LiteralPath (Join-Path $suFlagTarget ".ai/roles/ROLE_ASSIGNMENT.md")
+Check "install.ps1 -Players -Master configures the project in the same run" (($suFlagCode -eq 0) -and ($suFlagText -match '(?m)^Setup: complete\r?$') -and ((Get-SuRow $suFlagText "Master") -eq "Codex") -and ((Get-SuRow $suFlagText "Reviewer") -eq "Claude Code") -and ($suFlagOut -match "setup: complete")) $suFlagOut
+$r = Invoke-Handoff -WorkDir $suFlagTarget -Arguments @("work")
+Check "a scripted install is ready to work" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift"))
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suFlagTarget -Force -NoRolesWindow 2>&1
+Check "an upgrade of a configured install stays complete" (([regex]::Matches((Get-Content -Raw -LiteralPath (Join-Path $suFlagTarget ".ai/roles/ROLE_ASSIGNMENT.md")), '(?m)^Setup: complete\r?$')).Count -eq 1)
+$suFlagBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suFlagTarget ".ai/roles/ROLE_ASSIGNMENT.md")).Hash
+$suIgnoredOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suFlagTarget -Force -NoRolesWindow -Players "Codex" 2>&1 | Out-String
+Check "-Players on a configured project is ignored, with the way to change it" (($LASTEXITCODE -eq 0) -and ($suIgnoredOut -match "-Players ignored") -and ($suIgnoredOut -match "handoff\.ps1 setup") -and ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suFlagTarget ".ai/roles/ROLE_ASSIGNMENT.md")).Hash -eq $suFlagBefore))
+
+$suBadFlagTarget = Join-Path $FixtureRoot "su-install-badflag"
+$suPrevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $suBadFlagOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suBadFlagTarget -NoRolesWindow -Players "Gemini" 2>&1 | Out-String
+    $suBadFlagCode = $LASTEXITCODE
+    $suNoMasterOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project (Join-Path $FixtureRoot "su-install-nomaster") -NoRolesWindow -Players "Claude Code,Codex" 2>&1 | Out-String
+    $suNoMasterCode = $LASTEXITCODE
+    $suMasterOnlyOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project (Join-Path $FixtureRoot "su-install-masteronly") -NoRolesWindow -Master "Codex" 2>&1 | Out-String
+    $suMasterOnlyCode = $LASTEXITCODE
+} finally { $ErrorActionPreference = $suPrevEap }
+Check "a scripted install with an unknown player fails and says why" (($suBadFlagCode -eq 1) -and ($suBadFlagOut -match "Unknown player 'Gemini'") -and ($suBadFlagOut -match "NOT CONFIGURED") -and ((Get-Content -Raw -LiteralPath (Join-Path $suBadFlagTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: pending\r?$'))
+Check "a scripted install with two players and no Master fails and says why" (($suNoMasterCode -eq 1) -and ($suNoMasterOut -match "No Master is chosen for you"))
+Check "a scripted install with -Master alone fails and says why, before anything is written" (($suMasterOnlyCode -eq 1) -and ($suMasterOnlyOut -match "-Master needs -Players") -and -not (Test-Path (Join-Path $FixtureRoot "su-install-masteronly/.ai")))
+
+$suInvalidUpTarget = Join-Path $FixtureRoot "su-upgrade-invalid"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suInvalidUpTarget -NoRolesWindow 2>&1
+$suInvalidRoles = Join-Path $suInvalidUpTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+[System.IO.File]::WriteAllText($suInvalidRoles, ((Get-Content -Raw -LiteralPath $suInvalidRoles) -replace 'Setup: pending', 'Setup: someday'), (New-Object System.Text.UTF8Encoding($false)))
+$suInvalidBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $suInvalidRoles).Hash
+$ErrorActionPreference = 'Continue'
+try {
+    $suInvalidOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $suInvalidUpTarget -Force -NoRolesWindow 2>&1 | Out-String
+    $suInvalidCode = $LASTEXITCODE
+} finally { $ErrorActionPreference = $suPrevEap }
+Check "an upgrade refuses an invalid installed Setup line and changes nothing" (($suInvalidCode -ne 0) -and ($suInvalidOut -match "'Setup:' line must appear once") -and ((Get-FileHash -Algorithm SHA256 -LiteralPath $suInvalidRoles).Hash -eq $suInvalidBefore))
+
+$suBootTarget = Join-Path $FixtureRoot "su-bootstrap-flags"
+$suBootOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "bootstrap.ps1") -Project $suBootTarget -PackageRoot $RepoRoot -Players "Codex" 2>&1 | Out-String
+Check "bootstrap.ps1 forwards -Players to the installer" (($LASTEXITCODE -eq 0) -and ((Get-Content -Raw -LiteralPath (Join-Path $suBootTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: complete\r?$')) $suBootOut
+$suBootSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "bootstrap.ps1")
+Check "bootstrap.ps1 defaults to v3.18.0 and forwards -Master and -NoSetupWindow" (($suBootSrc -match '\[string\]\$Version = "v3\.18\.0"') -and ($suBootSrc -match '"-Master", \$Master') -and ($suBootSrc -match '"-NoSetupWindow"'))
+$suWrapTarget = Join-Path $FixtureRoot "su-wrapper-flags"
+$suWrapOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts/install.ps1") -TargetPath $suWrapTarget -NoRolesWindow -Players "Claude Code,Codex" -Master "Claude Code" 2>&1 | Out-String
+Check "scripts/install.ps1 forwards -Players and -Master" (($LASTEXITCODE -eq 0) -and ((Get-SuRow (Get-Content -Raw -LiteralPath (Join-Path $suWrapTarget ".ai/roles/ROLE_ASSIGNMENT.md")) "Master") -eq "Claude Code")) $suWrapOut
+$suInstallSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "install.ps1")
+Check "install.ps1 decides fresh or existing before anything is copied" ($suInstallSrc -match '(?s)\$isExistingInstall = Test-Path -LiteralPath \$installedRolePath.{0,200}if \(\$Force -and \$isExistingInstall\)')
+Check "install.ps1 opens the picker only when a person can use it" ($suInstallSrc -match '\$windowPossible = \(\$env:OS -eq "Windows_NT"\) -and \(-not \[System\.Console\]::IsInputRedirected\) -and \(-not \$NoSetupWindow\) -and \[string\]::IsNullOrEmpty\(\$env:HANDOFF_BACKGROUND_NO_WINDOW\) -and \(-not \$agentEnv\)')
+
+# The skill package: doctor still passes on a pending install, and setup says what is pending.
+Check "bundled Skill setup reports a pending setup and the command, without choosing" (($standaloneSetupOut -match "Setup: NOT CONFIGURED") -and ($standaloneSetupOut -match "Ask the user which tools work on this project") -and ((Get-Content -Raw -LiteralPath (Join-Path $standaloneTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: pending\r?$'))
+$suSkill = Get-Content -Raw -Path (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/SKILL.md")
+Check "SKILL.md tells an installing agent to ask, never to choose or edit the line" (($suSkill -match "ASK the user which tools") -and ($suSkill -match "Never choose for the user, and never edit the Setup line by hand"))
+$suTemplateRoles = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md")
+Check "the shipped role file carries Setup: pending once, next to Review Independence" ((([regex]::Matches($suTemplateRoles, '(?mi)^\s*(?:[-*]\s+)?Setup\s*:')).Count -eq 1) -and ($suTemplateRoles -match '(?m)^Review Independence: separate-tool\r?\nSetup: pending\r?$') -and ($suTemplateRoles -match "- ``Setup:`` \(since v3\.18\.0\)"))
+Check "the repository's own role file has no Setup line, and keeps working" ((Get-Content -Raw -Path (Join-Path $RepoRoot ".ai/roles/ROLE_ASSIGNMENT.md")) -notmatch '(?mi)^\s*(?:[-*]\s+)?Setup\s*:')
+
+# --- Bash: the gate, setup, the installer, and the unknown-tool fix, in parity ---
+$suBash = Get-Command bash -ErrorAction SilentlyContinue
+# Native stderr must not become a terminating error in this section.
+$suBashEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+if ($null -eq $suBash) {
+    Write-Host "  SKIP  setup parity with handoff.sh: no bash interpreter on this machine"
+} else {
+    $suSh = (Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/'
+    function Invoke-SuSh { param([string]$Dir, [string[]]$ShArgs) return (Invoke-RiIn -Dir $Dir -Block { $null | & $suBash.Source $suSh @ShArgs; "exit=$LASTEXITCODE" }) }
+    $suShPend = New-SuFixture -Roles (New-SuRoles)
+    $suShBefore = Get-SuHashes -Dir $suShPend
+    $suShMisses = @()
+    foreach ($suShCmd in @(@("next"), @("start", "x"), @("commit-check"), @("cycle"), @("doctor"), @())) {
+        $suOut = Invoke-SuSh -Dir $suShPend -ShArgs $suShCmd
+        if (-not (($suOut -match "exit=14") -and ($suOut -match "Setup required: this project has not chosen its players and its Master yet\.") -and ($suOut -match "bash scripts/handoff\.sh setup --players"))) { $suShMisses += ($suShCmd -join ' ') }
+    }
+    Check "handoff.sh: pending stops every command but status and setup with exit 14" (($suShMisses.Count -eq 0) -and ((Get-SuHashes -Dir $suShPend) -eq $suShBefore)) ($suShMisses -join "; ")
+    $suOut = Invoke-SuSh -Dir $suShPend -ShArgs @("status")
+    Check "handoff.sh: pending status says NOT CONFIGURED and hides the template binding" (($suOut -match "exit=0") -and ($suOut -match "Setup:\s+NOT CONFIGURED") -and ($suOut -notmatch "Roles:\s+Master="))
+    $suOut = Invoke-SuSh -Dir $suShPend -ShArgs @("adapters")
+    # Second review: adapters showed the template binding as if chosen; it is gated now, as in handoff.ps1.
+    Check "handoff.sh: adapters is gated while pending, as in handoff.ps1" (($suOut -match "exit=14") -and ($suOut -notmatch "Role:\s+Master"))
+    $suOut = Invoke-SuSh -Dir $suShPend -ShArgs @("setup")
+    Check "handoff.sh: setup without flags prints the flag form and changes nothing" (($suOut -match "exit=1") -and ($suOut -match 'setup --players "Claude Code,Codex" --master "Claude Code" --yes') -and ((Get-SuHashes -Dir $suShPend) -eq $suShBefore))
+    foreach ($suShRef in @(
+        @{ Args = @("setup", "--players", "Gemini", "--yes"); Want = "Unknown player 'Gemini'" },
+        @{ Args = @("setup", "--players", "Codex", "--master", "Claude Code", "--yes"); Want = "The Master must be one of the players" },
+        @{ Args = @("setup", "--players", "Claude Code,Codex", "--yes"); Want = "No Master is chosen for you" },
+        @{ Args = @("setup", "--players", " ", "--yes"); Want = "Choose at least one player" },
+        @{ Args = @("setup", "--master", "Codex"); Want = "--master needs --players" },
+        @{ Args = @("setup", "--players"); Want = "--players needs a value" },
+        @{ Args = @("setup", "--players", "Codex", "--sideways"); Want = "unknown setup option" }
+    )) {
+        $suOut = Invoke-SuSh -Dir $suShPend -ShArgs $suShRef.Args
+        Check "handoff.sh setup refuses: $($suShRef.Want)" (($suOut -match "exit=1") -and ($suOut -match [regex]::Escape($suShRef.Want)) -and ((Get-SuHashes -Dir $suShPend) -eq $suShBefore)) $suOut
+    }
+    $suOut = Invoke-SuSh -Dir $suShPend -ShArgs @("setup", "--players", "Codex")
+    Check "handoff.sh: no --yes and nothing on input cancels with exit 2" (($suOut -match "exit=2") -and ((Get-SuHashes -Dir $suShPend) -eq $suShBefore))
+
+    # The same choice through both shells writes the same file, apart from the decider.
+    $suPsTwin = New-SuFixture -Roles (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md"))
+    $suShTwin = New-SuFixture -Roles (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md"))
+    $null = Invoke-HandoffInput -WorkDir $suPsTwin -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Claude Code", "-Yes")
+    $suOut = Invoke-SuSh -Dir $suShTwin -ShArgs @("setup", "--players", "claude code, Codex", "--master", "claude-code", "--yes")
+    $suNorm = { param($t) (($t -replace "`r", "") -replace 'User \(handoff\.(ps1|sh) setup\)', 'User (setup)').TrimEnd() }
+    Check "handoff.sh setup writes the same role file as handoff.ps1 setup" (($suOut -match "exit=0") -and ((& $suNorm (Get-SuFile -Dir $suShTwin -Rel ".ai/roles/ROLE_ASSIGNMENT.md")) -eq (& $suNorm (Get-SuFile -Dir $suPsTwin -Rel ".ai/roles/ROLE_ASSIGNMENT.md")))) $suOut
+    Check "handoff.sh setup records its own name as the decider" ((Get-SuFile -Dir $suShTwin -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -match 'Setup=complete \| User \(handoff\.sh setup\) \|')
+    Check "handoff.sh setup moves the install's Task Actors as handoff.ps1 does" (((Get-SuFile -Dir $suShTwin -Rel "AI_HANDOFF.md") -match "(?m)^- Implementer: Claude Code\r?$") -and ((Get-SuFile -Dir $suShTwin -Rel "AI_HANDOFF.md") -match "(?m)^- Reviewer: Codex\r?$"))
+    $r = Invoke-Handoff -WorkDir $suShTwin -Arguments @("work")
+    Check "a project configured from Bash runs clean in PowerShell" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift"))
+    $suOut = Invoke-SuSh -Dir $suShTwin -ShArgs @("next")
+    Check "and in Bash" ($suOut -match "exit=0")
+    $suShSolo = New-SuFixture -Roles (New-SuRoles)
+    $suOut = Invoke-SuSh -Dir $suShSolo -ShArgs @("setup", "--players", "Codex", "--yes")
+    $suShSoloText = Get-SuFile -Dir $suShSolo -Rel ".ai/roles/ROLE_ASSIGNMENT.md"
+    Check "handoff.sh setup with one player writes fresh-context and says it is weaker" (($suOut -match "exit=0") -and ($suOut -match "Two tools remain the recommended setup") -and ((Get-SuRow $suShSoloText "Reviewer") -eq "Codex") -and ($suShSoloText -match '(?m)^Review Independence: fresh-context\r?\nSetup: complete\r?$'))
+    $suShNoHist = New-SuFixture -Roles (New-SuRoles)
+    $null = Invoke-SuSh -Dir $suShNoHist -ShArgs @("setup", "--players", "Codex", "--yes")
+    Check "handoff.sh setup creates the history table when the file has none" ((Get-SuFile -Dir $suShNoHist -Rel ".ai/roles/ROLE_ASSIGNMENT.md") -match '(?s)## Role Swap History\n\n\| Date \| Before \| After \| Decided by \|\n\|---\|---\|---\|---\|\n\| \d{4}-\d{2}-\d{2} \| Master=Codex')
+    $suShMid = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete") -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer")
+    $suShMidBefore = Get-SuHashes -Dir $suShMid
+    $suOut = Invoke-SuSh -Dir $suShMid -ShArgs @("setup", "--players", "Codex", "--yes")
+    Check "handoff.sh refuses a reconfiguration mid-task" (($suOut -match "exit=1") -and ($suOut -match "requires PowerShell: pwsh scripts/handoff\.ps1 setup") -and ((Get-SuHashes -Dir $suShMid) -eq $suShMidBefore))
+    $suShDone = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+    $suShDoneHandoff = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suShDone "AI_HANDOFF.md")).Hash
+    $suOut = Invoke-SuSh -Dir $suShDone -ShArgs @("setup", "--players", "Claude Code,Codex", "--master", "Codex", "--yes")
+    Check "handoff.sh leaves a reconfiguration after the first task to PowerShell, where start can retire the record" (($suOut -match "exit=1") -and ($suOut -match "requires PowerShell") -and ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $suShDone "AI_HANDOFF.md")).Hash -eq $suShDoneHandoff))
+
+    # The Setup line is read the same way by both shells, including at the edges.
+    $suParity = @(
+        @{ Name = "no line"; Roles = (New-SuRoles -SetupLine ""); Ps = 0; Sh = 0 },
+        @{ Name = "complete"; Roles = (New-SuRoles -SetupLine "Setup: complete"); Ps = 0; Sh = 0 },
+        @{ Name = "mis-cased complete"; Roles = (New-SuRoles -SetupLine "SETUP:   Complete  "); Ps = 0; Sh = 0 },
+        @{ Name = "pending"; Roles = (New-SuRoles); Ps = 14; Sh = 14 },
+        @{ Name = "bulleted pending with a non-breaking space"; Roles = (New-SuRoles -SetupLine ("* Setup:" + [string][char]0x00A0 + "pending")); Ps = 14; Sh = 14 },
+        @{ Name = "an unknown value"; Roles = (New-SuRoles -SetupLine "Setup: done"); Ps = 12; Sh = 12 },
+        @{ Name = "an empty value"; Roles = (New-SuRoles -SetupLine "Setup:"); Ps = 12; Sh = 12 },
+        @{ Name = "two lines"; Roles = ((New-SuRoles -SetupLine "Setup: pending") + "Setup: pending`n"); Ps = 12; Sh = 12 }
+    )
+    foreach ($suP in $suParity) {
+        $suPFx = New-SuFixture -Roles $suP.Roles
+        $r = Invoke-Handoff -WorkDir $suPFx -Arguments @("next")
+        $suOut = Invoke-SuSh -Dir $suPFx -ShArgs @("next")
+        Check "both shells read a Setup line with $($suP.Name) the same way" (($r.Code -eq $suP.Ps) -and ($suOut -match "exit=$($suP.Sh)\s*$")) "ps=$($r.Code) sh=$suOut"
+    }
+    $suBomFx = New-SuFixture -Roles (New-SuRoles)
+    [System.IO.File]::WriteAllBytes((Join-Path $suBomFx ".ai/roles/ROLE_ASSIGNMENT.md"), ([byte[]](0xEF, 0xBB, 0xBF) + (New-Object System.Text.UTF8Encoding($false)).GetBytes("Setup: pending`n| Master | Codex |`n| Reviewer | Codex |`n| Implementer | Claude Code |`n")))
+    $r = Invoke-Handoff -WorkDir $suBomFx -Arguments @("next")
+    $suOut = Invoke-SuSh -Dir $suBomFx -ShArgs @("next")
+    Check "both shells read a Setup line on line 1 after a BOM" (($r.Code -eq 14) -and ($suOut -match "exit=14"))
+
+    # Security scan fix: an unknown tool is refused by both shells, including where Bash used to agree by accident.
+    $suUnknownCases = @(
+        @{ Name = "one unknown tool in every role under fresh-context, at commit-check"; Roles = (New-SuRoles -SetupLine "" -Master "Gemini" -Reviewer "Gemini" -Implementer "Gemini" -ModeLine "Review Independence: fresh-context"); Handoff = (New-RiHandoff -State "REVIEW_DONE" -WaitingFor "User" -Implementer "Gemini" -Reviewer "Gemini" -Actor "Gemini (Implementer)"); Cmd = "commit-check"; Ps = 12; Sh = 12 },
+        @{ Name = "an unknown Reviewer under separate-tool"; Roles = (New-SuRoles -SetupLine "" -Reviewer "Gemini"); Handoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); Cmd = "next"; Ps = 12; Sh = 12 },
+        @{ Name = "an unknown Master"; Roles = (New-SuRoles -SetupLine "" -Master "Gemini"); Handoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); Cmd = "next"; Ps = 12; Sh = 12 },
+        @{ Name = "an unknown Task Actor"; Roles = (New-SuRoles -SetupLine ""); Handoff = ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Implementer: Claude Code", "- Implementer: Gemini"); Cmd = "next"; Ps = 12; Sh = 12 },
+        @{ Name = "an alias Task Actor that is the bound tool"; Roles = (New-SuRoles -SetupLine ""); Handoff = ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Reviewer: Codex", "- Reviewer: Codex Window"); Cmd = "next"; Ps = 0; Sh = 0 },
+        @{ Name = "a sentinel Task Actor"; Roles = (New-SuRoles -SetupLine ""); Handoff = ((New-Handoff -State "NEEDS_ANALYSIS" -WaitingFor "Master") -replace "- Implementer: Claude Code", "- Implementer: TBD" -replace "- Reviewer: Codex", "- Reviewer: tbd"); Cmd = "next"; Ps = 0; Sh = 0 },
+        @{ Name = "two known tools, all valid"; Roles = (New-SuRoles -SetupLine ""); Handoff = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer"); Cmd = "next"; Ps = 0; Sh = 0 },
+        @{ Name = "Task Actors that put one tool in both roles under separate-tool"; Roles = (New-SuRoles -SetupLine ""); Handoff = ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Reviewer: Codex", "- Reviewer: Claude Code"); Cmd = "next"; Ps = 12; Sh = 12 }
+    )
+    foreach ($suU in $suUnknownCases) {
+        $suUFx = New-SuFixture -Roles $suU.Roles -Handoff $suU.Handoff
+        $r = Invoke-Handoff -WorkDir $suUFx -Arguments @($suU.Cmd)
+        $suOut = Invoke-SuSh -Dir $suUFx -ShArgs @($suU.Cmd)
+        Check "both shells agree on $($suU.Name)" (($r.Code -eq $suU.Ps) -and ($suOut -match "exit=$($suU.Sh)\s*$")) "ps=$($r.Code) sh=$suOut"
+    }
+    $suGemFx = New-SuFixture -Roles $suUnknownCases[0].Roles -Handoff $suUnknownCases[0].Handoff
+    $suOut = Invoke-SuSh -Dir $suGemFx -ShArgs @("commit-check")
+    Check "handoff.sh commit-check never says ALLOWED for an unknown tool under fresh-context" (($suOut -notmatch "ALLOWED") -and ($suOut -match "Unrecognized tool identity 'Gemini'"))
+    $suShSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "scripts/handoff.sh")
+    Check "handoff.sh defines _canonical_tool exactly once" (([regex]::Matches($suShSrc, '(?m)^_canonical_tool\(\) \{')).Count -eq 1)
+
+    # The Bash installer: fresh is pending, flags configure, an upgrade carries the line.
+    $suInstSh = (Join-Path $RepoRoot "scripts/install.sh") -replace '\\', '/'
+    $suShTarget = ((Join-Path $FixtureRoot "su-bash-install") -replace '\\', '/')
+    $suOut = (& $suBash.Source $suInstSh $suShTarget 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+    $suShTargetRoles = Join-Path $FixtureRoot "su-bash-install/.ai/roles/ROLE_ASSIGNMENT.md"
+    Check "install.sh: a fresh install is pending and says so with the Bash command" (($suOut -match "exit=0") -and ($suOut -match "Setup: NOT CONFIGURED") -and ($suOut -match "bash scripts/handoff\.sh setup --players") -and ((Get-Content -Raw -LiteralPath $suShTargetRoles) -match '(?m)^Setup: pending\r?$'))
+    $null = & $suBash.Source $suInstSh $suShTarget --force 2>&1
+    Check "install.sh: an upgrade of a pending install stays pending, once" (([regex]::Matches((Get-Content -Raw -LiteralPath $suShTargetRoles), '(?m)^Setup: pending\r?$')).Count -eq 1)
+    [System.IO.File]::WriteAllText($suShTargetRoles, ((Get-Content -Raw -LiteralPath $suShTargetRoles) -replace '(?m)^Setup: pending\r?\n', ''), (New-Object System.Text.UTF8Encoding($false)))
+    $null = & $suBash.Source $suInstSh $suShTarget --force 2>&1
+    Check "install.sh: an upgrade of a v3.17.0-shaped install gains no Setup line" ((Get-Content -Raw -LiteralPath $suShTargetRoles) -notmatch '(?mi)^\s*Setup\s*:')
+    $suShFlagTarget = ((Join-Path $FixtureRoot "su-bash-install-flags") -replace '\\', '/')
+    $suOut = (& $suBash.Source $suInstSh $suShFlagTarget --players "Claude Code,Codex" --master "Codex" 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+    $suShFlagRoles = Get-Content -Raw -LiteralPath (Join-Path $FixtureRoot "su-bash-install-flags/.ai/roles/ROLE_ASSIGNMENT.md")
+    Check "install.sh --players --master configures the project in the same run" (($suOut -match "exit=0") -and ($suShFlagRoles -match '(?m)^Setup: complete\r?$') -and ((Get-SuRow $suShFlagRoles "Master") -eq "Codex")) $suOut
+    $null = & $suBash.Source $suInstSh $suShFlagTarget --force 2>&1
+    Check "install.sh: an upgrade of a configured install stays complete" (([regex]::Matches((Get-Content -Raw -LiteralPath (Join-Path $FixtureRoot "su-bash-install-flags/.ai/roles/ROLE_ASSIGNMENT.md")), '(?m)^Setup: complete\r?$')).Count -eq 1)
+    $suOut = (& $suBash.Source $suInstSh ((Join-Path $FixtureRoot "su-bash-install-bad") -replace '\\', '/') --players "Gemini" 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+    Check "install.sh with an unknown player fails and says why" (($suOut -match "exit=1") -and ($suOut -match "Unknown player 'Gemini'") -and ($suOut -match "NOT CONFIGURED"))
+}
+$ErrorActionPreference = $suBashEap
+
+# --- v3.18.0 review fixes: each check below failed on 1aecc6d ---
+Write-Host "[4D-8b] First setup: holes closed after review (v3.18.0)"
+$rvBash = Get-Command bash -ErrorAction SilentlyContinue
+$rvSh = (Join-Path $RepoRoot "scripts/handoff.sh") -replace '\\', '/'
+function Invoke-RvSh {
+    param([string]$Dir, [string[]]$ShArgs, [string]$Script = $rvSh)
+    $prevCwd = [System.Environment]::CurrentDirectory
+    Push-Location $Dir
+    [System.Environment]::CurrentDirectory = $Dir
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { return (($null | & $rvBash.Source $Script @ShArgs 2>&1 | Out-String) + "exit=$LASTEXITCODE") } finally { $ErrorActionPreference = $prevEap; Pop-Location; [System.Environment]::CurrentDirectory = $prevCwd }
+}
+function Invoke-RvIn { param([string]$Dir, [scriptblock]$Block)
+    $prevCwd = [System.Environment]::CurrentDirectory
+    Push-Location $Dir
+    [System.Environment]::CurrentDirectory = $Dir
+    try { return (& $Block 2>&1 | Out-String) } finally { Pop-Location; [System.Environment]::CurrentDirectory = $prevCwd }
+}
+$rvHandMade = @"
+# AI Handoff
+
+## Status
+- State: REVIEW_DONE
+- Waiting For: User
+- Current Task: hand made
+
+## Last Update
+- Actor: Codex (Reviewer)
+- Verdict: APPROVED
+
+## Task Actors
+- Implementer: Codex
+- Reviewer: Claude Code
+
+## Changed Files
+- foo.txt
+"@
+
+# H1: a pending project never adopts a record written before the players were chosen.
+$rvAdoptFx = New-SuFixture -Roles (New-SuRoles) -Handoff $rvHandMade
+Set-Content -Path (Join-Path $rvAdoptFx "foo.txt") -Value "x" -Encoding utf8
+$rvAdoptBefore = Get-SuHashes -Dir $rvAdoptFx
+$r = Invoke-HandoffInput -WorkDir $rvAdoptFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+Check "pending: setup refuses to adopt a hand-written REVIEW_DONE and changes nothing" (($r.Code -eq 1) -and ($r.Out -match "setup does not adopt a record written before the players were chosen") -and ($r.Out -match "\.ai/handoff-history/") -and ($r.Out -match "-Force") -and ((Get-SuHashes -Dir $rvAdoptFx) -eq $rvAdoptBefore)) $r.Out
+$r = Invoke-Handoff -WorkDir $rvAdoptFx -Arguments @("commit-check", "-Message", "x")
+Check "pending: the hand-written record still cannot reach commit-check" (($r.Code -eq 14) -and ($r.Out -notmatch "ready for explicit authorization"))
+if ($null -ne $rvBash) {
+    $rvAdoptShFx = New-SuFixture -Roles (New-SuRoles) -Handoff $rvHandMade
+    Set-Content -Path (Join-Path $rvAdoptShFx "foo.txt") -Value "x" -Encoding utf8
+    $rvAdoptShBefore = Get-SuHashes -Dir $rvAdoptShFx
+    $rvOut = Invoke-RvSh -Dir $rvAdoptShFx -ShArgs @("setup", "--players", "Claude Code,Codex", "--master", "Codex", "--yes")
+    Check "handoff.sh: pending setup refuses to adopt a hand-written record too" (($rvOut -match "exit=1") -and ($rvOut -match "setup does not adopt a record") -and ((Get-SuHashes -Dir $rvAdoptShFx) -eq $rvAdoptShBefore)) $rvOut
+    $rvOut = Invoke-RvSh -Dir $rvAdoptShFx -ShArgs @("commit-check")
+    Check "handoff.sh: the hand-written record never reads ALLOWED" (($rvOut -match "exit=14") -and ($rvOut -notmatch "ALLOWED"))
+}
+# The documented way out works with both installers: keep the record in the history, reinstall, set up.
+$rvOutTarget = Join-Path $FixtureRoot "rv-way-out"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $rvOutTarget -NoRolesWindow 2>&1
+[System.IO.File]::WriteAllText((Join-Path $rvOutTarget "AI_HANDOFF.md"), $rvHandMade, (New-Object System.Text.UTF8Encoding($false)))
+$r = Invoke-HandoffInput -WorkDir $rvOutTarget -Arguments @("setup", "-Players", "Codex", "-Yes")
+New-Item -ItemType Directory -Path (Join-Path $rvOutTarget ".ai/handoff-history") -Force | Out-Null
+Move-Item -LiteralPath (Join-Path $rvOutTarget "AI_HANDOFF.md") -Destination (Join-Path $rvOutTarget ".ai/handoff-history/kept-AI_HANDOFF.md")
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $rvOutTarget -Force -NoRolesWindow 2>&1
+$rvRestored = if (Test-Path (Join-Path $rvOutTarget "AI_HANDOFF.md")) { Get-Content -Raw -Path (Join-Path $rvOutTarget "AI_HANDOFF.md") } else { "" }
+Check "install.ps1 -Force restores a clean AI_HANDOFF.md and keeps the project pending" (($r.Code -eq 1) -and ($rvRestored -match "Current Task: Initial setup") -and ((Get-Content -Raw -Path (Join-Path $rvOutTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: pending\r?$') -and (Test-Path (Join-Path $rvOutTarget ".ai/handoff-history/kept-AI_HANDOFF.md")))
+$r = Invoke-HandoffInput -WorkDir $rvOutTarget -Arguments @("setup", "-Players", "Codex", "-Yes")
+Check "after the documented way out, setup succeeds" ($r.Code -eq 0)
+if ($null -ne $rvBash) {
+    $rvInstSh = (Join-Path $RepoRoot "scripts/install.sh") -replace '\\', '/'
+    $rvShTarget = Join-Path $FixtureRoot "rv-way-out-sh"
+    $null = & $rvBash.Source $rvInstSh ($rvShTarget -replace '\\', '/') 2>&1
+    [System.IO.File]::WriteAllText((Join-Path $rvShTarget "AI_HANDOFF.md"), $rvHandMade, (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Path (Join-Path $rvShTarget ".ai/handoff-history") -Force | Out-Null
+    Move-Item -LiteralPath (Join-Path $rvShTarget "AI_HANDOFF.md") -Destination (Join-Path $rvShTarget ".ai/handoff-history/kept-AI_HANDOFF.md")
+    $null = & $rvBash.Source $rvInstSh ($rvShTarget -replace '\\', '/') --force 2>&1
+    $rvShRestored = if (Test-Path (Join-Path $rvShTarget "AI_HANDOFF.md")) { Get-Content -Raw -Path (Join-Path $rvShTarget "AI_HANDOFF.md") } else { "" }
+    Check "install.sh --force restores a clean AI_HANDOFF.md and keeps the project pending" (($rvShRestored -match "Current Task: Initial setup") -and ((Get-Content -Raw -Path (Join-Path $rvShTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: pending\r?$'))
+    $rvOut = Invoke-RvSh -Dir $rvShTarget -ShArgs @("setup", "--players", "Codex", "--yes")
+    Check "after the documented way out, handoff.sh setup succeeds" ($rvOut -match "exit=0")
+}
+
+# H2: a role is held by a tool, never by a placeholder, the User or an unknown name.
+$rvSentinelMiss = @()
+foreach ($rvTool in @("TBD", "(unknown)", "unknown", "User", "Gemini")) {
+    $rvSentFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete")
+    $rvSentBefore = Get-SuHashes -Dir $rvSentFx
+    $r = Invoke-Handoff -WorkDir $rvSentFx -Arguments @("roles", "-SetRole", "Reviewer", "-SetTool", $rvTool, "-Yes")
+    if (-not (($r.Code -eq 1) -and ($r.Out -match "-SetTool must be a known tool") -and ((Get-SuHashes -Dir $rvSentFx) -eq $rvSentBefore))) { $rvSentinelMiss += "$rvTool -> $($r.Code)" }
+}
+Check "roles -SetTool refuses TBD, (unknown), unknown, User and an unknown name, and changes nothing" ($rvSentinelMiss.Count -eq 0) ($rvSentinelMiss -join "; ")
+
+# M1: the next-step helpers honour the Setup line.
+$rvNsPs = Join-Path $RepoRoot "scripts/next-step.ps1"
+$rvNsSh = (Join-Path $RepoRoot "scripts/next-step.sh") -replace '\\', '/'
+$rvAnalysis = (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/AI_HANDOFF.md")) -replace '(?m)^- State: .*$', '- State: NEEDS_ANALYSIS' -replace '(?m)^- Waiting For: .*$', '- Waiting For: Master'
+foreach ($rvCase in @(@{ Line = "Setup: pending"; Code = 14; Want = "Setup required" }, @{ Line = "Setup: maybe"; Code = 12; Want = "'Setup:' line .* must appear once" }, @{ Line = "Setup: complete"; Code = 0; Want = "Handoff Status" })) {
+    $rvNsFx = New-SuFixture -Roles (New-SuRoles -SetupLine $rvCase.Line) -Handoff $rvAnalysis
+    $rvPsOut = Invoke-RvIn -Dir $rvNsFx -Block { & $PwshExe -NoProfile -ExecutionPolicy Bypass -File $rvNsPs -PrepareFile; "exit=$LASTEXITCODE" }
+    $rvPsWrote = Test-Path (Join-Path $rvNsFx "NEXT_TURN.md")
+    Remove-Item -LiteralPath (Join-Path $rvNsFx "NEXT_TURN.md") -Force -ErrorAction SilentlyContinue
+    $rvExpectWrite = ($rvCase.Code -eq 0)
+    Check "next-step.ps1 with '$($rvCase.Line)' exits $($rvCase.Code) and writes NEXT_TURN.md only when configured" (($rvPsOut -match "exit=$($rvCase.Code)\s*$") -and ($rvPsOut -match $rvCase.Want) -and ($rvPsWrote -eq $rvExpectWrite)) $rvPsOut
+    if ($null -ne $rvBash) {
+        $rvShOut = Invoke-RvSh -Dir $rvNsFx -ShArgs @("--prepare-file") -Script $rvNsSh
+        $rvShWrote = Test-Path (Join-Path $rvNsFx "NEXT_TURN.md")
+        Check "next-step.sh with '$($rvCase.Line)' exits $($rvCase.Code) and writes NEXT_TURN.md only when configured" (($rvShOut -match "exit=$($rvCase.Code)\s*$") -and ($rvShWrote -eq $rvExpectWrite)) $rvShOut
+    }
+}
+
+# M2: a typographic quote in a value cannot break, or inject into, a generated window script.
+$rvQuote = [string][char]0x2019
+$rvInject = "x" + $rvQuote + ";Start-Process notepad;" + $rvQuote
+function Get-RvCommandNames { param([string]$Text, [string]$Name)
+    $path = Join-Path $FixtureRoot ("rv-window-" + $Name + "-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    [System.IO.File]::WriteAllText($path, $Text, (New-Object System.Text.UTF8Encoding($true)))
+    $tok = $null; $err = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tok, [ref]$err)
+    $names = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ } | Sort-Object -Unique)
+    return @{ Errors = $err.Count; Names = ($names -join ","); Notepad = (@($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and ($n.Value -eq "notepad") -and ($n.Parent -is [System.Management.Automation.Language.CommandAst]) }, $true)).Count) }
+}
+$rvPlainPicker = Get-RvCommandNames -Text (New-SetupWindowScript -ResultPath (Join-Path $FixtureRoot "r.json") -Project "plain" -Tools $suTools -Table $suTable -NoneDetected $false) -Name "plain"
+foreach ($rvValue in @(("Nir" + $rvQuote + "s app"), $rvInject)) {
+    $rvPicker = Get-RvCommandNames -Text (New-SetupWindowScript -ResultPath (Join-Path $FixtureRoot ($rvValue + ".json")) -Project $rvValue -Tools $suTools -Table $suTable -NoneDetected $false) -Name "picker"
+    Check "the picker script for a value with U+2019 parses clean and runs no extra command ($($rvValue.Length) chars)" (($rvPicker.Errors -eq 0) -and ($rvPicker.Notepad -eq 0) -and ($rvPicker.Names -eq $rvPlainPicker.Names)) "errors=$($rvPicker.Errors) names=$($rvPicker.Names)"
+    $rvRoles = Get-RvCommandNames -Text (New-RolesWindowScript -WorkDir ("C:\work\" + $rvValue) -HandoffScript ("C:\tools\" + $rvValue + "\handoff.ps1") -BackgroundMarker "HANDOFF_BACKGROUND.json" -WindowMarker "HANDOFF_UI_WINDOW.json") -Name "roles"
+    $rvRolesPlain = Get-RvCommandNames -Text (New-RolesWindowScript -WorkDir "C:\work\plain" -HandoffScript "C:\tools\handoff.ps1" -BackgroundMarker "HANDOFF_BACKGROUND.json" -WindowMarker "HANDOFF_UI_WINDOW.json") -Name "rolesplain"
+    Check "the indicator script for a value with U+2019 parses clean and runs no extra command ($($rvValue.Length) chars)" (($rvRoles.Errors -eq 0) -and ($rvRoles.Notepad -eq 0) -and ($rvRoles.Names -eq $rvRolesPlain.Names)) "errors=$($rvRoles.Errors) names=$($rvRoles.Names)"
+}
+Check "the literal helper uses the parser's own escaper" ($suSrc -match '\[System\.Management\.Automation\.Language\.CodeGeneration\]::EscapeSingleQuotedStringContent\(\$text\)')
+# A failed picker is a failure, never a cancel.
+$rvResult = Join-Path $FixtureRoot "rv-result.json"
+Remove-Item -LiteralPath $rvResult -Force -ErrorAction SilentlyContinue
+$rvNoFile = Read-SetupWindowResult -ExitCode 0 -ResultPath $rvResult
+$rvBadExit = Read-SetupWindowResult -ExitCode 1 -ResultPath $rvResult
+Set-Content -LiteralPath $rvResult -Value "{not json" -Encoding ascii
+$rvBadJson = Read-SetupWindowResult -ExitCode 0 -ResultPath $rvResult
+Set-Content -LiteralPath $rvResult -Value '{"players": ""}' -Encoding ascii
+$rvEmpty = Read-SetupWindowResult -ExitCode 0 -ResultPath $rvResult
+Set-Content -LiteralPath $rvResult -Value '{"cancelled": true}' -Encoding ascii
+$rvCancel = Read-SetupWindowResult -ExitCode 0 -ResultPath $rvResult
+$rvCancelBadExit = Read-SetupWindowResult -ExitCode 3 -ResultPath $rvResult
+Set-Content -LiteralPath $rvResult -Value '{"players": "Claude Code,Codex", "master": "Codex"}' -Encoding ascii
+$rvChoice = Read-SetupWindowResult -ExitCode 0 -ResultPath $rvResult
+Check "no result file, a non-zero exit, bad JSON or an empty choice is a failure, not a cancel" ($rvNoFile.Failed -and -not $rvNoFile.Cancelled -and $rvBadExit.Failed -and $rvBadJson.Failed -and $rvEmpty.Failed -and $rvCancelBadExit.Failed -and -not $rvCancelBadExit.Cancelled)
+Check "only an explicit cancel is a cancel, and a choice is read as given" ($rvCancel.Cancelled -and -not $rvCancel.Failed -and ($rvChoice.Players -eq "Claude Code,Codex") -and ($rvChoice.Master -eq "Codex") -and -not $rvChoice.Failed -and -not $rvChoice.Cancelled)
+Check "the picker writes an explicit cancel when it closes without a choice" ($suWindowText -match [regex]::Escape("if (-not `$script:saved) { [System.IO.File]::WriteAllText(`$resultPath, '{`"cancelled`": true}'"))
+Check "a failed picker exits 3 with its own message, not as a cancel" ($suSrc -match '(?s)if \(\$picked\.Failed\) \{.{0,400}setup: FAILED - the picker window did not return a choice.{0,400}exit 3')
+# L7: the indicator's button passes -Window; that path never waits on a console prompt.
+# Second review: proved by a real run in the [4D-8c] section, on a console that is not redirected.
+
+# M3: a configured project reconfigures only at a finished task, and start then works.
+$rvWaitFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete") -Handoff (New-Handoff -State "WAITING_FOR_USER" -WaitingFor "User" -CurrentTask "a decision in flight")
+$rvWaitBefore = Get-SuHashes -Dir $rvWaitFx
+$r = Invoke-HandoffInput -WorkDir $rvWaitFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+Check "reconfiguration is refused at WAITING_FOR_USER mid-task, where start cannot recover" (($r.Code -eq 1) -and ($r.Out -match "allowed only at a finished task \(REVIEW_DONE or BLOCKED") -and ((Get-SuHashes -Dir $rvWaitFx) -eq $rvWaitBefore))
+$rvPathFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete") -Handoff (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "Finished task")
+$r = Invoke-HandoffInput -WorkDir $rvPathFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+$rvReconfigOk = ($r.Code -eq 0) -and ($r.Out -match "handoff\.ps1 start")
+$r = Invoke-Handoff -WorkDir $rvPathFx -Arguments @("start", "the next request")
+$rvArchives = @(Get-ChildItem -LiteralPath (Join-Path $rvPathFx ".ai/handoff-history") -Filter "*Finished-task*AI_HANDOFF.md" -ErrorAction SilentlyContinue)
+$rvAfterStart = Get-SuFile -Dir $rvPathFx -Rel "AI_HANDOFF.md"
+Check "reconfigure at REVIEW_DONE, then start retires and archives the record" ($rvReconfigOk -and ($r.Code -eq 0) -and ($r.Out -match "Archived previous handoff") -and ($rvArchives.Count -eq 1) -and ($rvAfterStart -match "State: NEEDS_ANALYSIS")) $r.Out
+$r = Invoke-Handoff -WorkDir $rvPathFx -Arguments @("work")
+Check "after that start the project runs again" (($r.Code -eq 0) -and ($r.Out -notmatch "Role drift"))
+if ($null -ne $rvBash) {
+    $rvShInitFx = New-SuFixture -Roles (New-SuRoles -SetupLine "Setup: complete")
+    $rvOut = Invoke-RvSh -Dir $rvShInitFx -ShArgs @("setup", "--players", "Codex", "--yes")
+    Check "handoff.sh still reconfigures the untouched install state" ($rvOut -match "exit=0")
+}
+
+# M4 and L1: what each shell reads from Task Actors and the role table, at the edges.
+if ($null -ne $rvBash) {
+    $rvActorMiss = @()
+    foreach ($rvForm in @("* Implementer: Codex", "-Implementer: Codex", "  - Implementer: Codex", "- implementer: Codex", "*Implementer:Codex")) {
+        $rvActFx = New-SuFixture -Roles (New-SuRoles -SetupLine "") -Handoff ("# AI Handoff`n`n## Status`n- State: REVIEW_DONE`n- Waiting For: User`n- Current Task: t`n`n## Task Actors`n$rvForm`n- Reviewer: Codex`n`n## Changed Files`n- foo.txt`n")
+        Set-Content -Path (Join-Path $rvActFx "foo.txt") -Value "x" -Encoding utf8
+        $r = Invoke-Handoff -WorkDir $rvActFx -Arguments @("commit-check")
+        $rvOut = Invoke-RvSh -Dir $rvActFx -ShArgs @("commit-check")
+        if (-not (($r.Code -eq 12) -and ($rvOut -match "exit=12") -and ($rvOut -notmatch "ALLOWED"))) { $rvActorMiss += "[$rvForm] ps=$($r.Code) sh=$($rvOut -replace '(?s).*exit=', '')" }
+    }
+    Check "both shells read every Task Actors form handoff.ps1 accepts, and refuse the self-review" ($rvActorMiss.Count -eq 0) ($rvActorMiss -join "; ")
+    $rvLowerBad = New-SuFixture -Roles "| Role | Tool |`n|---|---|`n| master | Codex |`n| reviewer | Codex |`n| implementer | Codex |`n" -Handoff (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer")
+    $r = Invoke-Handoff -WorkDir $rvLowerBad -Arguments @("next")
+    $rvOut = Invoke-RvSh -Dir $rvLowerBad -ShArgs @("next")
+    Check "both shells read lower-case role rows and refuse one tool in both roles" (($r.Code -eq 12) -and ($rvOut -match "exit=12\s*$")) "ps=$($r.Code) $rvOut"
+    $rvLowerGood = New-SuFixture -Roles "| Role | Tool |`n|---|---|`n| master | Codex |`n| reviewer | Claude Code |`n| implementer | Codex |`n" -Handoff ((New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer") -replace "- Implementer: Claude Code", "- Implementer: Codex" -replace "- Reviewer: Codex", "- Reviewer: Claude Code")
+    $r = Invoke-Handoff -WorkDir $rvLowerGood -Arguments @("next")
+    $rvOut = Invoke-RvSh -Dir $rvLowerGood -ShArgs @("next")
+    $rvNt = Get-SuFile -Dir $rvLowerGood -Rel "NEXT_TURN.md"
+    Check "both shells route lower-case role rows to the bound tools, not the built-in default" (($r.Code -eq 0) -and ($rvOut -match "exit=0\s*$") -and ($rvNt -match "Actor: Codex \(Implementer\)")) $rvOut
+    $null = Invoke-RvSh -Dir $rvLowerGood -ShArgs @("--prepare-file") -Script $rvNsSh
+    Check "next-step.sh reads lower-case role rows too" ((Get-SuFile -Dir $rvLowerGood -Rel "NEXT_TURN.md") -match "Actor: Codex \(Implementer\)")
+    $rvLowerTarget = Join-Path $FixtureRoot "rv-lower-install"
+    $null = & $rvBash.Source $rvInstSh ($rvLowerTarget -replace '\\', '/') 2>&1
+    $rvLowerRoles = Join-Path $rvLowerTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+    [System.IO.File]::WriteAllText($rvLowerRoles, ((Get-Content -Raw -LiteralPath $rvLowerRoles) -replace '\| Master \| Codex \|', '| master | Claude Code |'), (New-Object System.Text.UTF8Encoding($false)))
+    $rvOut = (& $rvBash.Source $rvInstSh ($rvLowerTarget -replace '\\', '/') --force 2>&1 | Out-String) + "exit=$LASTEXITCODE"
+    Check "install.sh reads a lower-case role row on upgrade and keeps its tool" (($rvOut -match "exit=0") -and ((Get-Content -Raw -LiteralPath $rvLowerRoles) -match '(?m)^\| Master \| Claude Code \|\r?$')) $rvOut
+}
+
+# L6: the stop and the notices never hand an agent a ready-made choice.
+$rvGateFx = New-SuFixture -Roles (New-SuRoles)
+$r = Invoke-Handoff -WorkDir $rvGateFx -Arguments @("work")
+Check "the exit-14 block shows placeholders and says an agent must ask" (($r.Out -match '-Players "<Claude Code, Codex, or both>" -Master "<one of the players>"') -and ($r.Out -match "An agent must ask the user which players and which Master; it never chooses for them") -and ($r.Out -notmatch '-Players "Claude Code,Codex" -Master "Claude Code"'))
+Check "the installer's NOT CONFIGURED notice shows placeholders too" (($suInstOut -match '<one of the players>') -and ($suInstOut -match "never chooses for them") -and ($suInstOut -notmatch '-Players "Claude Code,Codex" -Master "Claude Code"'))
+if ($null -ne $rvBash) {
+    $rvOut = Invoke-RvSh -Dir $rvGateFx -ShArgs @("next")
+    Check "handoff.sh's exit-14 block shows placeholders and says an agent must ask" (($rvOut -match '<one of the players>') -and ($rvOut -match "never chooses for them") -and ($rvOut -notmatch '--players "Claude Code,Codex" --master "Claude Code"'))
+}
+$r = Invoke-Handoff -WorkDir $rvGateFx -Arguments @("status")
+Check "pending status does not point at the gated adapters command" (($r.Code -eq 0) -and ($r.Out -notmatch "Adapters:"))
+
+# Leftover claims of a default binding.
+$rvPointerText = (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/CODEX.md")) + (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/skills/codex-claude-handoff/CLAUDE.md")) + (Get-Content -Raw -Path (Join-Path $RepoRoot "README.md"))
+Check "no entry pointer or README line still claims a default binding" (($rvPointerText -notmatch "By default Codex holds") -and ($rvPointerText -notmatch "By default Claude Code holds") -and ($rvPointerText -notmatch "Default binding: Master = Codex"))
+
+# --- v3.18.0 second review: each check below failed on 54a38fe ---
+Write-Host "[4D-8c] First setup: second review (v3.18.0)"
+$r2Concrete = '(-Master|--master) \\?"(Claude Code|Codex)\\?"'
+
+# A. No ready-made choice reaches an agent after a stop.
+$r2DupFx = New-SuFixture -Roles ((New-SuRoles) + "Setup: pending`n")
+$r = Invoke-Handoff -WorkDir $r2DupFx -Arguments @("next")
+Check "handoff.ps1's exit-12 block for a broken Setup line names no players or Master" (($r.Code -eq 12) -and ($r.Out -notmatch $r2Concrete))
+if ($null -ne $rvBash) {
+    $r2Out = Invoke-RvSh -Dir $r2DupFx -ShArgs @("next")
+    Check "handoff.sh's exit-12 block for a broken Setup line shows placeholders and says an agent must ask" (($r2Out -match "exit=12") -and ($r2Out -match "<one of the players>") -and ($r2Out -match "never chooses for them") -and ($r2Out -notmatch $r2Concrete)) $r2Out
+    $r2Out = Invoke-RvSh -Dir $r2DupFx -ShArgs @("setup")
+    Check "handoff.sh's flag usage labels its commands as examples, next to the ask sentence" (($r2Out -match "Examples only - the choice is the user's; an agent asks the user and never chooses") -and ($r2Out -match "never chooses for them"))
+}
+$r2DocMiss = @()
+foreach ($r2Doc in @("START_HERE.md", "README.md", "QUICKSTART.md")) {
+    $r2Lines = @(Get-Content -Encoding UTF8 -Path (Join-Path $RepoRoot $r2Doc))
+    for ($i = 0; $i -lt $r2Lines.Count; $i++) {
+        if ($r2Lines[$i] -notmatch $r2Concrete) { continue }
+        $lo = [Math]::Max(0, $i - 4); $hi = [Math]::Min($r2Lines.Count - 1, $i + 4)
+        $near = ($r2Lines[$lo..$hi] -join "`n")
+        if (($near -notmatch "never chooses for (them|you)") -or ($near -notmatch "(?i)example")) { $r2DocMiss += "$r2Doc line $($i + 1)" }
+    }
+}
+Check "START_HERE, README and QUICKSTART show a concrete choice only as a labelled example beside the ask sentence" ($r2DocMiss.Count -eq 0) ($r2DocMiss -join "; ")
+
+# B. A failed setup leaves the project exactly as it was, in both shells.
+foreach ($r2Shell in @("ps", "sh")) {
+    if ($r2Shell -eq "sh" -and $null -eq $rvBash) { continue }
+    $r2LockFx = New-SuFixture -Roles (Get-Content -Raw -Path (Join-Path $RepoRoot "templates/.ai/roles/ROLE_ASSIGNMENT.md"))
+    $r2RoleBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $r2LockFx ".ai/roles/ROLE_ASSIGNMENT.md")).Hash
+    $r2Lock = [System.IO.File]::Open((Join-Path $r2LockFx "AI_HANDOFF.md"), 'Open', 'ReadWrite', 'Read')
+    try {
+        if ($r2Shell -eq "ps") {
+            $r = Invoke-HandoffInput -WorkDir $r2LockFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+            $r2Code = $r.Code; $r2Out = $r.Out
+        } else {
+            $r2Out = Invoke-RvSh -Dir $r2LockFx -ShArgs @("setup", "--players", "Claude Code,Codex", "--master", "Codex", "--yes")
+            $r2Code = if ($r2Out -match "exit=(\d+)\s*$") { [int]$Matches[1] } else { -1 }
+        }
+    } finally { $r2Lock.Close() }
+    $r2Left = @(Get-ChildItem -LiteralPath $r2LockFx -Recurse -Force -File | Where-Object { $_.Name -match '\.(setup|backup)-' })
+    Check "$r2Shell setup that cannot write AI_HANDOFF.md restores the role file byte for byte and leaves no temp file" (($r2Code -ne 0) -and ($r2Out -match "Nothing was changed") -and ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $r2LockFx ".ai/roles/ROLE_ASSIGNMENT.md")).Hash -eq $r2RoleBefore) -and ($r2Left.Count -eq 0)) "code=$r2Code left=$($r2Left.Name -join ',') $r2Out"
+    if ($r2Shell -eq "ps") {
+        $r = Invoke-HandoffInput -WorkDir $r2LockFx -Arguments @("setup", "-Players", "Claude Code,Codex", "-Master", "Codex", "-Yes")
+        $r2Again = ($r.Code -eq 0)
+    } else {
+        $r2Again = ((Invoke-RvSh -Dir $r2LockFx -ShArgs @("setup", "--players", "Claude Code,Codex", "--master", "Codex", "--yes")) -match "exit=0\s*$")
+    }
+    $r = Invoke-Handoff -WorkDir $r2LockFx -Arguments @("work")
+    Check "$r2Shell setup succeeds once the file is free, and the project then runs" ($r2Again -and ($r.Code -eq 0))
+}
+
+# C. Bash reads the Task Actors section as handoff.ps1 does, and audits it before a commit.
+if ($null -ne $rvBash) {
+    $r2Sections = @(
+        @{ Name = "a heading with a trailing space"; Head = "## Task Actors "; Actors = "- Implementer: Claude Code`n- Reviewer: Claude Code"; Ps = 12 },
+        @{ Name = "a lower-case heading"; Head = "## task actors"; Actors = "- Implementer: Claude Code`n- Reviewer: Claude Code"; Ps = 12 },
+        @{ Name = "a renamed section"; Head = "## Actors"; Actors = "- Implementer: Claude Code`n- Reviewer: Claude Code"; Ps = 1 },
+        @{ Name = "two different Reviewer lines"; Head = "## Task Actors"; Actors = "- Implementer: Claude Code`n- Reviewer: Claude Code`n- Reviewer: Codex"; Ps = 1 }
+    )
+    foreach ($r2S in $r2Sections) {
+        $r2SFx = New-SuFixture -Roles (New-SuRoles -SetupLine "") -Handoff ("# AI Handoff`n`n## Status`n- State: REVIEW_DONE`n- Waiting For: User`n- Current Task: t`n`n$($r2S.Head)`n$($r2S.Actors)`n`n## Changed Files`n- foo.txt`n")
+        Set-Content -Path (Join-Path $r2SFx "foo.txt") -Value "x" -Encoding utf8
+        $r = Invoke-Handoff -WorkDir $r2SFx -Arguments @("commit-check")
+        $r2Out = Invoke-RvSh -Dir $r2SFx -ShArgs @("commit-check")
+        Check "both shells refuse a self-review commit with $($r2S.Name), and Bash never says ALLOWED" (($r.Code -eq $r2S.Ps) -and ($r2Out -match "exit=$($r2S.Ps)\s*$") -and ($r2Out -notmatch "ALLOWED")) "ps=$($r.Code) $r2Out"
+    }
+}
+
+# D. Bash adapters shows no binding nobody chose.
+if ($null -ne $rvBash) {
+    $r2AdFx = New-SuFixture -Roles (New-SuRoles)
+    $r2Out = Invoke-RvSh -Dir $r2AdFx -ShArgs @("adapters")
+    Check "handoff.sh adapters stops with exit 14 while pending and prints no binding row" (($r2Out -match "exit=14\s*$") -and ($r2Out -notmatch "(?m)^(Role|Tool):"))
+    $r2Out = Invoke-RvSh -Dir $r2AdFx -ShArgs @("status")
+    Check "handoff.sh status does not offer adapters while pending" (($r2Out -match "exit=0\s*$") -and ($r2Out -notmatch "Adapters:"))
+}
+
+# E. An explicit -Window never waits on a console prompt: run it on a console that is not
+# redirected (a new console with no window), with windows switched off. The same run without
+# -Window reaches the prompt, which proves the console really is interactive.
+function Invoke-HandoffConsole {
+    # stdin is "< CON" inside a new console that has no window: a real console, so
+    # [Console]::IsInputRedirected is false in the child, and nothing is shown on screen.
+    param([string]$WorkDir, [string[]]$Arguments, [int]$TimeoutSeconds = 25)
+    $ErrorActionPreference = 'Continue'
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $psi.Arguments = '/d /s /c ""' + $PwshExe + '" -NoProfile -ExecutionPolicy Bypass -File "' + $HandoffScript + '" ' + ($Arguments -join ' ') + ' < CON"'
+    $psi.WorkingDirectory = $WorkDir
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $timedOut = -not $p.WaitForExit($TimeoutSeconds * 1000)
+    if ($timedOut) { $null = & taskkill.exe /PID $p.Id /T /F 2>&1; [void]$p.WaitForExit(5000) }
+    $text = ""
+    try { if ($outTask.Wait(5000)) { $text = $outTask.Result } } catch { }
+    try { if ($errTask.Wait(1000)) { $text += $errTask.Result } } catch { }
+    return @{ Code = $(if ($timedOut) { -1 } else { $p.ExitCode }); Out = $text; TimedOut = $timedOut }
+}
+$r2WinFx = New-SuFixture -Roles (New-SuRoles)
+$r2WinBefore = Get-SuHashes -Dir $r2WinFx
+$r = Invoke-HandoffConsole -WorkDir $r2WinFx -Arguments @("setup", "-Window")
+Check "setup -Window on an interactive console with windows off prints the flag form and exits 1, never prompting" ((-not $r.TimedOut) -and ($r.Code -eq 1) -and ($r.Out -match "pass the choice as flags") -and ($r.Out -notmatch "Which tools will work on this project") -and ((Get-SuHashes -Dir $r2WinFx) -eq $r2WinBefore)) "code=$($r.Code) timedOut=$($r.TimedOut) $($r.Out)"
+$r = Invoke-HandoffConsole -WorkDir $r2WinFx -Arguments @("setup") -TimeoutSeconds 15
+Check "control: the same console without -Window does reach the prompt" (($r.Out -match "Which tools will work on this project") -and ((Get-SuHashes -Dir $r2WinFx) -eq $r2WinBefore)) "code=$($r.Code) timedOut=$($r.TimedOut) $($r.Out)"
+
+# E. A -Force upgrade keeps the blank line under the binding table, and is stable.
+$r2UpTarget = Join-Path $FixtureRoot "r2-upgrade-blank"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $r2UpTarget -NoRolesWindow 2>&1
+$r2UpRoles = Join-Path $r2UpTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $r2UpTarget -Force -NoRolesWindow 2>&1
+$r2First = Get-Content -Raw -LiteralPath $r2UpRoles
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $r2UpTarget -Force -NoRolesWindow 2>&1
+$r2Second = Get-Content -Raw -LiteralPath $r2UpRoles
+Check "install.ps1 -Force keeps the blank line between the table and Review Independence" ($r2First -match '\| Implementer \| Claude Code \|\r?\n\r?\nReview Independence: separate-tool\r?\nSetup: pending')
+Check "two consecutive -Force upgrades produce the same role file" ($r2First -eq $r2Second)
+if ($null -ne $rvBash) {
+    $r2ShUp = Join-Path $FixtureRoot "r2-upgrade-blank-sh"
+    $null = & $rvBash.Source $rvInstSh ($r2ShUp -replace '\\', '/') 2>&1
+    $null = & $rvBash.Source $rvInstSh ($r2ShUp -replace '\\', '/') --force 2>&1
+    $r2ShFirst = Get-Content -Raw -LiteralPath (Join-Path $r2ShUp ".ai/roles/ROLE_ASSIGNMENT.md")
+    $null = & $rvBash.Source $rvInstSh ($r2ShUp -replace '\\', '/') --force 2>&1
+    $r2ShSecond = Get-Content -Raw -LiteralPath (Join-Path $r2ShUp ".ai/roles/ROLE_ASSIGNMENT.md")
+    Check "install.sh --force keeps the blank line too, and is stable" (($r2ShFirst -match '\| Implementer \| Claude Code \|\r?\n\r?\nReview Independence: separate-tool\r?\nSetup: pending') -and ($r2ShFirst -eq $r2ShSecond))
+}
+
+# E. The Skill setup scripts suggest no stale version.
+$r2SetupText = (Get-Content -Raw -Path (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/scripts/setup.ps1")) + (Get-Content -Raw -Path (Join-Path $RepoRoot ".agents/skills/codex-claude-handoff/scripts/setup.sh"))
+Check "the Skill setup scripts suggest an install commit with no stale version number" (($r2SetupText -match 'Install codex-claude-handoff') -and ($r2SetupText -notmatch 'Install codex-claude-handoff v\d'))
+
+# --- v3.18.0 third review: Bash and PowerShell commit-check, as a property ---
+Write-Host "[4D-8d] First setup: third review (v3.18.0)"
+if ($null -ne $rvBash) {
+    # One throwaway project; each row writes AI_HANDOFF.md and runs both commit-checks.
+    # The property: Bash never prints ALLOWED, and never exits 0, on a file PowerShell refuses.
+    # Ps is what PowerShell is expected to answer (it guards the meaning of the row); Same
+    # says the exit codes are meant to match. Adding a case is one line.
+    $dfRolesTwo = "# Role Assignment`n`n## Current Binding`n`n| Role | Tool |`n|---|---|`n| Master | Claude Code |`n| Reviewer | Codex |`n| Implementer | Claude Code |`n"
+    $dfRolesFresh = $dfRolesTwo + "`nReview Independence: fresh-context`n"
+    $dfOk = "- State: REVIEW_DONE`n- Waiting For: User`n- Current Task: t"
+    $dfTa = "- Implementer: Claude Code`n- Reviewer: Codex"
+    $dfCf = "## Changed Files`n- foo.txt"
+    # Written as escapes: the script source stays ASCII.
+    $dfNb = [string][char]0x00A0; $dfNel = [string][char]0x0085; $dfIdeo = [string][char]0x3000; $dfKelvin = [string][char]0x212A
+    $dfHebrew = { param([int[]]$Cps) -join ($Cps | ForEach-Object { [char]$_ }) }
+    $dfHeb1 = & $dfHebrew @(0x05EA, 0x05D9, 0x05E7, 0x05D5, 0x05DF, 0x0020, 0x05D4, 0x05D3, 0x05E3)
+    $dfHeb2 = & $dfHebrew @(0x05D4, 0x05E2, 0x05E8, 0x05D5, 0x05EA)
+    $dfHeb3 = & $dfHebrew @(0x05D8, 0x05E7, 0x05E1, 0x05D8, 0x0020, 0x05D7, 0x05D5, 0x05E4, 0x05E9, 0x05D9)
+    $dfHeb4 = & $dfHebrew @(0x05DE, 0x05E6, 0x05D1)
+    $dfHeb5 = & $dfHebrew @(0x05EA, 0x05E7, 0x05D9, 0x05DF)
+    function New-DfBody { param([string]$Status = $dfOk, [string]$Head = "## Task Actors", [string]$Actors = $dfTa, [string]$Middle = "", [string]$Tail = "")
+        return "# AI Handoff`n`n## Status`n$Status`n$Middle`n$Head`n$Actors`n`n$dfCf`n$Tail"
+    }
+    $dfRows = @(
+        @{ Name = "a legitimate file"; Body = (New-DfBody); Ps = 0; Same = $true },
+        @{ Name = "a legitimate file with CRLF"; Body = (New-DfBody); Crlf = $true; Ps = 0; Same = $true },
+        @{ Name = "a legitimate file with a UTF-8 BOM"; Body = (New-DfBody); Bom = $true; Ps = 0; Same = $true },
+        @{ Name = "Task Actors last, no final newline"; Body = "# AI Handoff`n`n## Status`n$dfOk`n`n$dfCf`n`n## Task Actors`n$dfTa"; NoFinalNewline = $true; Ps = 0; Same = $true },
+        @{ Name = "a self-review"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a heading with trailing spaces"; Body = (New-DfBody -Head "## Task Actors   " -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a lower-case heading"; Body = (New-DfBody -Head "## task actors" -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a tab after ##"; Body = (New-DfBody -Head "##`tTask Actors" -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code"); Ps = 1; Same = $true },
+        @{ Name = "## Status Notes before ## Status"; Body = ("# AI Handoff`n`n## Status Notes`n$dfOk`n`n## Status`n- State: IMPLEMENTING`n- Waiting For: Implementer`n`n## Task Actors`n$dfTa`n`n$dfCf`n"); Ps = 1 },
+        @{ Name = "## Status Notes after ## Status"; Body = (New-DfBody -Middle "## Status Notes`n- State: IMPLEMENTING`n"); Ps = 0; Same = $true },
+        @{ Name = "a ### sub-heading inside Task Actors"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n### later`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a heading inside a code fence in Task Actors"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n``````n## Task Actors`n- Reviewer: Claude Code`n``````"); Ps = 12; Same = $true },
+        @{ Name = "an empty Task Actors section"; Body = (New-DfBody -Actors ""); Ps = 1; Same = $true },
+        @{ Name = "no Task Actors section"; Body = "# AI Handoff`n`n## Status`n$dfOk`n`n$dfCf`n"; Ps = 1; Same = $true },
+        @{ Name = "a renamed section"; Body = (New-DfBody -Head "## Actors"); Ps = 1; Same = $true },
+        @{ Name = "two Reviewer lines, same tool"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n- Reviewer: Codex"); Ps = 0; Same = $true },
+        @{ Name = "two Reviewer lines, same tool in another case"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n- Reviewer: codex"); Ps = 0; Same = $true },
+        @{ Name = "two Reviewer lines, Codex and its alias"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n- Reviewer: Codex Window"); Ps = 1; Same = $true },
+        @{ Name = "two Reviewer lines, two tools"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code`n- Reviewer: Codex"); Ps = 1; Same = $true },
+        @{ Name = "only * bullets"; Body = (New-DfBody -Actors "* Implementer: Claude Code`n* Reviewer: Codex"); Ps = 1; Same = $true },
+        @{ Name = "mixed bullets, the * line last"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code`n* Reviewer: Codex"); Ps = 1; Same = $true },
+        @{ Name = "mixed bullets, the * line first"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n* Reviewer: Codex`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a duplicated ## Status, adjacent"; Body = ("# AI Handoff`n`n## Status`n- State: REVIEW_DONE`n- Waiting For: User`n## Status`n- State: IMPLEMENTING`n- Waiting For: Implementer`n- Current Task: t`n`n## Task Actors`n$dfTa`n`n$dfCf`n"); Ps = 1; Same = $true },
+        @{ Name = "a duplicated ## Status, after another section"; Body = (New-DfBody -Tail "`n## Status`n- State: IMPLEMENTING`n- Waiting For: Implementer`n"); Ps = 0; Same = $true },
+        @{ Name = "a duplicated ## Task Actors, adjacent"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Codex`n## Task Actors`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        @{ Name = "a duplicated ## Task Actors, after another section"; Body = (New-DfBody -Tail "`n## Task Actors`n- Reviewer: Claude Code`n"); Ps = 0; Same = $true },
+        @{ Name = "a lower-case Status key later in the section"; Body = (New-DfBody -Status "$dfOk`n- state: IMPLEMENTING"); Ps = 1; Same = $true },
+        @{ Name = "an empty State value later in the section"; Body = (New-DfBody -Status "$dfOk`n- State:   "); Ps = 1; Same = $true },
+        @{ Name = "one tool in both under fresh-context, two tools bound"; Roles = $dfRolesFresh; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: Claude Code"); Ps = 12; Same = $true },
+        # Fourth review: characters Bash cannot read the way handoff.ps1 does. Bash refuses them
+        # (exit 1) wherever PowerShell refuses with 1 or 12, so these rows do not set Same.
+        @{ Name = "a lone CR inside Status"; Body = (New-DfBody -Status "$dfOk`n- Note: x`r- State: IMPLEMENTING"); Ps = 1 },
+        @{ Name = "a lone CR inside Task Actors"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Note: x`r- Reviewer: Claude Code`n- Reviewer: Codex"); Ps = 1 },
+        @{ Name = "## + NBSP ends Status for PowerShell"; Body = (New-DfBody -Status "- State: IMPLEMENTING`n- Waiting For: Implementer`n##$($dfNb)x`n$dfOk"); Ps = 1 },
+        @{ Name = "## + NBSP inside Task Actors"; Body = (New-DfBody -Actors "##$($dfNb)x`n$dfTa"); Ps = 1 },
+        @{ Name = "a Task Actors heading with a trailing NBSP"; Body = ("# AI Handoff`n`n## Status`n$dfOk`n`n## Task Actors$dfNb`n- Reviewer: Claude Code`n## Task Actors`n$dfTa`n`n$dfCf`n"); Ps = 1 },
+        @{ Name = "an NBSP Reviewer value, then a * Reviewer line"; Body = (New-DfBody -Actors "- Implementer: Claude Code`n- Reviewer: $dfNb`n* Reviewer: Codex"); Ps = 1 },
+        @{ Name = "an NBSP Implementer value, then a * Implementer line"; Body = (New-DfBody -Actors "- Implementer: $dfNb`n* Implementer: Claude Code`n- Reviewer: Codex"); Ps = 1 },
+        @{ Name = "## + NEL inside Task Actors"; Body = (New-DfBody -Actors "##$($dfNel)x`n$dfTa"); Ps = 1 },
+        @{ Name = "an NBSP before a self-review line"; Body = (New-DfBody -Actors "$dfTa`n$($dfNb)- Reviewer: Claude Code"); Ps = 12 },
+        @{ Name = "an ideographic space before a * self-review line"; Body = (New-DfBody -Actors "$dfTa`n$($dfIdeo)* Reviewer: Claude Code"); Ps = 12 },
+        @{ Name = "a lone CR before a * self-review line"; Body = (New-DfBody -Actors "$dfTa`n- Note: x`r* Reviewer: Claude Code"); Ps = 12 },
+        @{ Name = "a Kelvin-sign Task Actors heading carrying a self-review"; Body = (New-DfBody -Actors "$dfTa`n## Tas$($dfKelvin) Actors`n- Reviewer: Claude Code"); Ps = 12 },
+        @{ Name = "a legitimate file written in Hebrew"; Body = (New-DfBody -Status "- State: REVIEW_DONE`n- Waiting For: User`n- Current Task: $dfHeb1" -Middle "## $dfHeb2`n$dfHeb3`n- $($dfHeb4): $dfHeb5`n"); Ps = 0; Same = $true }
+    )
+    $dfDir = New-SuFixture -Roles $dfRolesTwo -Handoff (New-DfBody)
+    Set-Content -Path (Join-Path $dfDir "foo.txt") -Value "x" -Encoding utf8
+    $dfUtf8 = New-Object System.Text.UTF8Encoding($false)
+    $dfBroken = @(); $dfMismatch = @(); $dfMeaning = @(); $dfAllowedBoth = 0; $dfLocale = @()
+    $dfUtf8Locale = ((& $rvBash.Source -c "locale -a 2>/dev/null" | Out-String) -match '(?im)^C\.utf-?8\s*$')
+    foreach ($dfRow in $dfRows) {
+        $dfRoles = if ($dfRow.ContainsKey("Roles")) { $dfRow.Roles } else { $dfRolesTwo }
+        [System.IO.File]::WriteAllText((Join-Path $dfDir ".ai/roles/ROLE_ASSIGNMENT.md"), $dfRoles, $dfUtf8)
+        $dfText = $dfRow.Body
+        if ($dfRow.NoFinalNewline) { $dfText = $dfText.TrimEnd("`n") }
+        if ($dfRow.Crlf) { $dfText = $dfText -replace "`n", "`r`n" }
+        $dfBytes = $dfUtf8.GetBytes($dfText)
+        if ($dfRow.Bom) { $dfBytes = [byte[]](0xEF, 0xBB, 0xBF) + $dfBytes }
+        [System.IO.File]::WriteAllBytes((Join-Path $dfDir "AI_HANDOFF.md"), $dfBytes)
+        $r = Invoke-Handoff -WorkDir $dfDir -Arguments @("commit-check")
+        $dfSh = Invoke-RvSh -Dir $dfDir -ShArgs @("commit-check")
+        $dfShCode = if ($dfSh -match "exit=(\d+)\s*$") { [int]$Matches[1] } else { -1 }
+        # The same Bash run under a UTF-8 locale must reach the same verdict.
+        if ($dfUtf8Locale) {
+            $dfPrevLc = $env:LC_ALL
+            $env:LC_ALL = "C.UTF-8"
+            try { $dfShU = Invoke-RvSh -Dir $dfDir -ShArgs @("commit-check") } finally { if ($null -eq $dfPrevLc) { Remove-Item Env:\LC_ALL -ErrorAction SilentlyContinue } else { $env:LC_ALL = $dfPrevLc } }
+            $dfShUCode = if ($dfShU -match "exit=(\d+)\s*$") { [int]$Matches[1] } else { -1 }
+            if (($dfShUCode -ne $dfShCode) -or (($dfShU -cmatch "Commit: ALLOWED") -ne ($dfSh -cmatch "Commit: ALLOWED"))) { $dfLocale += "[$($dfRow.Name)] default=$dfShCode utf8=$dfShUCode" }
+        }
+        if ($r.Code -ne $dfRow.Ps) { $dfMeaning += "[$($dfRow.Name)] ps=$($r.Code) expected $($dfRow.Ps)" }
+        if (($r.Code -ne 0) -and (($dfShCode -eq 0) -or ($dfSh -cmatch "Commit: ALLOWED"))) { $dfBroken += "[$($dfRow.Name)] ps=$($r.Code) sh=$dfShCode" }
+        if ($dfRow.Same -and ($dfShCode -ne $r.Code)) { $dfMismatch += "[$($dfRow.Name)] ps=$($r.Code) sh=$dfShCode" }
+        if (($r.Code -eq 0) -and ($dfShCode -eq 0) -and ($dfSh -cmatch "Commit: ALLOWED")) { $dfAllowedBoth++ }
+    }
+    Check "differential: every row means what it says in handoff.ps1" ($dfMeaning.Count -eq 0) ($dfMeaning -join "; ")
+    Check "differential: Bash never prints ALLOWED or exits 0 on a file PowerShell refuses ($($dfRows.Count) rows)" ($dfBroken.Count -eq 0) ($dfBroken -join "; ")
+    Check "differential: where the exit codes are meant to match, they do" ($dfMismatch.Count -eq 0) ($dfMismatch -join "; ")
+    Check "differential: legitimate files are allowed by both shells, so refusing everything cannot pass" ($dfAllowedBoth -ge 10) "both allowed: $dfAllowedBoth"
+    if ($dfUtf8Locale) {
+        Check "differential: Bash reaches the same verdict on every row under LC_ALL=C.UTF-8" ($dfLocale.Count -eq 0) ($dfLocale -join "; ")
+    } else {
+        Write-Host "  SKIP  differential under LC_ALL=C.UTF-8: that locale does not exist on this machine"
+    }
+
+    # 4. Bash setup: every failure path cleans up, and a failed restore says how to recover.
+    $suInstallSnippet = Get-Content -Raw -Path (Join-Path $RepoRoot "templates/gitignore-snippet.txt")
+    Check "setup's work folder .ai/handoff-history is in the installers' .gitignore snippet" ($suInstallSnippet -match '(?m)^/\.ai/handoff-history/\r?$')
+    $dfSeamTarget = Join-Path $FixtureRoot "df-seam-install"
+    New-Item -ItemType Directory -Path $dfSeamTarget -Force | Out-Null
+    & git -C $dfSeamTarget init -q 2>&1 | Out-Null
+    $null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $dfSeamTarget -NoRolesWindow 2>&1
+    $dfSeamRoles = Join-Path $dfSeamTarget ".ai/roles/ROLE_ASSIGNMENT.md"
+    $dfSeamOrig = [System.IO.File]::ReadAllBytes($dfSeamRoles)
+    $dfSeamHandoff = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $dfSeamTarget "AI_HANDOFF.md")).Hash
+    $dfPrevSeam = $env:HANDOFF_TEST_SETUP_FAIL
+    try {
+        foreach ($dfSeam in @("role", "handoff", "interrupt")) {
+            $env:HANDOFF_TEST_SETUP_FAIL = $dfSeam
+            $dfOut = Invoke-RvSh -Dir $dfSeamTarget -ShArgs @("setup", "--players", "Codex", "--yes")
+            $dfLeft = @(Get-ChildItem -LiteralPath $dfSeamTarget -Recurse -Force -File | Where-Object { $_.Name -match '\.(setup|setup2|setup-orig|backup)-|\.handoff-setup-probe-' })
+            Check "handoff.sh setup failing at '$dfSeam' restores both files and leaves no temp file" (($dfOut -match "exit=1\s*$") -and ($dfOut -match "Nothing was changed") -and ([System.Linq.Enumerable]::SequenceEqual([byte[]][System.IO.File]::ReadAllBytes($dfSeamRoles), [byte[]]$dfSeamOrig)) -and ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $dfSeamTarget "AI_HANDOFF.md")).Hash -eq $dfSeamHandoff) -and ($dfLeft.Count -eq 0)) "$dfOut left=$($dfLeft.Name -join ',')"
+        }
+        $env:HANDOFF_TEST_SETUP_FAIL = "handoff,restore"
+        $dfOut = Invoke-RvSh -Dir $dfSeamTarget -ShArgs @("setup", "--players", "Codex", "--yes")
+        $dfKept = @(Get-ChildItem -LiteralPath (Join-Path $dfSeamTarget ".ai/handoff-history") -Force -File -Filter "ROLE_ASSIGNMENT.md.setup-orig-*" -ErrorAction SilentlyContinue)
+        $dfOthers = @(Get-ChildItem -LiteralPath $dfSeamTarget -Recurse -Force -File | Where-Object { ($_.Name -match '\.(setup|setup2|backup)-|\.handoff-setup-probe-') -and ($_.Name -notmatch 'setup-orig-') })
+        Check "a failed restore says setup failed part-way, never 'Nothing was changed', and names the saved original" (($dfOut -match "exit=1\s*$") -and ($dfOut -match "setup: FAILED part-way") -and ($dfOut -notmatch "Nothing was changed") -and ($dfOut -match "ROLE_ASSIGNMENT\.md may already be the new one while AI_HANDOFF\.md is still the old one") -and ($dfKept.Count -eq 1) -and ($dfOthers.Count -eq 0)) "$dfOut kept=$($dfKept.Count) others=$($dfOthers.Name -join ',')"
+        $dfGitStatus = (& git -C $dfSeamTarget status --porcelain --untracked-files=all 2>$null | Out-String)
+        Check "the saved original is ignored by Git, so 'git add -A' cannot commit it" ($dfGitStatus -notmatch "setup-orig")
+        $env:HANDOFF_TEST_SETUP_FAIL = $null
+        if ($dfOut -match 'Restore it:\s+(mv -f "[^"]+" "[^"]+")') {
+            $dfRestoreCmd = $Matches[1]
+            $null = Invoke-RvIn -Dir $dfSeamTarget -Block { & $rvBash.Source -c $dfRestoreCmd }
+        }
+        Check "the printed restore command puts the original role file back byte for byte" ([System.Linq.Enumerable]::SequenceEqual([byte[]][System.IO.File]::ReadAllBytes($dfSeamRoles), [byte[]]$dfSeamOrig))
+        $dfOut = Invoke-RvSh -Dir $dfSeamTarget -ShArgs @("setup", "--players", "Codex", "--yes")
+        Check "after the recovery, handoff.sh setup succeeds" ($dfOut -match "exit=0\s*$")
+    } finally {
+        if ($null -eq $dfPrevSeam) { Remove-Item Env:\HANDOFF_TEST_SETUP_FAIL -ErrorAction SilentlyContinue } else { $env:HANDOFF_TEST_SETUP_FAIL = $dfPrevSeam }
+    }
+
+    # 5. A folder setup cannot write is named as such (Windows ACL deny, removed afterwards).
+    $dfIcacls = Join-Path $env:SystemRoot "System32\icacls.exe"
+    if ((Test-Path -LiteralPath $dfIcacls) -and -not [string]::IsNullOrEmpty($env:USERNAME)) {
+        foreach ($dfPerm in @(@{ Name = ".ai/roles"; Rel = ".ai/roles"; Want = "ROLE_ASSIGNMENT\.md could not be written: the folder \.ai/roles is not writable" }, @{ Name = "the project folder"; Rel = ""; Want = "AI_HANDOFF\.md could not be written: the project folder is not writable" })) {
+            $dfPermFx = New-SuFixture -Roles (New-SuRoles)
+            New-Item -ItemType Directory -Path (Join-Path $dfPermFx ".ai/handoff-history") -Force | Out-Null
+            $dfPermBefore = Get-SuHashes -Dir $dfPermFx
+            $dfDenied = if ($dfPerm.Rel -eq "") { $dfPermFx } else { Join-Path $dfPermFx $dfPerm.Rel }
+            $null = & $dfIcacls $dfDenied /deny "$($env:USERNAME):(AD,WD)" 2>&1
+            try {
+                $dfOut = Invoke-RvSh -Dir $dfPermFx -ShArgs @("setup", "--players", "Codex", "--yes")
+            } finally {
+                $null = & $dfIcacls $dfDenied /remove:d "$($env:USERNAME)" 2>&1
+            }
+            Check "handoff.sh setup names a write-denied $($dfPerm.Name), not a malformed table or an unreadable file" (($dfOut -match "exit=1\s*$") -and ($dfOut -match $dfPerm.Want) -and ($dfOut -notmatch "must have exactly one") -and ($dfOut -notmatch "could not be read") -and ((Get-SuHashes -Dir $dfPermFx) -eq $dfPermBefore)) $dfOut
+        }
+    } else {
+        Write-Host "  SKIP  write-denied folders: icacls or USERNAME not available"
+    }
 }
 
 # --- Summary ---

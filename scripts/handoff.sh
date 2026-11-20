@@ -1,24 +1,54 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.17.0)
-# Commands: status, adapters, next, start, commit-check
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.18.0)
+# Commands: status, adapters, setup, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
 # PowerShell; use handoff.ps1.
 
 set -euo pipefail
 
+# v3.18.0 (review fix): every reader here works byte by byte, so a UTF-8 locale on another
+# machine cannot change what awk, grep, tr or sed match. This also gives the child git
+# processes the C locale; only their porcelain output is parsed, never their messages.
+export LC_ALL=C
+
 COMMAND="${1:-}"
 CLIP=false
 REQUEST=""
+PLAYERS=""
+PLAYERS_SET=false
+MASTER_ARG=""
+YES=false
+ARG_ERROR=""
 [ $# -gt 0 ] && shift  # consume COMMAND
-for _arg in "$@"; do
-    case "$_arg" in
-        -c|--clip) CLIP=true ;;
-        -*)        ;;
-        *)         [ -z "$REQUEST" ] && REQUEST="$_arg" ;;
-    esac
-done
-unset _arg
+if [ "$COMMAND" = "setup" ]; then
+    # v3.18.0: setup takes values, so its options are parsed strictly. Every other command
+    # keeps the old rule: options are ignored and the first bare word is the request.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --players|-Players)
+                if [ $# -lt 2 ]; then ARG_ERROR="$1 needs a value: $1 \"<Claude Code, Codex, or both>\""; break; fi
+                PLAYERS="$2"; PLAYERS_SET=true; shift ;;
+            --players=*) PLAYERS="${1#--players=}"; PLAYERS_SET=true ;;
+            --master|-Master)
+                if [ $# -lt 2 ]; then ARG_ERROR="$1 needs a value: $1 \"<one of the players>\""; break; fi
+                MASTER_ARG="$2"; shift ;;
+            --master=*) MASTER_ARG="${1#--master=}" ;;
+            --yes|-y|-Yes) YES=true ;;
+            *) ARG_ERROR="unknown setup option '$1'. setup takes --players, --master and --yes."; break ;;
+        esac
+        shift
+    done
+else
+    for _arg in "$@"; do
+        case "$_arg" in
+            -c|--clip) CLIP=true ;;
+            -*)        ;;
+            *)         [ -z "$REQUEST" ] && REQUEST="$_arg" ;;
+        esac
+    done
+    unset _arg
+fi
 
 HANDOFF_FILE="$(pwd)/AI_HANDOFF.md"
 if [ ! -f "$HANDOFF_FILE" ]; then
@@ -30,24 +60,118 @@ fi
 # Helpers
 # ---------------------------------------------------------------------------
 
+# v3.18.0 (review fix): characters handoff.sh cannot read the way handoff.ps1 reads them.
+# handoff.ps1 reads AI_HANDOFF.md and the role file with Get-Content -Encoding UTF8, as .NET
+# strings: a lone CR ends a line there, .NET regex \s and Trim() take Unicode whitespace,
+# and its case-insensitive -eq / -match fold a few non-ASCII letters to ASCII. awk does
+# none of that, so instead of guessing, commit-check and setup refuse a file that contains
+# one of these, and point to handoff.ps1. This is the one list; each group says why it is in.
+# Prints "<line>|<U+XXXX>" for the first such character, or nothing. Byte-wise (od), so it
+# sees NUL and lone CRs, and no locale can change it.
+_first_unreadable_char() {
+    od -An -v -tu1 "$1" | awk '
+        function hit(cp) { if (!found) { found = 1; printf "%d|U+%04X", line, cp } }
+        function check(cp) {
+            # Unicode whitespace: .NET Char.IsWhiteSpace and regex \s accept these; awk does not.
+            # U+180E was whitespace in older .NET Unicode tables; it is listed either way.
+            if (cp == 133 || cp == 160 || cp == 5760 || cp == 6158 || (cp >= 8192 && cp <= 8202) || cp == 8232 || cp == 8233 || cp == 8239 || cp == 8287 || cp == 12288) { hit(cp); return }
+            # Zero-width: U+200B everywhere, U+FEFF anywhere but as the BOM at the start of the
+            # file (.NET Trim() removes U+FEFF; a mid-file one is kept as a character).
+            if (cp == 65279 && cpstart == 1) return
+            if (cp == 8203 || cp == 65279) { hit(cp); return }
+            # Letters .NET case-insensitive comparison can fold to ASCII: Kelvin sign (k),
+            # long s (s), dotted capital I and dotless i (i).
+            if (cp == 8490 || cp == 383 || cp == 304 || cp == 305) { hit(cp); return }
+        }
+        BEGIN { line = 1; pos = 0; need = 0 }
+        {
+            for (i = 1; i <= NF; i++) {
+                b = $i + 0; pos++
+                if (pendcr) { pendcr = 0; if (b != 10) hit(13) }
+                if (need > 0) {
+                    if (b >= 128 && b < 192) { cp = cp * 64 + (b - 128); need--; if (need == 0) check(cp); continue }
+                    need = 0
+                }
+                if (b == 10) { line++; continue }
+                if (b == 13) { pendcr = 1; continue }
+                # C0 controls but TAB, LF and the CR of a CRLF; DEL; NUL. .NET Trim() removes some
+                # of them (NUL, VT, FF), so awk and .NET disagree on where a value ends.
+                if (b < 32 && b != 9) { hit(b); continue }
+                if (b == 127) { hit(b); continue }
+                if (b < 128) continue
+                # A UTF-8 lead byte; cpstart remembers where, so a BOM at byte 1 is allowed.
+                if (b >= 194 && b <= 223) { cp = b - 192; need = 1; cpstart = pos; continue }
+                if (b >= 224 && b <= 239) { cp = b - 224; need = 2; cpstart = pos; continue }
+                if (b >= 240 && b <= 244) { cp = b - 240; need = 3; cpstart = pos; continue }
+                # An invalid byte: handoff.ps1 reads it as U+FFFD, which no reader treats as a
+                # space or a letter, so both shells agree on it.
+            }
+        }
+        END { if (pendcr) hit(13) }'
+}
+
+# commit-check and setup refuse, before anything else is read, a file that carries one of
+# the characters above. Other commands (status, next, start, adapters) only route, and run.
+_unreadable_guard() {
+    local rel hit line cp
+    for rel in AI_HANDOFF.md .ai/roles/ROLE_ASSIGNMENT.md; do
+        [ -f "$(pwd)/$rel" ] || continue
+        hit="$(_first_unreadable_char "$(pwd)/$rel")"
+        [ -n "$hit" ] || continue
+        line="${hit%%|*}"; cp="${hit#*|}"
+        echo ""
+        if [ "$COMMAND" = "setup" ]; then echo "setup: blocked."; else echo "Commit: BLOCKED - handoff.sh cannot verify this file."; fi
+        echo "Reason:      $rel line $line contains $cp, a character handoff.sh does not read the way"
+        echo "             handoff.ps1 does (a Unicode space, a control character, a lone CR, a zero-width"
+        echo "             character, or a letter .NET folds to ASCII). handoff.sh cannot verify this file."
+        echo "Either:      run pwsh scripts/handoff.ps1 $COMMAND, which is the authority,"
+        echo "Or:          remove the character from $rel and run this again."
+        echo "Nothing was changed."
+        echo ""
+        exit 1
+    done
+}
+
 # Print lines from a named ## section; CRLF-safe.
+# v3.18.0 (review fix): a line-by-line port of handoff.ps1's Get-SectionLines:
+#   foreach line:
+#     if line.TrimEnd() -eq "## <Heading>" (without regard to case): in section; next line
+#     elseif in section: a line matching ^##\s ends the reading for good; else the line is kept
+# So a repeated heading, adjacent or not, is skipped and reading goes on; any other "##"
+# heading ends the section, and nothing after it is read, even a later repeat of the heading;
+# a "###" line is content. Get-Content drops a UTF-8 BOM and the CR of a CRLF; so does this.
+# After the section closes the reader still goes on to the end, printing nothing: an early
+# awk "exit" let tr die of SIGPIPE on a large file, and pipefail then ended the script with
+# exit 141 and no output.
 _section_content() {
-    local h="## $1"
+    local h; h="$(printf '## %s' "$1" | tr '[:upper:]' '[:lower:]')"
     tr -d '\r' < "$HANDOFF_FILE" | \
-    awk -v h="$h" '$0==h{s=1;next} s&&/^## /{s=0} s{print}'
+    awk -v h="$h" -v bom="$(printf '\357\273\277')" '
+        done { next }
+        { l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); t = l; sub(/[[:space:]]+$/, "", t) }
+        tolower(t) == h { s = 1; next }
+        s { if (l ~ /^##[[:space:]]/) { done = 1; next } print l }'
+}
+
+# One Status field, read as handoff.ps1's Read-HandoffState reads it: '^- <Key>:\s*(.+)'
+# without regard to case, the value trimmed, the last matching line winning.
+_status_field() {
+    printf '%s\n' "$1" | awk -v k="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" '
+        { low = tolower($0) }
+        index(low, "- " k ":") == 1 && length($0) > length(k) + 3 { v = substr($0, length(k) + 4); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); val = v; found = 1 }
+        END { if (found) printf "%s", val; else exit 1 }'
 }
 
 _parse_status() {
     STATE="(unknown)" WAITING_FOR="(unknown)" CURRENT_TASK="(unknown)" MODEL_PROFILE="auto"
-    local line
-    while IFS= read -r line; do
-        case "$line" in
-            "- State: "*)        STATE="${line#- State: }" ;;
-            "- Waiting For: "*)  WAITING_FOR="${line#- Waiting For: }" ;;
-            "- Current Task: "*) CURRENT_TASK="${line#- Current Task: }" ;;
-            "- Model Profile: "*) MODEL_PROFILE="${line#- Model Profile: }" ;;
-        esac
-    done < <(_section_content "Status")
+    # v3.18.0 (review fix): the exact "- State: " prefix was read here, so a later
+    # "- state: IMPLEMENTING" that handoff.ps1 reads was invisible to Bash.
+    local status v
+    status="$(_section_content "Status")"
+    if v="$(_status_field "$status" "State")"; then STATE="$v"; fi
+    if v="$(_status_field "$status" "Waiting For")"; then WAITING_FOR="$v"; fi
+    if v="$(_status_field "$status" "Current Task")"; then CURRENT_TASK="$v"; fi
+    if v="$(_status_field "$status" "Model Profile")"; then MODEL_PROFILE="$v"; fi
     case "$STATE" in
         QUESTION_FOR_CODEX)  STATE="QUESTION_FOR_MASTER" ;;
         QUESTION_FOR_CLAUDE) STATE="QUESTION_FOR_IMPLEMENTER" ;;
@@ -59,18 +183,20 @@ _get_role_binding() {
     local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
     [ -f "$rf" ] || return 0
     local parsed role tool
+    # v3.18.0 (review fix): the role name is matched without regard to case, as
+    # handoff.ps1 matches it; "| implementer | Codex |" was skipped here before.
     parsed=$(tr -d '\r' < "$rf" | awk -F'|' '
-        /^\|[[:space:]]*(Master|Reviewer|Implementer)[[:space:]]*\|/{
-            r=$2; t=$3
+        tolower($0) ~ /^\|[[:space:]]*(master|reviewer|implementer)[[:space:]]*\|/{
+            r=tolower($2); t=$3
             gsub(/^[[:space:]]+|[[:space:]]+$/,"",r)
             gsub(/^[[:space:]]+|[[:space:]]+$/,"",t)
             if(r!=""&&t!="") print r"="t
         }')
     while IFS='=' read -r role tool; do
         case "$role" in
-            Master)      MASTER_TOOL="$tool" ;;
-            Reviewer)    REVIEWER_TOOL="$tool" ;;
-            Implementer) IMPLEMENTER_TOOL="$tool" ;;
+            master)      MASTER_TOOL="$tool" ;;
+            reviewer)    REVIEWER_TOOL="$tool" ;;
+            implementer) IMPLEMENTER_TOOL="$tool" ;;
         esac
     done <<< "$parsed"
 }
@@ -78,6 +204,16 @@ _get_role_binding() {
 # v3.17.0: the review rule from ROLE_ASSIGNMENT.md, read the way handoff.ps1 reads it. An
 # absent line is separate-tool; two lines or any other value leave the strict rule in force
 # and set REVIEW_INDEPENDENCE_ERROR, which blocks at the role checkpoint.
+# v3.18.0: one reader for the 'Review Independence:' and 'Setup:' lines, as in handoff.ps1:
+# a BOM on line 1 and a non-breaking space are ignored, an optional bullet is allowed, and
+# the key (given here in lower case) and the value are read without regard to case. Prints
+# every value as <value>, one per line, so a caller refuses a duplicate instead of choosing.
+_role_file_values() {
+    local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
+    [ -f "$rf" ] || return 0
+    tr -d '\r' < "$rf" | awk -v key="$1" -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ ("^[[:space:]]*([-*][[:space:]]+)?" key "[[:space:]]*:") { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }'
+}
+
 _get_review_independence() {
     REVIEW_INDEPENDENCE="separate-tool" REVIEW_INDEPENDENCE_ERROR=""
     local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md"
@@ -85,7 +221,7 @@ _get_review_independence() {
     local count value raw lines
     # v3.17.0 (review fix): key and value are read without regard to case, as handoff.ps1
     # reads them; a mis-cased line is never mistaken for an absent one.
-    lines="$(tr -d '\r' < "$rf" | awk -v bom="$(printf '\357\273\277')" -v nbsp="$(printf '\302\240')" '{ l = $0; if (NR == 1 && index(l, bom) == 1) l = substr(l, length(bom) + 1); gsub(nbsp, " ", l) } tolower(l) ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/ { v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print "<" v ">" }')"
+    lines="$(_role_file_values "review independence")"
     count="$(printf '%s' "$lines" | grep -c '^<' || true)"
     [ "$count" -eq 0 ] && return 0
     if [ "$count" -gt 1 ]; then
@@ -100,7 +236,29 @@ _get_review_independence() {
     esac
 }
 
-# Canonical tool identity, the same alias list as handoff.ps1's registry.
+# v3.18.0: the Setup line, with handoff.ps1's meaning. No line = configured (SETUP_STATE
+# empty); pending blocks every command but status and setup; anything else, or a
+# second line, sets SETUP_ERROR, which blocks at the role checkpoint.
+_get_setup_state() {
+    SETUP_STATE="" SETUP_ERROR=""
+    local count value raw lines
+    lines="$(_role_file_values "setup")"
+    count="$(printf '%s' "$lines" | grep -c '^<' || true)"
+    [ "$count" -eq 0 ] && return 0
+    if [ "$count" -gt 1 ]; then
+        SETUP_ERROR="ROLE_ASSIGNMENT.md declares 'Setup:' $count times. Keep exactly one line, 'Setup: pending' or 'Setup: complete'."
+        return 0
+    fi
+    raw="${lines#<}"; raw="${raw%>}"
+    value="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        pending|complete) SETUP_STATE="$value" ;;
+        *) SETUP_ERROR="ROLE_ASSIGNMENT.md declares 'Setup: $raw'. The value must be pending or complete." ;;
+    esac
+}
+
+# Canonical tool identity, the same alias list as handoff.ps1's registry. v3.18.0: this is
+# the only definition; a second copy further down was removed.
 _canonical_tool() {
     local key; key="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     case "$key" in
@@ -108,6 +266,23 @@ _canonical_tool() {
         "claude code"|"claude-code"|"claudecode"|"claude code cli"|"claude code window") echo "claude-code" ;;
         *) echo "" ;;
     esac
+}
+
+# A placeholder actor of a task that has not bound its actors yet; never a tool.
+_is_sentinel_actor() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')" in
+        tbd|"(unknown)"|unknown) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_is_user_actor() {
+    [ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')" = "user" ]
+}
+
+# The message handoff.ps1's registry gives for an identity it does not know.
+_unknown_tool_reason() {
+    echo "Unrecognized tool identity '$1'. Known tools: Codex, Claude Code. Add an explicit alias to the canonical registry rather than relying on a display name."
 }
 
 _display_tool() {
@@ -287,11 +462,19 @@ cmd_status() {
     echo "Waiting For:  $WAITING_FOR"
     echo "Task:         $CURRENT_TASK"
     echo "Model Profile: $MODEL_PROFILE"
-    echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
+    if [ "$SETUP_STATE" = "pending" ]; then
+        # v3.18.0: the template's binding is not shown as if someone had chosen it.
+        echo "Setup:        NOT CONFIGURED - this project has not chosen its players and its Master yet."
+        echo "              Run:  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+        echo "              An agent must ask the user which players and which Master; it never chooses for them."
+        echo "Roles:       not chosen yet; work commands are blocked until setup is done."
+    else
+        echo "Roles:        Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL"
+    fi
     if _single_vendor_review "$REVIEWER_TOOL" "$IMPLEMENTER_TOOL"; then
         echo "Review:       $(_single_vendor_line "$REVIEWER_TOOL")"
     fi
-    echo "Adapters:     run 'bash scripts/handoff.sh adapters' for callable/manual automation status"
+    [ "$SETUP_STATE" = "pending" ] || echo "Adapters:     run 'bash scripts/handoff.sh adapters' for callable/manual automation status"
     echo "Commit:       $(_commit_status_text)"
     [ -f "$(pwd)/.agents/skills/codex-claude-handoff/SKILL.md" ] && \
         echo "Protocol:     installed (canonical: .ai/skills/codex-claude-handoff/; roles: .ai/roles/ROLE_ASSIGNMENT.md)"
@@ -374,15 +557,7 @@ cmd_adapters() {
 # v3.10.0: the model this turn should run on, resolved the same way as handoff.ps1:
 # HANDOFF_<TOOL>_MODEL_<PROFILE>, then the profile's claudeModel/codexModel in
 # MODEL_ROUTING.json, then inherit. handoff.ps1 models remains the full view.
-_canonical_tool() {
-    local t
-    t="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-    case "$t" in
-        codex|"codex window"|"codex cli"|"codex desktop"|"openai codex") echo "codex" ;;
-        "claude code"|claude-code|claudecode|"claude code cli"|"claude code window") echo "claude-code" ;;
-        *) echo "" ;;
-    esac
-}
+# (_canonical_tool is defined once, near the top of this file.)
 
 _effective_profile() {
     local p
@@ -406,7 +581,10 @@ _effective_profile() {
 _routing_value() {
     local file="$1" profile="$2" key="$3"
     [ -f "$file" ] || return 0
+    # v3.18.0 (review fix): no early "exit" while tr is still writing: under pipefail a
+    # SIGPIPE in tr would end the whole script. A done flag reads to the end instead.
     tr -d '\r' < "$file" | awk -v prof="$profile" -v key="$key" '
+        done { next }
         {
             if (!inb) {
                 opener = "\"" prof "\"[ \t]*:[ \t]*\\{"
@@ -418,9 +596,9 @@ _routing_value() {
             if (match(seg, pat)) {
                 v = substr(seg, RSTART, RLENGTH)
                 sub("^\"" key "\"[ \t]*:[ \t]*\"", "", v); sub("\"$", "", v)
-                print v; exit
+                print v; done = 1; next
             }
-            if (cut > 0) exit
+            if (cut > 0) done = 1
         }'
 }
 
@@ -661,9 +839,39 @@ cmd_commit_check() {
         echo "Commit: BLOCKED in handoff.sh - a single-vendor review is verified only by pwsh scripts/handoff.ps1 commit-check, which checks that the verdict came from review-run."
         echo "Stop category: Environment/Preflight (tool unavailable) - not a user decision."
         echo ""
-        return
+        # v3.18.0 (review fix): a blocked commit-check exits non-zero, as handoff.ps1 does.
+        exit 1
     fi
     if [ "$STATE" = "REVIEW_DONE" ] && [ "$WAITING_FOR" = "User" ]; then
+        # v3.18.0 (review fix): the commit audit of handoff.ps1's Get-CommitPlan, on the lines
+        # Get-TaskActors reads ("-" bullets only): exactly one distinct Implementer and one
+        # distinct Reviewer, and the Reviewer is not the Implementer's tool under
+        # separate-tool. Under fresh-context one tool in both is a single-vendor review,
+        # which only handoff.ps1 can verify.
+        local audit_role audit audit_count audit_failed=false audit_impl="" audit_rev=""
+        for audit_role in Implementer Reviewer; do
+            audit="$(_task_actor_audit "$audit_role")"
+            audit_count="${audit%%|*}"
+            if [ "$audit_count" != "1" ]; then
+                echo "Commit: BLOCKED - AI_HANDOFF.md must include exactly one Task Actors $audit_role for commit audit (found $audit_count)."
+                audit_failed=true
+            fi
+            if [ "$audit_role" = "Implementer" ]; then audit_impl="${audit#*|}"; else audit_rev="${audit#*|}"; fi
+        done
+        if ! $audit_failed && [ -n "$(_canonical_tool "$audit_rev")" ] && [ "$(_canonical_tool "$audit_rev")" = "$(_canonical_tool "$audit_impl")" ]; then
+            if _fresh_context_active; then
+                _single_vendor_line "$audit_rev"
+                echo "Commit: BLOCKED in handoff.sh - a single-vendor review is verified only by pwsh scripts/handoff.ps1 commit-check, which checks that the verdict came from review-run."
+            else
+                echo "Commit: BLOCKED - commit audit invariant violation: actual Reviewer must not equal actual Implementer ('$audit_rev' / '$audit_impl')."
+            fi
+            audit_failed=true
+        fi
+        if $audit_failed; then
+            echo "No commit is authorized while who implemented and who reviewed is unclear."
+            echo ""
+            exit 1
+        fi
         local LOCAL_IGNORED="AI_HANDOFF.md NEXT_TURN.md USER_REQUEST.md HANDOFF_LOOP.log AI_SEQUENCE.md HANDOFF_RUN.json REVIEW.jsonl REVIEW_LAST.md MASTER.jsonl MASTER_LAST.md IMPLEMENTER.jsonl IMPLEMENTER_LAST.md IMPLEMENTER_COMMAND.md CODEX_REVIEW.jsonl CODEX_REVIEW_LAST.md CODEX_MASTER.jsonl CODEX_MASTER_LAST.md CLAUDE_IMPLEMENTER.jsonl CLAUDE_IMPLEMENTER_LAST.md CLAUDE_IMPLEMENTER_COMMAND.md .ai/roles/ROLE_ASSIGNMENT.md"
         local commit_files=() actual_files=()
         local line entry in_cf=false
@@ -725,14 +933,14 @@ cmd_commit_check() {
             echo "Commit: BLOCKED - could not stage git status output for verification."
             echo "Exact scope cannot be verified, so no commit is authorized."
             echo ""
-            return
+            exit 1
         fi
         if ! git status --porcelain=v1 -z --untracked-files=all >"$gtmp" 2>/dev/null; then
             rm -f "$gtmp"
             echo "Commit: BLOCKED - git status failed; exact scope cannot be verified."
             echo "No commit is authorized while the changed-file set is unknown."
             echo ""
-            return
+            exit 1
         fi
         while IFS= read -r -d '' gl; do
             [ ${#gl} -lt 4 ] && continue
@@ -753,7 +961,7 @@ cmd_commit_check() {
             echo "Commit: No tracked changes to commit."
             echo "Working tree is clean."
             echo ""
-            return
+            exit 1
         fi
 
         echo "Commit: ALLOWED - the Reviewer attested technical readiness."
@@ -816,6 +1024,9 @@ cmd_commit_check() {
             *)                         reason="Inspect AI_HANDOFF.md for details." ;;
         esac
         echo "Reason: $reason"
+        echo ""
+        # v3.18.0 (review fix): not allowed is a non-zero exit, as in handoff.ps1.
+        exit 1
     fi
     echo ""
 }
@@ -845,34 +1056,470 @@ cmd_release_blocked() {
     exit 1
 }
 
+# v3.18.0 (review fix): the one Task Actors reader. Every Bash function that looks at Task
+# Actors goes through it. It prints one "<role>|<bullet>|<value>" line per Task Actors line,
+# parsed as handoff.ps1 parses them: the line trimmed, a "-" or "*" bullet, optional spaces,
+# the key without regard to case, at least one character after the colon, the value trimmed.
+# handoff.ps1 itself reads those lines in two ways, and Bash keeps both, so it refuses
+# whenever either PowerShell path refuses:
+#   Test-RoleCheckpoint: '^[-*]\s*Implementer:\s*(.+)$', the last match wins  -> _task_actor
+#   Get-TaskActors (commit audit): '^-\s*Implementer:\s*(.+)$', "-" only, distinct values
+#     without regard to case, exactly one required                             -> _task_actor_audit
+_task_actor_entries() {
+    _section_content "Task Actors" | awk '
+        { l = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", l); low = tolower(l) }
+        low ~ /^[-*][[:space:]]*(implementer|reviewer):[[:space:]]*[^[:space:]]/ {
+            b = substr(l, 1, 1); r = low; sub(/^[-*][[:space:]]*/, "", r); sub(/:.*/, "", r)
+            v = l; sub(/^[^:]*:/, "", v); gsub(/^[[:space:]]+/, "", v)
+            print r "|" b "|" v
+        }'
+}
+
+_task_actor() {
+    # _task_actor <Implementer|Reviewer> -> the value the checkpoint reads ("-" or "*", last wins).
+    local wanted; wanted="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    _task_actor_entries | awk -F'|' -v w="$wanted" '$1 == w { v = substr($0, length($1) + length($2) + 3) } END { printf "%s", v }'
+}
+
+_task_actor_audit() {
+    # _task_actor_audit <Implementer|Reviewer> -> "<count>|<value>" as the commit audit reads it:
+    # "-" lines only, distinct values without regard to case, the first one as the value.
+    local wanted; wanted="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    _task_actor_entries | awk -F'|' -v w="$wanted" '
+        $1 == w && $2 == "-" { v = substr($0, length($1) + length($2) + 3); k = tolower(v); if (!(k in seen)) { seen[k] = 1; n++; if (n == 1) first = v } }
+        END { printf "%d|%s", n, first }'
+}
+
+_fresh_context_active() {
+    [ -z "$REVIEW_INDEPENDENCE_ERROR" ] && [ "$REVIEW_INDEPENDENCE" = "fresh-context" ]
+}
+
+# v3.18.0 (security scan fix): the checkpoint compares canonical identities and rejects an
+# unknown one, as handoff.ps1's Test-RoleCheckpoint does. Before this, an unrecognized name
+# that was identical for Reviewer and Implementer passed under fresh-context: raw strings
+# matched, _single_vendor_review answered "not single vendor", and commit-check said ALLOWED.
+CHECKPOINT_ERRORS=""
+CHECKPOINT_COUNT=0
+CHECKPOINT_SETUP_ERRORS=0
+_checkpoint_add() {
+    CHECKPOINT_ERRORS="${CHECKPOINT_ERRORS}${CHECKPOINT_ERRORS:+$'\n'}$1"
+    CHECKPOINT_COUNT=$((CHECKPOINT_COUNT + 1))
+}
+
 _role_checkpoint() {
-    local implementer="" reviewer="" line
-    while IFS= read -r line; do
-        case "$line" in
-            "- Implementer: "*) implementer="${line#- Implementer: }" ;;
-            "- Reviewer: "*) reviewer="${line#- Reviewer: }" ;;
+    local implementer reviewer role bound actual canonical_bound canonical_actual
+    implementer="$(_task_actor Implementer)"
+    reviewer="$(_task_actor Reviewer)"
+    CHECKPOINT_ERRORS="" CHECKPOINT_COUNT=0 CHECKPOINT_SETUP_ERRORS=0
+    for role in Implementer Reviewer Master; do
+        case "$role" in
+            Implementer) bound="$IMPLEMENTER_TOOL" ;;
+            Reviewer)    bound="$REVIEWER_TOOL" ;;
+            Master)      bound="$MASTER_TOOL" ;;
         esac
-    done < <(_section_content "Task Actors")
-    local errors=""
+        if [ -z "$(_canonical_tool "$bound")" ] && ! _is_sentinel_actor "$bound" && ! _is_user_actor "$bound"; then
+            _checkpoint_add "Invalid role binding: $role='$bound'. $(_unknown_tool_reason "$bound")"
+        fi
+    done
     # v3.17.0: an unreadable review rule blocks; fresh-context lets one tool hold both roles.
-    [ -n "$REVIEW_INDEPENDENCE_ERROR" ] && errors="Invalid review independence: $REVIEW_INDEPENDENCE_ERROR"
-    if [ "$REVIEWER_TOOL" = "$IMPLEMENTER_TOOL" ] && { [ -n "$REVIEW_INDEPENDENCE_ERROR" ] || [ "$REVIEW_INDEPENDENCE" != "fresh-context" ]; }; then
-        errors="${errors}${errors:+$'\n'}Invalid role binding: Reviewer and Implementer are both '$REVIEWER_TOOL'."
+    [ -n "$REVIEW_INDEPENDENCE_ERROR" ] && _checkpoint_add "Invalid review independence: $REVIEW_INDEPENDENCE_ERROR"
+    # v3.18.0: an unreadable Setup line is never read as configured or as pending.
+    if [ -n "$SETUP_ERROR" ]; then
+        _checkpoint_add "Invalid setup line: $SETUP_ERROR"
+        CHECKPOINT_SETUP_ERRORS=1
     fi
-    if [ -n "$implementer" ] && [ "$implementer" != "TBD" ] && [ "$implementer" != "$IMPLEMENTER_TOOL" ]; then
-        errors="${errors}${errors:+$'\n'}Role drift: AI_HANDOFF.md Task Actors Implementer='$implementer' but ROLE_ASSIGNMENT.md binds Implementer='$IMPLEMENTER_TOOL'."
+    if [ -n "$(_canonical_tool "$REVIEWER_TOOL")" ] && [ "$(_canonical_tool "$REVIEWER_TOOL")" = "$(_canonical_tool "$IMPLEMENTER_TOOL")" ] && ! _fresh_context_active; then
+        _checkpoint_add "Invalid role binding: Reviewer and Implementer both resolve to the same tool ('$REVIEWER_TOOL' / '$IMPLEMENTER_TOOL'). An implementer cannot be the sole reviewer of its own work."
     fi
-    if [ -n "$reviewer" ] && [ "$reviewer" != "TBD" ] && [ "$reviewer" != "$REVIEWER_TOOL" ]; then
-        errors="${errors}${errors:+$'\n'}Role drift: AI_HANDOFF.md Task Actors Reviewer='$reviewer' but ROLE_ASSIGNMENT.md binds Reviewer='$REVIEWER_TOOL'."
+    for role in Implementer Reviewer; do
+        if [ "$role" = "Implementer" ]; then actual="$implementer"; bound="$IMPLEMENTER_TOOL"; else actual="$reviewer"; bound="$REVIEWER_TOOL"; fi
+        [ -n "$actual" ] || continue
+        _is_sentinel_actor "$actual" && continue
+        canonical_actual="$(_canonical_tool "$actual")"
+        if [ -z "$canonical_actual" ] && ! _is_user_actor "$actual"; then
+            _checkpoint_add "Unrecognized Task Actors $role='$actual'. $(_unknown_tool_reason "$actual")"
+            continue
+        fi
+        canonical_bound="$(_canonical_tool "$bound")"
+        # Canonical identity, not display text: 'Codex Window' is the bound 'Codex', not drift.
+        if [ -z "$canonical_actual" ] || [ "$canonical_actual" != "$canonical_bound" ]; then
+            _checkpoint_add "Role drift: AI_HANDOFF.md Task Actors $role='$actual' but ROLE_ASSIGNMENT.md binds $role='$bound'."
+        fi
+    done
+    if [ -n "$(_canonical_tool "$implementer")" ] && [ "$(_canonical_tool "$implementer")" = "$(_canonical_tool "$reviewer")" ] && ! _fresh_context_active; then
+        _checkpoint_add "Independent-review invariant: Task Actors Implementer='$implementer' and Reviewer='$reviewer' resolve to the same tool."
     fi
-    if [ -n "$errors" ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "adapters" ]; then
+    [ -n "$CHECKPOINT_ERRORS" ] || return 0
+    [ "$COMMAND" = "status" ] && return 0
+    [ "$COMMAND" = "adapters" ] && return 0
+    # In the pending state setup rewrites the binding wholesale; a broken Setup line that is
+    # the only problem is repaired by setup and by nothing else.
+    if [ "$COMMAND" = "setup" ]; then
+        [ "$SETUP_STATE" = "pending" ] && return 0
+        [ "$CHECKPOINT_SETUP_ERRORS" -gt 0 ] && [ "$CHECKPOINT_COUNT" -eq "$CHECKPOINT_SETUP_ERRORS" ] && return 0
+    fi
+    echo ""
+    echo "Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync."
+    printf 'Reason: %s\n' "$CHECKPOINT_ERRORS"
+    echo "Repair: synchronize derived Task Actors in AI_HANDOFF.md with .ai/roles/ROLE_ASSIGNMENT.md, then run the command again."
+    if [ -n "$SETUP_ERROR" ]; then
+        echo "The 'Setup:' line must appear once and read pending or complete. setup repairs it when it is the only problem:"
+        echo "  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+        echo "An agent must ask the user which players and which Master; it never chooses for them."
+    fi
+    echo "No role-dependent action was performed."
+    exit 12
+}
+
+# v3.18.0: until the players and the Master are chosen, nothing runs on a binding nobody chose.
+_setup_gate() {
+    [ "$SETUP_STATE" = "pending" ] || return 0
+    # v3.18.0 (review fix): adapters too, as in handoff.ps1: it would show the template binding.
+    case "$COMMAND" in status|setup) return 0 ;; esac
+    echo ""
+    echo "Setup required: this project has not chosen its players and its Master yet."
+    echo "Run:  bash scripts/handoff.sh setup --players \"<Claude Code, Codex, or both>\" --master \"<one of the players>\""
+    echo "      (with PowerShell, .\\scripts\\handoff.ps1 setup can open a window)"
+    echo "An agent must ask the user which players and which Master; it never chooses for them."
+    echo "Nothing was started and nothing was changed."
+    echo ""
+    exit 14
+}
+
+_setup_blocked() {
+    echo ""
+    echo "setup: blocked."
+    printf 'Reason:      %s\n' "$@"
+    echo "Nothing was changed."
+    echo ""
+    exit 1
+}
+
+# A real write test: permissions on Windows are ACLs, which [ -w ] does not read reliably.
+_setup_probe_dir() {
+    local probe="$1/.handoff-setup-probe-$$"
+    if ( : > "$probe" ) 2>/dev/null; then rm -f "$probe"; return 0; fi
+    return 1
+}
+
+# Every move setup makes goes through here. HANDOFF_TEST_SETUP_FAIL is a TEST-ONLY seam, used
+# by protocol-tests to reach the failure paths deterministically. It can only make setup
+# fail, never pass. A comma list of:
+#   role       the move of the new role file fails (nothing has changed yet)
+#   handoff    the move of the new AI_HANDOFF.md fails (the role file is then restored)
+#   restore    putting the original role file back fails; only has an effect together with
+#              handoff or interrupt, since a restore happens only then - alone it is a no-op
+#   interrupt  setup sends itself TERM between the two moves
+_setup_mv() {
+    case ",${HANDOFF_TEST_SETUP_FAIL:-}," in *",$1,"*) return 1 ;; esac
+    mv -f "$2" "$3" 2>/dev/null
+}
+
+SETUP_TMP_FILES=()
+SETUP_PHASE=""
+SETUP_RF=""
+SETUP_ORIG=""
+_setup_cleanup() {
+    local f
+    [ ${#SETUP_TMP_FILES[@]} -gt 0 ] || return 0
+    for f in "${SETUP_TMP_FILES[@]}"; do [ -n "$f" ] && rm -f "$f" 2>/dev/null; done
+    return 0
+}
+
+# Called with the role file already replaced and AI_HANDOFF.md not. Puts the original back;
+# if even that fails, keeps the saved original and says exactly how to restore it.
+_setup_restore_or_report() {
+    if _setup_mv restore "$SETUP_ORIG" "$SETUP_RF"; then
+        SETUP_PHASE="restored"
+        _setup_blocked "$1, so the role file was restored; run setup again."
+    fi
+    # The saved original is now the only copy: keep it out of the cleanup.
+    local kept=() f
+    for f in "${SETUP_TMP_FILES[@]}"; do [ "$f" = "$SETUP_ORIG" ] || kept+=("$f"); done
+    SETUP_TMP_FILES=("${kept[@]}")
+    local rel_orig="${SETUP_ORIG#"$(pwd)"/}"
+    echo ""
+    echo "setup: FAILED part-way."
+    echo "Reason:      $1, and putting the original role file back failed too."
+    echo "Now:         .ai/roles/ROLE_ASSIGNMENT.md may already be the new one while AI_HANDOFF.md is still the old one,"
+    echo "             so the next command can stop on role drift."
+    echo "Saved:       the original role file is $rel_orig (ignored by Git)."
+    echo "Restore it:  mv -f \"$rel_orig\" \".ai/roles/ROLE_ASSIGNMENT.md\""
+    echo ""
+    exit 1
+}
+
+_setup_on_signal() {
+    trap - INT TERM
+    if [ "$SETUP_PHASE" = "role-replaced" ]; then
+        _setup_restore_or_report "setup was interrupted between its two writes"
+    fi
+    if [ "$SETUP_PHASE" = "done" ]; then
         echo ""
-        echo "Role checkpoint: BLOCKED - the current role binding and AI_HANDOFF.md are out of sync."
-        printf 'Reason: %s\n' "$errors"
-        echo "Repair: synchronize derived Task Actors in AI_HANDOFF.md with .ai/roles/ROLE_ASSIGNMENT.md, then run the command again."
-        echo "No role-dependent action was performed."
-        exit 12
+        echo "setup: interrupted after both files were written. The new setup is in place; run status to see it."
+        echo ""
+        exit 130
     fi
+    echo ""
+    echo "setup: interrupted. Nothing was changed."
+    echo ""
+    exit 130
+}
+
+_setup_usage() {
+    echo ""
+    echo "setup: choose the players and the Master. handoff.sh takes the choice as flags."
+    echo "Examples only - the choice is the user's; an agent asks the user and never chooses:"
+    echo ""
+    echo "  bash scripts/handoff.sh setup --players \"Claude Code,Codex\" --master \"Claude Code\" --yes"
+    echo "  bash scripts/handoff.sh setup --players \"Claude Code,Codex\" --master \"Codex\" --yes"
+    echo "  bash scripts/handoff.sh setup --players \"Codex\" --yes"
+    echo ""
+    echo "Players: one or both of Claude Code, Codex."
+    echo "Two players: --master is required. The Master's tool implements; the other tool reviews."
+    echo "One player:  that tool holds every role and reviews in a separate read-only run (fresh-context)."
+    echo "An agent installing this protocol asks the user; it never chooses for them."
+    echo "Nothing was changed."
+    echo ""
+}
+
+_display_of_canonical() {
+    case "$1" in
+        codex) echo "Codex" ;;
+        claude-code) echo "Claude Code" ;;
+    esac
+}
+
+# The same rules as handoff.ps1's Resolve-SetupChoice and the same apply: binding rows,
+# Review Independence, Setup: complete, a history row, and Task Actors in the untouched
+# install state only. No window and no prompt for the choice itself.
+cmd_setup() {
+    [ -z "$ARG_ERROR" ] || _setup_blocked "$ARG_ERROR"
+    if ! $PLAYERS_SET; then
+        [ -z "$MASTER_ARG" ] || _setup_blocked "--master needs --players: --players \"<Claude Code, Codex, or both>\" --master \"$MASTER_ARG\"."
+        _setup_usage
+        exit 1
+    fi
+    # Guards first: never while a turn may be running, and a configured project only between tasks.
+    local guard_errors=()
+    if [ -f "$(pwd)/HANDOFF_RUN.json" ] || { [ -f "$(pwd)/HANDOFF_BACKGROUND.json" ] && ! grep -Eq '"finishedUtc"[[:space:]]*:[[:space:]]*"' "$(pwd)/HANDOFF_BACKGROUND.json"; }; then
+        guard_errors+=("A turn may be running now (a run marker is present). Wait for it, or stop it with pwsh scripts/handoff.ps1 stop; pwsh scripts/handoff.ps1 status clears a stale marker.")
+    fi
+    local initial=false
+    [ "$STATE" = "WAITING_FOR_USER" ] && [ "$WAITING_FOR" = "User" ] && [ "$CURRENT_TASK" = "Initial setup" ] && initial=true
+    # v3.18.0 (review fix): Bash runs setup only on the untouched install state. Pending and
+    # anything else: the record was written before the players were chosen, and setup does
+    # not adopt it. Configured and anything else: the finished task has to be retired by the
+    # start drift recovery afterwards, which exists only in handoff.ps1.
+    if ! $initial; then
+        if [ "$SETUP_STATE" = "pending" ]; then
+            guard_errors+=("AI_HANDOFF.md is not the untouched install state ('$CURRENT_TASK', $STATE / Waiting For: $WAITING_FOR). setup does not adopt a record written before the players were chosen. To keep it, move AI_HANDOFF.md into .ai/handoff-history/ (local and gitignored there); then re-run the installer with --force (install.ps1 -Force) to restore a clean AI_HANDOFF.md, and run setup.")
+        else
+            guard_errors+=("'$CURRENT_TASK' is not the untouched install state. Reconfiguring a project after its first task requires PowerShell: pwsh scripts/handoff.ps1 setup (at a finished task; start then retires the record). To change one role: handoff.ps1 roles -SetRole <role> -SetTool <tool>.")
+        fi
+    fi
+    [ ${#guard_errors[@]} -eq 0 ] || _setup_blocked "${guard_errors[@]}"
+
+    # The choice.
+    local known="Claude Code, Codex" name canonical chosen="" displays="" count=0 IFS_SAVE
+    local -a names=()
+    IFS_SAVE="$IFS"; IFS=','; read -r -a names <<< "$PLAYERS"; IFS="$IFS_SAVE"
+    local errors=()
+    # An empty array is never expanded: Bash before 4.4 calls that unbound under set -u.
+    [ ${#names[@]} -gt 0 ] || names=("")
+    for name in "${names[@]}"; do
+        name="$(printf '%s' "$name" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        [ -n "$name" ] || continue
+        canonical="$(_canonical_tool "$name")"
+        if [ -z "$canonical" ]; then errors+=("Unknown player '$name'. Known tools: $known."); continue; fi
+        case " $chosen " in *" $canonical "*) continue ;; esac
+        chosen="${chosen}${chosen:+ }$canonical"
+        displays="${displays}${displays:+, }$(_display_of_canonical "$canonical")"
+        count=$((count + 1))
+    done
+    [ ${#errors[@]} -eq 0 ] || _setup_blocked "${errors[@]}"
+    [ "$count" -gt 0 ] || _setup_blocked "Choose at least one player. Known tools: $known. For example: --players \"<Claude Code, Codex, or both>\"."
+    [ "$count" -le 2 ] || _setup_blocked "setup binds one player or two; $count were given ($displays)."
+    local master_c="" master_d="" impl_d="" rev_d="" mode
+    if [ -n "$MASTER_ARG" ]; then
+        master_c="$(_canonical_tool "$MASTER_ARG")"
+        [ -n "$master_c" ] || _setup_blocked "Unknown Master '$MASTER_ARG'. Known tools: $known."
+        case " $chosen " in *" $master_c "*) ;; *) _setup_blocked "The Master must be one of the players. '$(_display_of_canonical "$master_c")' is not in the players ($displays)." ;; esac
+    fi
+    if [ "$count" -eq 1 ]; then
+        master_d="$(_display_of_canonical "$chosen")"; impl_d="$master_d"; rev_d="$master_d"; mode="fresh-context"
+    else
+        if [ -z "$master_c" ]; then
+            local first="${chosen%% *}" second="${chosen##* }"
+            _setup_blocked "With two players, choose the Master: --master \"$(_display_of_canonical "$first")\" or --master \"$(_display_of_canonical "$second")\". No Master is chosen for you."
+        fi
+        local other
+        for other in $chosen; do [ "$other" = "$master_c" ] || break; done
+        master_d="$(_display_of_canonical "$master_c")"; impl_d="$master_d"; rev_d="$(_display_of_canonical "$other")"; mode="separate-tool"
+    fi
+
+    local current_mode current_setup
+    if [ -n "$REVIEW_INDEPENDENCE_ERROR" ]; then current_mode="invalid"; else current_mode="$REVIEW_INDEPENDENCE"; fi
+    if [ -n "$SETUP_ERROR" ]; then current_setup="invalid"; elif [ -n "$SETUP_STATE" ]; then current_setup="$SETUP_STATE"; else current_setup="none"; fi
+    if [ "$current_setup" = "complete" ] && [ "$current_mode" = "$mode" ] && \
+       [ "$(_canonical_tool "$MASTER_TOOL")" = "$(_canonical_tool "$master_d")" ] && \
+       [ "$(_canonical_tool "$REVIEWER_TOOL")" = "$(_canonical_tool "$rev_d")" ] && \
+       [ "$(_canonical_tool "$IMPLEMENTER_TOOL")" = "$(_canonical_tool "$impl_d")" ]; then
+        echo ""
+        echo "setup: this project already has these players and this Master. Nothing to change."
+        echo ""
+        return 0
+    fi
+
+    echo ""
+    if [ "$SETUP_STATE" = "pending" ]; then echo "First setup: the players and the Master for this project."; else echo "Reconfiguring the players and the Master for this project."; fi
+    echo "  Players:     $displays"
+    echo "  Master:      $master_d   (decides the next task and routes it)"
+    echo "  Implementer: $impl_d   (writes the code)"
+    echo "  Reviewer:    $rev_d   (checks it and gives the verdict)"
+    if [ "$mode" = "fresh-context" ]; then
+        echo "  Review:      fresh-context - $rev_d reviews in a separate read-only run the harness starts (review-run, then review-apply), never in the Implementer's context."
+        echo "  Weaker:      one vendor reviewing its own vendor's work misses what a second vendor would catch."
+        echo "               Two tools remain the recommended setup."
+    else
+        echo "  Review:      separate-tool - $rev_d reviews what $impl_d writes; the Reviewer is never the Implementer's tool."
+    fi
+    if $initial; then
+        echo "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding, Review Independence, Setup: complete, a history row), and AI_HANDOFF.md Task Actors."
+    else
+        echo "  Changes:     .ai/roles/ROLE_ASSIGNMENT.md (binding, Review Independence, Setup: complete, a history row)."
+    fi
+    echo "  Never:       no git, deploy, database or secret action; no turn is started."
+    echo ""
+    if $YES; then
+        echo "Confirmation: --yes supplied; applying without an interactive prompt."
+    else
+        local answer=""
+        read -r -p 'Type "yes" to save this setup, or press Enter to cancel: ' answer || answer=""
+        if [ "$(printf '%s' "$answer" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')" != "yes" ]; then
+            echo "Cancelled. Nothing was changed."
+            [ "$SETUP_STATE" = "pending" ] && echo "Setup is still pending."
+            exit 2
+        fi
+    fi
+
+    local rf="$(pwd)/.ai/roles/ROLE_ASSIGNMENT.md" tmp tmp2 today before after
+    [ -f "$rf" ] || _setup_blocked "ROLE_ASSIGNMENT.md is missing. Re-run the installer."
+    # v3.18.0 (review fix): a folder that cannot be written is named as such, up front. A
+    # write-denied .ai/roles used to be reported as a malformed binding table, and a
+    # write-denied project folder as an unreadable AI_HANDOFF.md.
+    _setup_probe_dir "$(pwd)/.ai/roles" || _setup_blocked "ROLE_ASSIGNMENT.md could not be written: the folder .ai/roles is not writable."
+    if $initial; then
+        _setup_probe_dir "$(pwd)" || _setup_blocked "AI_HANDOFF.md could not be written: the project folder is not writable."
+    fi
+    # Setup's own files live in .ai/handoff-history/: inside the project, so every move is a
+    # rename on one filesystem, and ignored by Git (the installers' .gitignore snippet lists
+    # it), so a file left behind can never be committed with 'git add -A'.
+    local work="$(pwd)/.ai/handoff-history"
+    { mkdir -p "$work" 2>/dev/null && _setup_probe_dir "$work"; } || _setup_blocked "setup could not write its work folder .ai/handoff-history."
+    today="$(date '+%Y-%m-%d')"
+    before="Master=$MASTER_TOOL, Reviewer=$REVIEWER_TOOL, Implementer=$IMPLEMENTER_TOOL, Review Independence=$current_mode, Setup=$current_setup"
+    after="Master=$master_d, Reviewer=$rev_d, Implementer=$impl_d, Review Independence=$mode, Setup=complete"
+    tmp="$work/ROLE_ASSIGNMENT.md.setup-$$"; tmp2="$work/ROLE_ASSIGNMENT.md.setup2-$$"
+    local htmp="$work/AI_HANDOFF.md.setup-$$" orig="$work/ROLE_ASSIGNMENT.md.setup-orig-$$"
+    SETUP_RF="$rf"; SETUP_ORIG="$orig"; SETUP_PHASE="prepare"
+    SETUP_TMP_FILES=("$tmp" "$tmp2" "$htmp" "$orig")
+    trap '_setup_cleanup' EXIT
+    trap '_setup_on_signal' INT TERM
+    # Pass 1: binding rows, the Review Independence line and the Setup line (one of each).
+    if ! tr -d '\r' < "$rf" | awk -v master="$master_d" -v reviewer="$rev_d" -v implementer="$impl_d" -v mode="$mode" -v nbsp="$(printf '\302\240')" '
+        {
+            line = $0; probe = line; gsub(nbsp, " ", probe); low = tolower(probe)
+            if (low ~ /^[[:space:]]*([-*][[:space:]]+)?review independence[[:space:]]*:/) { if (!rw) { out[++n] = "Review Independence: " mode; rw = 1; ri = n }; next }
+            if (low ~ /^[[:space:]]*([-*][[:space:]]+)?setup[[:space:]]*:/) { if (!sw) { out[++n] = "Setup: complete"; sw = 1; si = n }; next }
+            if (tolower(line) ~ /^\|[[:space:]]*(master|reviewer|implementer)[[:space:]]*\|[[:space:]]*[^|[:space:]]/) {
+                split(line, cells, "|"); r = tolower(cells[2]); gsub(/^[[:space:]]+|[[:space:]]+$/, "", r)
+                if (r == "master") { out[++n] = "| Master | " master " |" } else if (r == "reviewer") { out[++n] = "| Reviewer | " reviewer " |" } else { out[++n] = "| Implementer | " implementer " |" }
+                seen[r]++; last = n; next
+            }
+            out[++n] = line
+        }
+        END {
+            if (seen["master"] != 1 || seen["reviewer"] != 1 || seen["implementer"] != 1) exit 3
+            # A missing review line goes just above an existing Setup line, as in handoff.ps1.
+            before_setup = (!rw && sw && si > last)
+            for (i = 1; i <= n; i++) {
+                if (before_setup && i == si) print "Review Independence: " mode
+                print out[i]
+                if (!rw && !before_setup && i == last) { print ""; print "Review Independence: " mode; if (!sw) print "Setup: complete" }
+                if (rw && !sw && i == ri) print "Setup: complete"
+            }
+        }' > "$tmp"; then
+        rm -f "$tmp"
+        _setup_blocked "ROLE_ASSIGNMENT.md must have exactly one '| Master |', '| Reviewer |' and '| Implementer |' row. Repair the table, or re-run the installer with --force."
+    fi
+    # Pass 2: the history row, in the existing table or in a new one at the end.
+    local row="| $today | $before | $after | User (handoff.sh setup) |"
+    if ! awk -v row="$row" '
+        { lines[++n] = $0 }
+        END {
+            inh = 0; done = 0; prev = ""
+            for (i = 1; i <= n; i++) {
+                l = lines[i]
+                if (l ~ /^## Role Swap History[[:space:]]*$/) { inh = 1; print l; prev = l; continue }
+                if (inh && !done && l ~ /^[[:space:]]*$/ && prev ~ /^[[:space:]]*\|/) { print row; done = 1 }
+                if (inh && !done && l ~ /^## / && l !~ /^## Role Swap History/) { print row; done = 1 }
+                print l; prev = l
+            }
+            if (inh && !done) print row
+            if (!inh) exit 4
+        }' "$tmp" > "$tmp2"; then
+        # No history section yet: rebuild without trailing blanks and append one.
+        awk '{ lines[++n] = $0 } END { m = n; while (m > 0 && lines[m] ~ /^[[:space:]]*$/) m--; for (i = 1; i <= m; i++) print lines[i] }' "$tmp" > "$tmp2"
+        { echo ""; echo "## Role Swap History"; echo ""; echo "| Date | Before | After | Decided by |"; echo "|---|---|---|---|"; echo "$row"; } >> "$tmp2"
+    fi
+    rm -f "$tmp"
+    # v3.18.0 (review fix): the same contract as handoff.ps1. Both new files are prepared
+    # first, the original role file is kept, and if any step after the first replace
+    # fails the role file is restored byte for byte. The EXIT trap removes every temp
+    # file; INT and TERM between the two moves restore too. Only a failed restore keeps
+    # the saved original, because then it is the only copy, and says so.
+    if $initial; then
+        if ! tr -d '\r' < "$HANDOFF_FILE" | awk -v impl="$impl_d" -v rev="$rev_d" '
+            { t = $0; sub(/[[:space:]]+$/, "", t) }
+            tolower(t) == "## task actors" { ina = 1; print; next }
+            ina && /^##[[:space:]]/ { ina = 0 }
+            ina && /^-[[:space:]]*[Ii][Mm][Pp][Ll][Ee][Mm][Ee][Nn][Tt][Ee][Rr]:/ { print "- Implementer: " impl; next }
+            ina && /^-[[:space:]]*[Rr][Ee][Vv][Ii][Ee][Ww][Ee][Rr]:/ { print "- Reviewer: " rev; next }
+            { print }' > "$htmp"; then
+            _setup_blocked "AI_HANDOFF.md could not be read to move its Task Actors."
+        fi
+    fi
+    if ! cp -p "$rf" "$orig" 2>/dev/null; then
+        _setup_blocked "ROLE_ASSIGNMENT.md could not be copied aside before the change."
+    fi
+    # v3.18.0 (review fix): the phase is set before the move, so a signal that lands during
+    # it restores (an identical copy, at worst) instead of claiming nothing changed.
+    SETUP_PHASE="role-replaced"
+    if ! _setup_mv role "$tmp2" "$rf"; then
+        # The rename did not happen, so the role file is the original.
+        SETUP_PHASE="prepare"
+        _setup_blocked "ROLE_ASSIGNMENT.md could not be replaced."
+    fi
+    case ",${HANDOFF_TEST_SETUP_FAIL:-}," in *",interrupt,"*) kill -TERM $$ ;; esac
+    if $initial && ! _setup_mv handoff "$htmp" "$HANDOFF_FILE"; then
+        _setup_restore_or_report "AI_HANDOFF.md could not be written (is it open in another program?)"
+    fi
+    SETUP_PHASE="done"
+    echo ""
+    echo "setup: complete."
+    echo "  Master:      $master_d"
+    echo "  Implementer: $impl_d"
+    echo "  Reviewer:    $rev_d"
+    echo "  Review:      Review Independence: $mode"
+    [ "$mode" = "fresh-context" ] && echo "  $(_single_vendor_line "$rev_d")"
+    echo ""
+    echo "Recorded in the Role Swap History table. No turn was started and no git action was run."
+    if ! $initial; then
+        echo "A finished task keeps its Task Actors as the record of who did it; open the next task with start."
+    fi
+    echo "Next: bash scripts/handoff.sh status"
+    echo ""
 }
 
 cmd_commit_approved_blocked() {
@@ -948,15 +1595,19 @@ cmd_models_blocked() {
 # Init and dispatch
 # ---------------------------------------------------------------------------
 
+case "$COMMAND" in commit-check|setup) _unreadable_guard ;; esac
 _parse_status
 _get_role_binding
 _get_review_independence
+_get_setup_state
+_setup_gate
 _role_checkpoint
 
 case "$COMMAND" in
     status)       cmd_status ;;
     models)       cmd_models_blocked ;;
     adapters)     cmd_adapters ;;
+    setup)        cmd_setup ;;
     next)         cmd_next ;;
     start)        cmd_start ;;
     commit-check) cmd_commit_check ;;
@@ -982,6 +1633,9 @@ case "$COMMAND" in
         echo "  status                    Show current handoff state, role binding, and commit status."
         echo "  models                    Read-only model routing view; requires PowerShell (pwsh)."
         echo "  adapters                  Show adapter callable/manual status for each role."
+        echo "  setup --players <list> [--master <tool>] [--yes]"
+        echo "                            Choose the players and the Master. A fresh install is 'Setup: pending' and every"
+        echo "                            other command but status stops with exit 14 until this is done."
         echo "  next [--clip]             Generate NEXT_TURN.md and print the paste instruction."
         echo '  start "<request>"         Save request and print a Master entry prompt.'
         echo "  commit-check              Show whether a commit is allowed and what to commit."

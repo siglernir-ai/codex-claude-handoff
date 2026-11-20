@@ -21,7 +21,7 @@ and budget limits; general question dialogue still advances through explicit tur
 
 > **New here? Read [START_HERE.md](START_HERE.md) first** - what this is, what it refuses to do, and why it blocks you.
 
-> **Current release: v3.17.0 public beta.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.18.0 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -74,7 +74,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.17.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.18.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -82,6 +82,30 @@ Then verify the local install from the same PowerShell window:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\handoff.ps1 doctor
 ```
+
+**First setup (since v3.18.0).** A new install does not pick the tools for you. Until you
+choose the players and the Master, the project is `Setup: pending`: `doctor` and `status`
+say NOT CONFIGURED, and every work command stops with exit code 14 and one instruction:
+
+```powershell
+.\scripts\handoff.ps1 setup
+```
+
+On Windows this opens a small picker; elsewhere, or from a script or an agent, pass the
+choice as flags. Two players: the Master's tool implements and the other tool reviews.
+One player: that tool holds every role and reviews in a separate read-only run
+(`fresh-context`), which is weaker than two vendors. An agent must ask the user which players and which Master; it never chooses for them.
+Examples only, for a user who chose two players with Claude Code as Master, and one with Codex:
+
+```powershell
+.\scripts\handoff.ps1 setup -Players "Claude Code,Codex" -Master "Claude Code" -Yes
+bash scripts/handoff.sh setup --players "Codex" --yes
+```
+
+The installers take the same choice for scripted installs: `install.ps1 -Players ... -Master ...`
+(also through `bootstrap.ps1`, and `-NoSetupWindow` to skip the picker) and
+`install.sh --players ... --master ...`. Upgrading an existing install changes nothing:
+a project without a `Setup:` line is configured and keeps its binding.
 
 Activate the workflow for one task by entering `/skills`, selecting
 `codex-claude-handoff`, and then entering the request:
@@ -142,7 +166,7 @@ The protocol is organized around three roles, bound to concrete tools in `.ai/ro
 - **Reviewer** independently reviews implementation against approved scope.
 - The user remains the approval point.
 
-Default binding: Master = Codex, Reviewer = Codex, Implementer = Claude Code. Roles can be reassigned with user approval without rewriting the protocol. All roles coordinate through a shared file: `AI_HANDOFF.md`.
+Which tool holds each role is what `handoff.ps1 setup` recorded (since v3.18.0 a new install has no default; read `.ai/roles/ROLE_ASSIGNMENT.md`). Roles can be reassigned with user approval without rewriting the protocol. All roles coordinate through a shared file: `AI_HANDOFF.md`.
 
 ### Switching roles
 
@@ -792,7 +816,7 @@ the Claude Code Implementer in every mode.
 
 **npx first-run behavior.** `npx --yes @anthropic-ai/claude-code` downloads the package automatically on first run. If the network is unavailable and the package is not cached, the preflight check fails and `cycle` exits with code 3.
 
-**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or unrecovered Claude Code timeout, 5 unrecovered Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing). Since v3.1.5, an interrupted exact-scope Reviewer correction may route to independent review instead of returning 4/5; it is never treated as approval.
+**Exit codes:** 0 success, 1 blocked, 2 cancelled, 3 prerequisite missing or runner start failure, 4 NEXT_TURN.md failure or unrecovered Claude Code timeout, 5 unrecovered Claude Code non-timeout error, 6 turn succeeded but the post-turn handoff is inconsistent (`Waiting For` mismatch or unrecognized state - resolve in AI_HANDOFF.md before continuing). Since v3.1.5, an interrupted exact-scope Reviewer correction may route to independent review instead of returning 4/5; it is never treated as approval. Every role-dependent command also has three stops of its own: 12 role checkpoint (binding and Task Actors out of sync, or an invalid role-file line), 13 exposed credential, and 14 setup pending (since v3.18.0: run `handoff.ps1 setup`).
 
 ### `loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-IncludeMaster] [-IncludeReviewer] [-Yes]`
 

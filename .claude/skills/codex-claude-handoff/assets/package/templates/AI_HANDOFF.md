@@ -44,6 +44,7 @@
 - Stable files under `.agents/`, `.ai/`, `.claude/`, and `scripts/` should be reviewed and committed after setup.
 
 ## Next Recommended Step
+- User: first choose the players and the Master: `.\scripts\handoff.ps1 setup` (or `bash scripts/handoff.sh setup --players ... --master ...`). Work commands stop with exit 14 until then.
 - User: ask the Master to analyze the next task, or set `State: NEEDS_ANALYSIS` / `Waiting For: Master` with a specific task.
 - For risky tasks (migrations, auth, architecture changes), the Master may set `State: PLAN_REQUIRED` to require a plan before implementation.
 - For tasks with missing information, the Master may set `State: NEEDS_INVESTIGATION` to gather evidence first.
