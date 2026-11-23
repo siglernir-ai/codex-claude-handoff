@@ -80,9 +80,9 @@ Write-Host "No git commit, push, tag, release, deploy, database, or secret actio
 Write-Host ""
 Write-Host "After review, the usual stable install commit is:"
 if (Test-Path -LiteralPath (Join-Path $targetRoot "skills-lock.json")) {
-    Write-Host "  git add .agents .ai .claude scripts .gitignore skills-lock.json"
+    Write-Host "  git add .agents .ai .claude scripts .gitignore COMMANDS.md skills-lock.json"
 }
 else {
-    Write-Host "  git add .agents .ai .claude scripts .gitignore"
+    Write-Host "  git add .agents .ai .claude scripts .gitignore COMMANDS.md"
 }
 Write-Host "  git commit -m `"Install codex-claude-handoff`""

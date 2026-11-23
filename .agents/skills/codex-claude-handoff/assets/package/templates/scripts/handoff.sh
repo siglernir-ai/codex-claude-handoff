@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.18.0)
+# handoff.sh - Codex-Claude Handoff operator (Bash version, v3.19.0)
 # Commands: status, adapters, setup, next, start, commit-check
 # commit-approved, cycle, run-next, loop, release-check, release, sequence-check, sequence-advance,
 # review-check, review-run, review-apply, master-check, master-run, and master-apply require
@@ -1628,6 +1628,8 @@ case "$COMMAND" in
     "")
         echo ""
         echo "Usage: bash handoff.sh <command> [options]"
+        echo ""
+        echo "Of the five commands in COMMANDS.md (project folder), only start runs here; the rest need PowerShell."
         echo ""
         echo "Commands:"
         echo "  status                    Show current handoff state, role binding, and commit status."

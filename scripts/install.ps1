@@ -8,7 +8,9 @@ param(
     [switch]$NoRolesWindow,
     [string]$Players,
     [string]$Master,
-    [switch]$NoSetupWindow
+    [switch]$NoSetupWindow,
+    [switch]$NoLauncher,
+    [switch]$VsCodeTask
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +27,9 @@ if ($NoRolesWindow) { $arguments += "-NoRolesWindow" }
 if ($PSBoundParameters.ContainsKey('Players')) { $arguments += @("-Players", $Players) }
 if ($PSBoundParameters.ContainsKey('Master')) { $arguments += @("-Master", $Master) }
 if ($NoSetupWindow) { $arguments += "-NoSetupWindow" }
+# v3.19.0: the launcher and the opt-in VS Code task.
+if ($NoLauncher) { $arguments += "-NoLauncher" }
+if ($VsCodeTask) { $arguments += "-VsCodeTask" }
 
 Write-Host "scripts/install.ps1 delegates to the current project installer."
 & powershell.exe @arguments

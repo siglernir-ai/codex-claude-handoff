@@ -7,7 +7,9 @@ param(
     [switch]$DisableAlwaysOn,
     [string]$Players,
     [string]$Master,
-    [switch]$NoSetupWindow
+    [switch]$NoSetupWindow,
+    [switch]$NoLauncher,
+    [switch]$VsCodeTask
 )
 
 $ErrorActionPreference = "Stop"
@@ -208,6 +210,16 @@ if ($PSBoundParameters.ContainsKey('Master') -and -not $PSBoundParameters.Contai
     exit 1
 }
 
+# v3.19.0: the launcher. HANDOFF.cmd is a Windows file, so it is installed on Windows only,
+# on a fresh install and on an upgrade, unless -NoLauncher. The VS Code task runs it, so the
+# two flags cannot be combined, and the task is refused where no launcher is installed.
+$installLauncher = (-not $NoLauncher) -and ($env:OS -eq "Windows_NT")
+$launcherRelative = "HANDOFF.cmd"
+if ($VsCodeTask -and -not $installLauncher) {
+    Write-Host "install.ps1: -VsCodeTask runs HANDOFF.cmd, which is not installed here$(if ($NoLauncher) { ' (-NoLauncher)' } else { ' (it is a Windows file)' }). Nothing was installed."
+    exit 1
+}
+
 if (-not (Test-Path -LiteralPath $templateRoot)) {
     throw "templates folder not found next to install.ps1: $templateRoot"
 }
@@ -298,6 +310,7 @@ $installFiles = @(
         $normalized = $rel -replace '/', '\'
 
         if ($packageOnlyFiles -contains $normalized) { return }
+        if ((-not $installLauncher) -and ($normalized -eq $launcherRelative)) { return }
         if ((-not $AlwaysOn) -and ($alwaysOnFiles -contains $normalized)) { return }
 
         [pscustomobject]@{
@@ -505,6 +518,40 @@ function Add-CredentialReadGuard {
 
 Add-CredentialReadGuard -TargetRoot $targetRoot -RulesPath (Join-Path $templateRoot ".ai\skills\codex-claude-handoff\CREDENTIAL_READ_DENY.txt")
 
+# v3.19.0: an opt-in VS Code task that runs the launcher when the folder opens. The task file
+# is the user's own project configuration, so it is written only when it does not exist yet;
+# an existing one is never edited, and the task is printed to add by hand. Without
+# -VsCodeTask nothing under .vscode is touched.
+# The launcher is gitignored and Windows-only, while the task file may be committed. So the
+# task runs it only on Windows and only when it is there; a fresh clone, a teammate without
+# the launcher, or macOS/Linux (the `true` no-op) open the folder without an error.
+$vsCodeTaskJson = @'
+    {
+      "label": "HANDOFF: open window",
+      "type": "process",
+      "command": "true",
+      "windows": { "command": "cmd.exe", "args": ["/d", "/c", "if exist HANDOFF.cmd (call .\\HANDOFF.cmd) else (exit /b 0)"] },
+      "options": { "cwd": "${workspaceFolder}" },
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": { "reveal": "silent", "focus": false, "panel": "dedicated", "showReuseMessage": false, "close": true },
+      "problemMatcher": []
+    }
+'@
+if ($VsCodeTask) {
+    $vsCodeTasksPath = Join-Path (Join-Path $targetRoot ".vscode") "tasks.json"
+    Write-Host ""
+    if (Test-Path -LiteralPath $vsCodeTasksPath) {
+        Write-Host "VS Code task: .vscode/tasks.json already exists and was not changed. Add this task to its `"tasks`" list by hand:"
+        Write-Host $vsCodeTaskJson
+    } else {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $vsCodeTasksPath) -Force | Out-Null
+        $vsCodeTasksText = "{`n  `"version`": `"2.0.0`",`n  `"tasks`": [`n" + ($vsCodeTaskJson -replace "`r`n", "`n") + "`n  ]`n}`n"
+        [System.IO.File]::WriteAllText($vsCodeTasksPath, $vsCodeTasksText, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "VS Code task: created .vscode/tasks.json; it opens the roles window when the folder opens."
+    }
+    Write-Host "It may go in the install commit: where HANDOFF.cmd is missing (a fresh clone, macOS, Linux) it does nothing. VS Code asks once to allow automatic tasks."
+}
+
 $mode = if ($AlwaysOn) { "always-on" } else { "opt-in" }
 
 if ((-not $AlwaysOn) -and (-not $DisableAlwaysOn)) {
@@ -608,6 +655,11 @@ if ($playersGiven -and -not $setupPending) {
     } else {
         Write-SetupPendingNotice
     }
+}
+
+if ($installLauncher) {
+    Write-Host ""
+    Write-Host "Launcher: double-click HANDOFF.cmd in the project folder to open the roles window. What to type: COMMANDS.md."
 }
 
 Write-Host ""

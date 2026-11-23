@@ -1,3 +1,96 @@
+## 3.19.0 - Five Commands, One Click
+
+- **The information was there; nobody could find the five commands that matter.** The
+  no-command menu listed 17 actions, and the usage text 28 commands, several of them as
+  paragraphs. A new user could not tell what to type, and opening the roles window meant
+  typing a command.
+- **One table in `handoff.ps1` is the command card.** Five entries, in order: `work`,
+  `start "<request>"`, `roles -Window`, `stop`, `doctor`, each with a one-line summary of what
+  it does for the user. The menu and the usage text print it; nothing else defines it.
+- **The menu shows the five, then `6. More...` and `7. Exit`.** `More` lists the other
+  fourteen actions of the old menu, under their old labels, then `Back to the five` and
+  `Exit`. Every action the menu had is still reachable and runs the same function as before.
+  `stop` is new to the menu. Item 3 sets `-Window` and runs `Invoke-Roles`, the code path of
+  `roles -Window`. A menu choice is now routed through one switch, `Invoke-MenuAction`.
+- **The usage text prints the card first, then every other command on one line.** The
+  paragraph-long lines were cut to one line each. No command and no flag of a signature was
+  dropped; the flags of the card's own commands (`doctor -CheckUpdates`, `start ... -Clip`,
+  the other forms of `roles`) have lines of their own.
+- **`COMMANDS.md`** is a new root document the installers copy into the project. It holds the
+  card as a two-column table, then every command on one line in six groups, then the Bash
+  commands. `handoff.sh` usage gained one line that points to it. The suite holds it to the
+  code: the five rows must match the table in order and wording, every command it names
+  must be a dispatch entry of `handoff.ps1`, every dispatch entry must appear both in it and
+  in the usage text, and every Bash command it names must be a working (not refusing) entry
+  of `handoff.sh`. A future command cannot be added without documenting it.
+- **`HANDOFF.cmd` opens the right window with a double-click.** It runs
+  `handoff.ps1 roles -Window` from its own folder. On exit 14 (setup required) it runs
+  `setup -Window`, and after a save runs `roles -Window` again; exit 2 from setup (the user
+  cancelled) ends quietly. Any other failure stays on screen behind a `pause`; success closes
+  without one. It owns no rules: it compares exit codes 0, 2 and 14 and nothing else. ASCII,
+  CRLF (`.gitattributes` now has `*.cmd text eol=crlf`), no absolute path. It enters its
+  folder once with `pushd "%~dp0"` and names `scripts\handoff.ps1` relative to it: started
+  through a quoted relative path from another folder, cmd resolves `%~dp0` again after a
+  change of folder, so a second use would point at a folder that does not exist. `pushd`
+  also maps a network path to a drive letter, and if it fails the launcher stops on screen
+  instead of running from the wrong folder.
+- **The launcher never dirties Git.** `/HANDOFF.cmd` is in the gitignore snippet, so a fresh
+  install ignores it and an upgrade appends the line to an existing `.gitignore`. It is also
+  on the coordination exclusion list (`$LocalHandoffFiles`), so a project whose `.gitignore`
+  lost the line does not have `cycle` refuse, and the file never enters a commit plan; being
+  on that list also puts it in the read-only boundary, so a Master or Reviewer turn cannot
+  rewrite what a double-click runs.
+- **The installers place it on Windows.** `install.ps1` creates it on a fresh install and on
+  an upgrade; `-NoLauncher` skips it (also through `bootstrap.ps1` and `scripts/install.ps1`).
+  The closing text names it in one line. `install.sh` skips it by name, because it copies the
+  whole template tree.
+- **`install.ps1 -VsCodeTask` is opt-in.** It writes `.vscode/tasks.json` with one task,
+  `HANDOFF: open window`, that runs the launcher when the folder opens, with a quiet
+  presentation, only when the file does not exist. An existing file is left byte for byte,
+  and the task is printed to add by hand. The launcher is gitignored and Windows-only, but
+  the task file may be committed, so the task runs it only on Windows (`cmd.exe /d /c if
+  exist HANDOFF.cmd (call .\HANDOFF.cmd) else (exit /b 0)`) and is the `true` no-op on
+  macOS and Linux: a fresh clone or a teammate without the launcher opens the folder
+  without an error. The explicit `.\` keeps it working when `NoDefaultCurrentDirectoryInExePath`
+  is set. The installer says so, and that VS Code asks once to allow automatic tasks. Combined with `-NoLauncher` it
+  is refused before anything is installed. Without the flag nothing under `.vscode` is
+  touched.
+- **Fixed: the setup picker's subtitle was cut off** at 125% scaling. It now reads
+  `Nothing runs until you save. Change it later with setup.`
+- **Kept: the standard style for a disabled Master choice.** Its disabled text is embossed
+  grey, which looked smeared on the dark background. `FlatStyle = 'Flat'` was tried and
+  rejected in review: on this background it draws disabled text near-black, unreadable.
+  The embossed grey stays until a readable alternative is drawn and seen on a screen.
+- **`COMMANDS.md` and the Bash usage tell the truth about Bash.** Of the five, only `start`
+  runs in `handoff.sh`; `work`, `roles` and `stop` do not exist there (once setup is done
+  they answer `Unknown command`), they are not refusals that point to PowerShell.
+- **Docs.** `README.md`, `QUICKSTART.md` and `START_HERE.md` name the card and the launcher
+  where a new user looks; the suggested install commit adds `COMMANDS.md`.
+- **What the tests prove.** The card, the dispatch, `COMMANDS.md` and the usage text agree,
+  parsed from the files, not from a second list. The menu shows the five first and `More`
+  reaches status, adapters and setup; item 3 prints what `roles -Window` prints and writes
+  the same setting. A fresh install places the launcher (CRLF, ASCII, no absolute path) and
+  `git status` does not list it; an upgrade of a project in the previous layout adds the
+  launcher and `COMMANDS.md`, appends the ignore line, and changes no other file;
+  `-NoLauncher` skips it; `install.sh` does not install it. Run through `cmd /c` with input
+  from NUL and windows off, the launcher exits 0 in a configured project and, in a pending
+  project, takes the exit-14 branch and ends. Against a stand-in `handoff.ps1`, every branch
+  (0; 14 then 0 then 0; 14 then 2; 14 then a failure; a failure after setup; any other code)
+  calls what it should and pauses only on a failure. Started from its parent folder through
+  a quoted relative path, it still finds `handoff.ps1` (the launcher this release first had
+  failed that). An un-ignored launcher leaves `doctor` clean, `cycle` running and the commit
+  plan without it. `-VsCodeTask` writes valid JSON with the Windows-only, guarded task when
+  the file is absent and leaves an existing one byte-identical. The changed picker script
+  parses.
+- **Seen on a screen, before the review fixes:** in a fresh install, a double-click on
+  `HANDOFF.cmd` opened the setup picker, a save opened the roles window, and closing it
+  closed the console. The subtitle was seen whole. The launcher as it ships (with `pushd`)
+  was then run through `cmd.exe` by the tests, not double-clicked again; the picker's
+  standard style is the one seen on a screen in v3.18.0.
+- **Not verified:** cancelling setup from a double-click, and the VS Code task inside VS
+  Code (its presentation and the one-time prompt). The guard command was run through
+  `cmd.exe` with and without a launcher present, not from VS Code.
+
 ## 3.18.0 - The First Choice Is Yours
 
 - **A fresh install ran on a binding nobody chose.** Installing gave every project Master =

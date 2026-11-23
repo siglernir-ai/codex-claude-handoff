@@ -49,6 +49,10 @@ Run everything from your project root.
 one first. `work` is the command for whenever you are unsure: it prints the state and
 the single next action.
 
+What to type is on one card: the top of `COMMANDS.md` in your project lists the five
+commands that matter (`work`, `start`, `roles -Window`, `stop`, `doctor`). On Windows,
+double-clicking `HANDOFF.cmd` in the project folder opens the roles window.
+
 Then `.\scripts\handoff.ps1 next` prints the prompt for the next agent, and says so if
 that turn can run automatically. When the Reviewer approves:
 
@@ -135,7 +139,8 @@ scripts/handoff.sh
 ```
 
 Then delete any coordination files left in the project root - `AI_HANDOFF.md`,
-`AI_SEQUENCE.md`, `NEXT_TURN.md`, `USER_REQUEST.md`, `HANDOFF_RUN.json` - and drop the
+`AI_SEQUENCE.md`, `NEXT_TURN.md`, `USER_REQUEST.md`, `HANDOFF_RUN.json`, and the
+`COMMANDS.md` and `HANDOFF.cmd` the installer placed there - and drop the
 `# Codex-Claude handoff protocol` block from `.gitignore`.
 
 ## Where next

@@ -902,6 +902,12 @@ $LocalHandoffFiles = @("AI_HANDOFF.md", "AI_SEQUENCE.md", "NEXT_TURN.md", "USER_
 # Reviewer == Implementer. The file stays tracked; committing it is the user's call
 # again instead of a precondition for running a turn.
 $LocalHandoffFiles = $LocalHandoffFiles + @(".ai/roles/ROLE_ASSIGNMENT.md")
+# v3.19.0: the launcher the installer puts in the project root. It is gitignored, but a
+# project whose .gitignore lost the line must not have cycle refuse, or a commit plan list
+# it, because of a file the protocol itself placed there. Being on this list also puts it
+# in the read-only boundary: a Master or Reviewer turn cannot rewrite what a double-click runs.
+$LauncherFileName = "HANDOFF.cmd"
+$LocalHandoffFiles = $LocalHandoffFiles + @($LauncherFileName)
 
 # --- v3.5.0: permission follows the ROLE, not the tool ---
 #
@@ -2878,7 +2884,8 @@ function New-Text {
 `$title.Text = 'Who works on ' + `$project + '?'
 `$form.Controls.Add(`$title)
 `$sub = New-Text 12 34 416 18 `$grey 9 ([System.Drawing.FontStyle]::Regular)
-`$sub.Text = 'Nothing runs until you save. You can change this later with handoff.ps1 setup.'
+# v3.19.0: short enough to fit with room to spare at 125% scaling; the longer line was cut off.
+`$sub.Text = 'Nothing runs until you save. Change it later with setup.'
 `$form.Controls.Add(`$sub)
 
 `$playersLabel = New-Text 12 66 96 20 `$grey 9 ([System.Drawing.FontStyle]::Regular)
@@ -2901,6 +2908,9 @@ for (`$i = 0; `$i -lt `$tools.Count; `$i++) {
     `$box = New-Object System.Windows.Forms.CheckBox
     `$box.Text = `$tools[`$i].Display
     `$box.ForeColor = `$white
+    # The standard style stays on purpose. FlatStyle 'Flat' was tried in v3.19.0 against
+    # the embossed look of a disabled choice, and it drew the disabled text near-black on
+    # this dark background: unreadable. The embossed grey is the readable one.
     `$box.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular)
     `$box.Location = New-Object System.Drawing.Point((112 + 140 * `$i), 64)
     `$box.Size = New-Object System.Drawing.Size(136, 24)
@@ -9451,6 +9461,108 @@ function Invoke-MasterApply {
     Write-Host ""
 }
 
+# --- v3.19.0: the command card ---
+#
+# The information was all there and nobody could find the five commands that matter: the
+# menu listed 17 actions and the usage text 28 commands, several as paragraphs. The card is
+# the answer to "what do I type". It is one table, here; the no-command menu and the usage
+# text print it, and the test suite holds COMMANDS.md to it. Name is the dispatch entry the
+# command runs; Command is what a person types.
+$CommandCard = @(
+    [ordered]@{ Name = "work";   Command = "work";              Summary = "Show where things stand and your next step." },
+    [ordered]@{ Name = "start";  Command = 'start "<request>"'; Summary = "Begin a new task from a plain request." },
+    [ordered]@{ Name = "roles";  Command = "roles -Window";     Summary = "Open the roles window: who does what, and any running turn." },
+    [ordered]@{ Name = "stop";   Command = "stop";              Summary = "Stop a turn that is running now." },
+    [ordered]@{ Name = "doctor"; Command = "doctor";            Summary = "Check that everything is healthy." }
+)
+
+# Everything the menu offered before v3.19.0 that is not on the card. Key is what
+# Invoke-MenuAction runs; the labels are the menu's own, as they were.
+$MenuMoreActions = @(
+    [ordered]@{ Key = "next";            Label = "Continue next turn";           Summary = "prepare prompt for the Master/Implementer if needed (next)" },
+    [ordered]@{ Key = "status";          Label = "Show status";                  Summary = "show current state and next actor (status)" },
+    [ordered]@{ Key = "commit-check";    Label = "Check commit";                 Summary = "verify whether commit is allowed (commit-check)" },
+    [ordered]@{ Key = "commit-approved"; Label = "Create approved commit";       Summary = "commit reviewed files after explicit authorization (commit-approved)" },
+    [ordered]@{ Key = "cycle";           Label = "Run one handoff cycle";        Summary = "one Implementer turn, then Reviewer handoff prep (cycle)" },
+    [ordered]@{ Key = "loop";            Label = "Run bounded loop session";     Summary = "up to MaxTurns automated Implementer turns (loop)" },
+    [ordered]@{ Key = "adapters";        Label = "Show adapter status";          Summary = "callable/manual automation status (adapters)" },
+    [ordered]@{ Key = "release-check";   Label = "Check authorized release";     Summary = "dry-run release plan (release-check)" },
+    [ordered]@{ Key = "sequence-check";  Label = "Check sequence advance";       Summary = "dry-run local sequence advance (sequence-check)" },
+    [ordered]@{ Key = "review-check";    Label = "Check Codex review (POC)";     Summary = "dry-run Codex Reviewer plan (review-check)" },
+    [ordered]@{ Key = "review-apply";    Label = "Apply captured Codex verdict"; Summary = "apply review-run verdict to AI_HANDOFF.md (review-apply)" },
+    [ordered]@{ Key = "master-check";    Label = "Check Codex Master";           Summary = "dry-run Codex Master capture plan (master-check)" },
+    [ordered]@{ Key = "master-apply";    Label = "Apply captured Master route";  Summary = "apply master-run recommendation to AI_HANDOFF.md (master-apply)" },
+    [ordered]@{ Key = "setup";           Label = "Choose players and Master";    Summary = "reconfigure who holds every role (setup)" }
+)
+
+# One place that turns a menu choice into the command's own code path. "roles" is the card's
+# roles -Window: it sets -Window and runs Invoke-Roles, exactly as the command line does.
+function Invoke-MenuAction {
+    param([string]$Key)
+    switch ($Key) {
+        "work"   { Invoke-Work }
+        "start"  {
+            $userRequest = Read-Host "Enter your request"
+            Invoke-Start -Request $userRequest
+        }
+        "roles"  {
+            $script:Window = $true
+            Invoke-Roles
+        }
+        "stop"   { Invoke-Stop }
+        "doctor" { Invoke-Doctor }
+        "next"   { Invoke-Next -MenuMode $true }
+        "status" { Invoke-Status }
+        "commit-check" { Invoke-CommitCheck }
+        "commit-approved" {
+            $msg = Read-Host "Commit message"
+            $auth = Read-Host 'Type I_AUTHORIZE_COMMIT to commit reviewed files'
+            $script:Message = $msg
+            $script:Authorize = $auth
+            Invoke-CommitApproved
+        }
+        "cycle"          { Invoke-Cycle }
+        "loop"           { Invoke-Loop }
+        "adapters"       { Invoke-Adapters }
+        "release-check"  { Invoke-ReleaseCheck }
+        "sequence-check" { Invoke-SequenceCheck }
+        "review-check"   { Invoke-ReviewCheck }
+        "review-apply"   { Invoke-ReviewApply }
+        "master-check"   { Invoke-MasterCheck }
+        "master-apply"   { Invoke-MasterApply }
+        "setup"          { Invoke-Setup }
+    }
+}
+
+function Write-InvalidMenuSelection {
+    param([string]$Choice)
+    Write-Host ""
+    Write-Host "Invalid selection: $Choice"
+    Write-Host ""
+}
+
+function Invoke-MenuMore {
+    Write-Host ""
+    Write-Host "More actions:"
+    Write-Host ""
+    for ($i = 0; $i -lt $MenuMoreActions.Count; $i++) {
+        $entry = $MenuMoreActions[$i]
+        Write-Host ("{0}. {1,-30} - {2}" -f ($i + 1), $entry.Label, $entry.Summary)
+    }
+    $backNumber = $MenuMoreActions.Count + 1
+    $exitNumber = $MenuMoreActions.Count + 2
+    Write-Host "$backNumber. Back to the five"
+    Write-Host "$exitNumber. Exit"
+    Write-Host ""
+    $choice = ([string](Read-Host "Select")).Trim()
+    $number = 0
+    if (-not [int]::TryParse($choice, [ref]$number)) { Write-InvalidMenuSelection -Choice $choice; return }
+    if ($number -ge 1 -and $number -le $MenuMoreActions.Count) { Invoke-MenuAction -Key $MenuMoreActions[$number - 1].Key; return }
+    if ($number -eq $backNumber) { Invoke-Menu; return }
+    if ($number -eq $exitNumber) { return }
+    Write-InvalidMenuSelection -Choice $choice
+}
+
 function Invoke-Menu {
     Write-Host ""
     Write-Host "State:  $State"
@@ -9461,61 +9573,21 @@ function Invoke-Menu {
     Write-Host "Use this menu for local workflow actions."
     Write-Host "For questions, planning, or decisions, continue chatting with the Master."
     Write-Host ""
-    Write-Host "1. Daily work view               - show state and the exact next human action"
-    Write-Host "2. Doctor health check           - read-only local protocol health check"
-    Write-Host "3. Start new request             - begin a new task from natural language"
-    Write-Host "4. Continue next turn            - prepare prompt for the Master/Implementer if needed"
-    Write-Host "5. Show status                   - show current state and next actor"
-    Write-Host "6. Check commit                  - verify whether commit is allowed"
-    Write-Host "7. Create approved commit        - commit reviewed files after explicit authorization"
-    Write-Host "8. Run one handoff cycle         - one Implementer turn, then Reviewer handoff prep (cycle)"
-    Write-Host "9. Run bounded loop session      - up to MaxTurns automated Implementer turns (loop)"
-    Write-Host "10. Show adapter status           - callable/manual automation status"
-    Write-Host "11. Check authorized release      - dry-run release plan (release-check)"
-    Write-Host "12. Check sequence advance        - dry-run local sequence advance (sequence-check)"
-    Write-Host "13. Check Codex review (POC)      - dry-run Codex Reviewer plan (review-check)"
-    Write-Host "14. Apply captured Codex verdict  - apply review-run verdict to AI_HANDOFF.md (review-apply)"
-    Write-Host "15. Check Codex Master            - dry-run Codex Master capture plan (master-check)"
-    Write-Host "16. Apply captured Master route   - apply master-run recommendation to AI_HANDOFF.md (master-apply)"
-    Write-Host "17. Choose players and Master     - reconfigure who holds every role (setup)"
-    Write-Host "18. Exit"
-    Write-Host ""
-    $choice = Read-Host "Select"
-
-    switch ($choice.Trim()) {
-        "1" { Invoke-Work }
-        "2" { Invoke-Doctor }
-        "3" {
-            $userRequest = Read-Host "Enter your request"
-            Invoke-Start -Request $userRequest
-        }
-        "4" { Invoke-Next -MenuMode $true }
-        "5" { Invoke-Status }
-        "6" { Invoke-CommitCheck }
-        "7" {
-            $msg = Read-Host "Commit message"
-            $auth = Read-Host 'Type I_AUTHORIZE_COMMIT to commit reviewed files'
-            $script:Message = $msg
-            $script:Authorize = $auth
-            Invoke-CommitApproved
-        }
-        "8" { Invoke-Cycle }
-        "9" { Invoke-Loop }
-        "10" { Invoke-Adapters }
-        "11" { Invoke-ReleaseCheck }
-        "12" { Invoke-SequenceCheck }
-        "13" { Invoke-ReviewCheck }
-        "14" { Invoke-ReviewApply }
-        "15" { Invoke-MasterCheck }
-        "16" { Invoke-MasterApply }
-        "17" { Invoke-Setup }
-        "18" { }
-        default {
-            Write-Host ""
-            Write-Host "Invalid selection: $choice"
-            Write-Host ""
-        }
+    for ($i = 0; $i -lt $CommandCard.Count; $i++) {
+        Write-Host ("{0}. {1,-20} - {2}" -f ($i + 1), $CommandCard[$i].Command, $CommandCard[$i].Summary)
     }
+    $moreNumber = $CommandCard.Count + 1
+    $exitNumber = $CommandCard.Count + 2
+    Write-Host "$moreNumber. More..."
+    Write-Host "$exitNumber. Exit"
+    Write-Host ""
+    $choice = ([string](Read-Host "Select")).Trim()
+    $number = 0
+    if (-not [int]::TryParse($choice, [ref]$number)) { Write-InvalidMenuSelection -Choice $choice; return }
+    if ($number -ge 1 -and $number -le $CommandCard.Count) { Invoke-MenuAction -Key $CommandCard[$number - 1].Name; return }
+    if ($number -eq $moreNumber) { Invoke-MenuMore; return }
+    if ($number -eq $exitNumber) { return }
+    Write-InvalidMenuSelection -Choice $choice
 }
 
 # No-op / no-progress classifier for automated Implementer turns (v2.6.0).
@@ -10595,66 +10667,43 @@ switch ($Command) {
         if ([string]::IsNullOrWhiteSpace($Command)) {
             Invoke-Menu
         } else {
+            # v3.19.0: the card first, then every other command on one line each. COMMANDS.md
+            # has the same list, grouped; the test suite keeps the two and the dispatch in step.
             Write-Host ""
             Write-Host "Usage: handoff.ps1 <command> [options]"
             Write-Host ""
-            Write-Host "Commands:"
-            Write-Host "  work                      Show the daily workflow view and exact next action. Read-only."
-            Write-Host "  stop                      Stop an automated turn that is running now. No git, deploy, database or secret action."
-            Write-Host "  sequence-add -NextTask `"<task>`""
-            Write-Host "                            Append a pending task to the AI_SEQUENCE.md plan. Local; no git action."
-            Write-Host "  task-next [-NextTask `"<task>`"] [-Yes]"
-            Write-Host "                            Close the finished task and open the next one: archives AI_HANDOFF.md, takes the next"
-            Write-Host "                            pending task from AI_SEQUENCE.md (or -NextTask), resets Changed Files and regenerates"
-            Write-Host "                            NEXT_TURN.md. No git, deploy, database or secret action."
-            Write-Host "  wait [-TimeoutSeconds N]  Block until the background run started from an agent window finishes, then print its"
-            Write-Host "                            result and the last lines of its log. Default 1800 seconds. Changes nothing; a"
-            Write-Host "                            timeout leaves the run going."
-            Write-Host "  doctor                    Run a read-only local protocol health check; add -CheckUpdates for GitHub version comparison."
-            Write-Host "  models [-ModelProfile P] [-Model M] [-CodexModel M] [-CodexEffort E]"
-            Write-Host "                            Show the effective capability profile and the Claude and Codex model resolution. Read-only."
+            Write-Host "The five commands you need:"
+            foreach ($cardEntry in $CommandCard) { Write-Host ("  {0,-26}{1}" -f $cardEntry.Command, $cardEntry.Summary) }
+            Write-Host "  No command opens a menu with these five. HANDOFF.cmd, where installed, opens the roles window on a double-click."
+            Write-Host ""
+            Write-Host "More commands (each one line; COMMANDS.md groups them):"
+            Write-Host "  doctor -CheckUpdates      Also compare the installed version with the latest on GitHub."
+            Write-Host '  start "<request>" -Clip   Also copy the Master entry prompt to the clipboard.'
+            Write-Host "  roles [-WindowOff] [-SetRole <role> -SetTool <tool>] [-ReviewIndependence <separate-tool|fresh-context>] [-Yes]  Show who holds each role, turn the window off, or change one."
             Write-Host "  status                    Show current handoff state, role binding, and commit status."
-            Write-Host "  user-next                 Show the single next user action, including commit-approved when ready."
-            Write-Host "  adapters                  Show adapter callable/manual status for each role."
-            Write-Host "  roles [-Window] [-WindowOff] [-SetRole <role> -SetTool <tool>] [-ReviewIndependence <separate-tool|fresh-context>] [-Yes]"
-            Write-Host "                            Show who holds each role, or change one. -Window opens a small always-on-top"
-            Write-Host "                            indicator that also shows a running turn and swaps roles with a click (Windows)."
-            Write-Host "                            A swap is refused while a turn runs and, under separate-tool, whenever Reviewer"
-            Write-Host "                            would equal Implementer. -ReviewIndependence fresh-context lets one tool hold both:"
-            Write-Host "                            it then reviews in a separate read-only run started by review-run."
-            Write-Host "  setup [-Players `"<tool[,tool]>`"] [-Master `"<tool>`"] [-Window] [-Yes]"
-            Write-Host "                            Choose the players and the Master. A fresh install is 'Setup: pending' and every"
-            Write-Host "                            work command stops with exit 14 until this is done. Without -Players it opens a"
-            Write-Host "                            picker window (Windows), or asks in the console. Two players: the Master's tool"
-            Write-Host "                            implements and the other reviews. One player: fresh-context. No turn is started."
+            Write-Host "  user-next                 Show the single next user action."
             Write-Host "  next [-Clip]              Generate NEXT_TURN.md and print the paste instruction."
-            Write-Host '  start "<request>" [-Clip]  Save request and print a Master entry prompt.'
-            Write-Host "  commit-check [-Message `"<msg>`"]"
-            Write-Host "                            Dry-run the guarded commit plan after REVIEW_DONE. Never mutates git."
-            Write-Host "  commit-approved -Message `"<msg>`" -Authorize `"I_AUTHORIZE_COMMIT`""
-            Write-Host "                            Create the approved local commit after REVIEW_DONE. No push/tag/release."
-            Write-Host "  release-check -Version vX.Y.Z"
-            Write-Host "                            Dry-run the guarded release plan. Never mutates git."
-            Write-Host "  release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`""
-            Write-Host "                            Run the authorized release executor after REVIEW_DONE."
-            Write-Host "  sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask `"<task>`"]"
-            Write-Host "                            Dry-run the local sequence advance. Edits no files."
-            Write-Host "  sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]"
-            Write-Host "                            Advance local AI_SEQUENCE.md/AI_HANDOFF.md after a release. Never runs git."
-            Write-Host "  review-check              Dry-run the Codex Reviewer POC plan for READY_FOR_REVIEW. Mutates nothing."
-            Write-Host "  review-run [-TimeoutSeconds N] [-CodexModel M] [-CodexEffort E] [-AllowModelEscalation] [-Yes]"
-            Write-Host "                            Run a read-only Codex review (explicit confirmation, or -Yes for automation) and capture output locally. Bounded by -TimeoutSeconds (default 180): on timeout it kills Codex, keeps partial JSONL, writes no verdict, exits 4; fails closed (exit 6) if Codex exits 0 without a captured verdict. Never runs git or changes AI_HANDOFF.md."
-            Write-Host "  review-apply [-Yes]       Apply the captured review-run verdict (CODEX_REVIEW_LAST.md) as a local AI_HANDOFF.md transition: APPROVED -> REVIEW_DONE/User, BLOCKED -> READY_FOR_IMPLEMENTATION/Implementer. Fails closed on missing/malformed/stale verdict or any guard. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeReviewer."
-            Write-Host "  master-check              Dry-run the Codex Master capture plan for NEEDS_ANALYSIS / Waiting For: Master. Mutates nothing."
-            Write-Host "  master-run [-TimeoutSeconds N] [-CodexModel M] [-CodexEffort E] [-AllowModelEscalation] [-Yes]"
-            Write-Host "                            Run a read-only Codex Master analysis (explicit confirmation, or -Yes) and capture the routing recommendation locally. Capture-only: never changes AI_HANDOFF.md or git. Same fail-closed timeout/no-capture behavior as review-run."
-            Write-Host "  master-apply [-Yes]       Apply the captured master-run recommendation (CODEX_MASTER_LAST.md) as a local AI_HANDOFF.md transition. Fails closed on missing/malformed/stale recommendation or actor mismatch. Edits only AI_HANDOFF.md; runs no git; not auto-run by default; PowerShell loop may invoke it only with -IncludeMaster."
-            Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-Yes]"
-            Write-Host "                            Run one bounded handoff cycle for a loop-eligible adapter turn, then prepare the next handoff. Default -TimeoutSeconds is 600."
-            Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]"
-            Write-Host "                            Alias of cycle (kept for backward compatibility)."
-            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-IncludeMaster] [-IncludeReviewer] [-Yes]"
-            Write-Host "                            Run a bounded loop of loop-eligible adapter turns; stops at any non-loop-eligible actor unless that actor is explicitly included for this session. With -IncludeMaster, also auto-runs the Codex Master's NEEDS_ANALYSIS turn in-session (master-run capture + master-apply, fail-closed). With -IncludeReviewer, also auto-runs the Codex Reviewer's READY_FOR_REVIEW turn in-session (review-run capture + review-apply, fail-closed). User turns and commit/push/tag/deploy are never automated. Writes HANDOFF_LOOP.log. Default -TimeoutSeconds is 600."
+            Write-Host "  wait [-TimeoutSeconds N]  Wait for the background run to finish, then print its result."
+            Write-Host "  models [-ModelProfile P] [-Model M] [-CodexModel M] [-CodexEffort E]  Show which Claude and Codex models would run. Read-only."
+            Write-Host "  adapters                  Show which roles the tool can run itself and which are manual."
+            Write-Host "  setup [-Players `"<tool[,tool]>`"] [-Master `"<tool>`"] [-Window] [-Yes]  Choose the players and the Master; a fresh install needs this once."
+            Write-Host "  cycle [-BudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-Yes]  Run one bounded turn, then prepare the next handoff."
+            Write-Host "  run-next [-BudgetUsd N] [-TimeoutSeconds N] [-Yes]  Alias of cycle."
+            Write-Host "  loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-IncludeMaster] [-IncludeReviewer] [-Yes]  Run a bounded series of turns; never commits."
+            Write-Host "  review-check              Dry-run the Reviewer capture plan. Mutates nothing."
+            Write-Host "  review-run [-TimeoutSeconds N] [-CodexModel M] [-CodexEffort E] [-AllowModelEscalation] [-Yes]  Run a read-only review and capture its verdict."
+            Write-Host "  review-apply [-Yes]       Apply the captured verdict to AI_HANDOFF.md."
+            Write-Host "  master-check              Dry-run the Master capture plan. Mutates nothing."
+            Write-Host "  master-run [-TimeoutSeconds N] [-CodexModel M] [-CodexEffort E] [-AllowModelEscalation] [-Yes]  Run a read-only Master analysis and capture its route."
+            Write-Host "  master-apply [-Yes]       Apply the captured Master route to AI_HANDOFF.md."
+            Write-Host "  commit-check [-Message `"<msg>`"]  Dry-run the guarded commit plan. Never mutates git."
+            Write-Host "  commit-approved -Message `"<msg>`" -Authorize `"I_AUTHORIZE_COMMIT`"  Create the approved local commit. No push, tag or release."
+            Write-Host "  release-check -Version vX.Y.Z  Dry-run the guarded release plan. Never mutates git."
+            Write-Host "  release -Version vX.Y.Z -Message `"<msg>`" -Authorize `"I_AUTHORIZE_RELEASE_vX.Y.Z`"  Run the authorized release."
+            Write-Host "  task-next [-NextTask `"<task>`"] [-Yes]  Close the finished task and open the next one. No git action."
+            Write-Host "  sequence-add -NextTask `"<task>`"  Append a pending task to AI_SEQUENCE.md. No git action."
+            Write-Host "  sequence-check -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z [-NextTask `"<task>`"]  Dry-run the sequence advance."
+            Write-Host "  sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]  Advance the plan after a release. Never runs git."
             Write-Host ""
         }
     }

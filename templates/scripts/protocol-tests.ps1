@@ -5310,7 +5310,7 @@ foreach ($suArgs in $suGated) {
     }
 }
 Check "pending: every work command, every form of roles and an unknown command stop with exit 14" ($suGateMisses.Count -eq 0) ($suGateMisses -join "; ")
-$r = Invoke-HandoffInput -WorkDir $suPendFx -Arguments @() -InputText "18"
+$r = Invoke-HandoffInput -WorkDir $suPendFx -Arguments @() -InputText "7"
 Check "pending: the no-command menu is gated too" (($r.Code -eq 14) -and ($r.Out -notmatch "Select"))
 Check "pending: the gated commands changed nothing" ((Get-SuHashes -Dir $suPendFx) -eq $suPendBefore)
 Check "pending: nothing was written by a gated command" (-not (Test-Path (Join-Path $suPendFx "NEXT_TURN.md")) -and -not (Test-Path (Join-Path $suPendFx "USER_REQUEST.md")) -and -not (Test-Path (Join-Path $suPendFx "HANDOFF_UI.json")))
@@ -5596,7 +5596,7 @@ $suBootTarget = Join-Path $FixtureRoot "su-bootstrap-flags"
 $suBootOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "bootstrap.ps1") -Project $suBootTarget -PackageRoot $RepoRoot -Players "Codex" 2>&1 | Out-String
 Check "bootstrap.ps1 forwards -Players to the installer" (($LASTEXITCODE -eq 0) -and ((Get-Content -Raw -LiteralPath (Join-Path $suBootTarget ".ai/roles/ROLE_ASSIGNMENT.md")) -match '(?m)^Setup: complete\r?$')) $suBootOut
 $suBootSrc = Get-Content -Raw -Path (Join-Path $RepoRoot "bootstrap.ps1")
-Check "bootstrap.ps1 defaults to v3.18.0 and forwards -Master and -NoSetupWindow" (($suBootSrc -match '\[string\]\$Version = "v3\.18\.0"') -and ($suBootSrc -match '"-Master", \$Master') -and ($suBootSrc -match '"-NoSetupWindow"'))
+Check "bootstrap.ps1 defaults to v3.19.0 and forwards -Master and -NoSetupWindow" (($suBootSrc -match '\[string\]\$Version = "v3\.19\.0"') -and ($suBootSrc -match '"-Master", \$Master') -and ($suBootSrc -match '"-NoSetupWindow"'))
 $suWrapTarget = Join-Path $FixtureRoot "su-wrapper-flags"
 $suWrapOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts/install.ps1") -TargetPath $suWrapTarget -NoRolesWindow -Players "Claude Code,Codex" -Master "Claude Code" 2>&1 | Out-String
 Check "scripts/install.ps1 forwards -Players and -Master" (($LASTEXITCODE -eq 0) -and ((Get-SuRow (Get-Content -Raw -LiteralPath (Join-Path $suWrapTarget ".ai/roles/ROLE_ASSIGNMENT.md")) "Master") -eq "Claude Code")) $suWrapOut
@@ -6268,6 +6268,373 @@ if ($null -ne $rvBash) {
         Write-Host "  SKIP  write-denied folders: icacls or USERNAME not available"
     }
 }
+
+# --- v3.19.0: five commands, one click ---
+Write-Host "[4D-9] The command card, the launcher and the picker text (v3.19.0)"
+
+$ccTokens = $null
+$ccErrors = $null
+$ccAst = [System.Management.Automation.Language.Parser]::ParseFile($HandoffScript, [ref]$ccTokens, [ref]$ccErrors)
+# The dispatch, read from handoff.ps1 itself: the top-level switch on $Command.
+$ccSwitches = @($ccAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.SwitchStatementAst]) -and ($n.Condition.Extent.Text -eq '$Command') -and ($n.Parent.Parent -is [System.Management.Automation.Language.ScriptBlockAst]) }, $false))
+Check "the dispatch is one top-level switch on the command" ($ccSwitches.Count -eq 1)
+$ccDispatch = @($ccSwitches[0].Clauses | ForEach-Object { [string]$_.Item1.Value })
+Check "the dispatch parses into its entries" (($ccDispatch.Count -ge 25) -and ($ccDispatch -contains "work") -and ($ccDispatch -contains "loop"))
+# The card and the More list, loaded from the same file.
+$ccVars = @($ccAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.AssignmentStatementAst]) -and ($n.Left.Extent.Text -in @('$CommandCard', '$MenuMoreActions')) -and ($n.Parent.Parent -is [System.Management.Automation.Language.ScriptBlockAst]) }, $false))
+Check "the card and the More list are each defined once" ($ccVars.Count -eq 2)
+. ([scriptblock]::Create((@($ccVars) | ForEach-Object { $_.Extent.Text }) -join "`n"))
+$ccNames = @($CommandCard | ForEach-Object { $_.Name })
+Check "the card has exactly five entries: work, start, roles -Window, stop, doctor" ((($ccNames -join ",") -eq "work,start,roles,stop,doctor") -and ((@($CommandCard | ForEach-Object { $_.Command }) -join ",") -eq 'work,start "<request>",roles -Window,stop,doctor'))
+$ccCardMisses = @($CommandCard | Where-Object { ($ccDispatch -notcontains $_.Name) -or ((($_.Command -split '\s+')[0]) -ne $_.Name) -or [string]::IsNullOrWhiteSpace($_.Summary) })
+Check "every card command is a real dispatch entry, typed as it runs, with a summary" ($ccCardMisses.Count -eq 0) (($ccCardMisses | ForEach-Object { $_.Command }) -join ", ")
+
+# COMMANDS.md: the card, the full list, and what Bash has.
+$ccDocPath = Join-Path $RepoRoot "templates/COMMANDS.md"
+Check "COMMANDS.md ships in templates/" (Test-Path -LiteralPath $ccDocPath)
+$ccDoc = if (Test-Path -LiteralPath $ccDocPath) { [System.IO.File]::ReadAllText($ccDocPath, [System.Text.Encoding]::UTF8) } else { "" }
+$ccDocLines = @($ccDoc -split "`r?`n")
+function Get-CcSection { param([string[]]$Lines, [string]$Heading)
+    $out = [System.Collections.Generic.List[string]]::new(); $in = $false
+    foreach ($l in $Lines) { if ($l -match '^##\s') { $in = ($l.Trim() -eq $Heading); continue }; if ($in) { $out.Add($l) } }
+    return @($out)
+}
+$ccCardSection = Get-CcSection -Lines $ccDocLines -Heading "## The five you need"
+$ccRows = @($ccCardSection | Where-Object { $_ -match '^\|\s*`[^`]+`\s*\|' } | ForEach-Object { if ($_ -match '^\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|\s*$') { [pscustomobject]@{ Command = $Matches[1]; Summary = $Matches[2] } } })
+$ccRowsMatch = (($ccRows.Count -eq 5) -and ($ccRows.Count -eq $CommandCard.Count))
+for ($i = 0; $ccRowsMatch -and $i -lt $CommandCard.Count; $i++) { if (($ccRows[$i].Command -cne $CommandCard[$i].Command) -or ($ccRows[$i].Summary -cne $CommandCard[$i].Summary)) { $ccRowsMatch = $false } }
+Check "COMMANDS.md lists exactly the card's five commands, in order, with the same summaries" $ccRowsMatch (($ccRows | ForEach-Object { "$($_.Command)=$($_.Summary)" }) -join "; ")
+Check "the COMMANDS.md card is a table of at most 3 columns" ((@($ccCardSection | Where-Object { $_ -match '^\|' }).Count -eq 7) -and (@($ccCardSection | Where-Object { $_ -match '^\|' } | Where-Object { ([regex]::Matches($_, '\|')).Count -gt 4 }).Count -eq 0))
+$ccDocCommands = @($ccRows | ForEach-Object { ($_.Command -split '\s+')[0] }) + @($ccDocLines | Where-Object { $_ -match '^- `[^`]+`' } | ForEach-Object { if ($_ -match '^- `([a-z][a-z-]*)') { $Matches[1] } })
+$ccDocUnknown = @($ccDocCommands | Where-Object { $ccDispatch -notcontains $_ } | Select-Object -Unique)
+Check "every command named in COMMANDS.md exists in handoff.ps1" (($ccDocCommands.Count -gt $CommandCard.Count) -and ($ccDocUnknown.Count -eq 0)) ($ccDocUnknown -join ", ")
+$ccDocMissing = @($ccDispatch | Where-Object { $ccDocCommands -notcontains $_ })
+Check "every dispatch entry is documented in COMMANDS.md" ($ccDocMissing.Count -eq 0) ($ccDocMissing -join ", ")
+# Convention: in the "## In Bash" section a backticked word is read as a Bash command and
+# must be a working entry of handoff.sh. A PowerShell-only command is named there in plain
+# text, without backticks.
+$ccBashSection = Get-CcSection -Lines $ccDocLines -Heading "## In Bash"
+$ccBashNamed = @([regex]::Matches(($ccBashSection -join "`n"), '`([a-z][a-z-]*)`') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+$ccShText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot "scripts/handoff.sh"), [System.Text.Encoding]::UTF8)
+$ccShHandlers = @{}
+if ($ccShText -match '(?s)\ncase "\$COMMAND" in\n(.*?)\nesac') {
+    foreach ($ccShLine in ($Matches[1] -split "`n")) { if ($ccShLine -match '^\s+([a-z][a-z-]*)\)\s+(\S+)') { $ccShHandlers[$Matches[1]] = $Matches[2] } }
+}
+$ccBashBad = @($ccBashNamed | Where-Object { (-not $ccShHandlers.ContainsKey($_)) -or ($ccShHandlers[$_] -match '_blocked') })
+Check "every Bash command COMMANDS.md names is a working command in handoff.sh" (($ccBashNamed.Count -ge 5) -and ($ccShHandlers.Count -ge 20) -and ($ccBashBad.Count -eq 0)) "named=$($ccBashNamed -join ',') bad=$($ccBashBad -join ',')"
+$ccShWorking = @($ccShHandlers.Keys | Where-Object { $ccShHandlers[$_] -notmatch '_blocked' })
+Check "COMMANDS.md names every working Bash command" (@($ccShWorking | Where-Object { $ccBashNamed -notcontains $_ }).Count -eq 0) ($ccShWorking -join ",")
+Check "COMMANDS.md is ASCII" ((-not ([System.IO.File]::ReadAllBytes($ccDocPath) | Where-Object { $_ -gt 127 })))
+
+# The usage text: the card first, then every other command on one line.
+$ccFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "card probe"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $ccFx
+$r = Invoke-Handoff -WorkDir $ccFx -Arguments @("no-such-command")
+$ccUsage = @($r.Out -split "`r?`n")
+$ccCardAt = [array]::IndexOf($ccUsage, "The five commands you need:")
+$ccMoreAt = @(for ($i = 0; $i -lt $ccUsage.Count; $i++) { if ($ccUsage[$i] -like "More commands*") { $i } }) | Select-Object -First 1
+$ccCardLinesOk = ($ccCardAt -ge 0) -and ($null -ne $ccMoreAt) -and ($ccCardAt -lt $ccMoreAt)
+for ($i = 0; $ccCardLinesOk -and $i -lt $CommandCard.Count; $i++) { if ($ccUsage[$ccCardAt + 1 + $i] -cne ("  {0,-26}{1}" -f $CommandCard[$i].Command, $CommandCard[$i].Summary)) { $ccCardLinesOk = $false } }
+Check "the usage text prints the card first, in order, under its own heading" $ccCardLinesOk $r.Out
+$ccUsageMissing = @($ccDispatch | Where-Object { $r.Out -notmatch ("(?m)^  " + [regex]::Escape($_) + "(\s|$)") })
+Check "every dispatch entry appears in the usage text" ($ccUsageMissing.Count -eq 0) ($ccUsageMissing -join ", ")
+Check "every command in the usage text has one line, with no continuation lines" (@($ccUsage | Where-Object { $_ -match '^\s{6,}\S' }).Count -eq 0)
+Check "the usage text keeps every flag list of the old signatures" (($r.Out -match [regex]::Escape("loop [-MaxTurns N] [-BudgetUsd N] [-SessionBudgetUsd N] [-TimeoutSeconds N] [-ModelProfile P] [-Model M] [-AllowModelEscalation] [-IncludeMaster] [-IncludeReviewer] [-Yes]")) -and ($r.Out -match [regex]::Escape("roles [-WindowOff] [-SetRole <role> -SetTool <tool>] [-ReviewIndependence <separate-tool|fresh-context>] [-Yes]")) -and ($r.Out -match [regex]::Escape("doctor -CheckUpdates")) -and ($r.Out -match [regex]::Escape('start "<request>" -Clip')) -and ($r.Out -match [regex]::Escape("sequence-advance -ReleasedVersion vX.Y.Z -Commit <sha> -Tag vX.Y.Z -NextTask `"<task>`" [-SupersededVersions `"vA.B.C`"]")))
+
+# The no-command menu: the five first, then More and Exit.
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "7"
+$ccMenu = @($r.Out -split "`r?`n")
+$ccMenuOk = $true
+for ($i = 0; $i -lt $CommandCard.Count; $i++) { if ($ccMenu -notcontains ("{0}. {1,-20} - {2}" -f ($i + 1), $CommandCard[$i].Command, $CommandCard[$i].Summary)) { $ccMenuOk = $false } }
+$ccFirst = [array]::IndexOf($ccMenu, ("1. {0,-20} - {1}" -f $CommandCard[0].Command, $CommandCard[0].Summary))
+Check "the menu shows the five card commands as 1-5, then 6. More... and 7. Exit" ($ccMenuOk -and ($r.Code -eq 0) -and ($ccFirst -ge 0) -and ($ccMenu[$ccFirst + 5] -eq "6. More...") -and ($ccMenu[$ccFirst + 6] -eq "7. Exit") -and ($r.Out -notmatch "Invalid selection")) $r.Out
+Check "the menu still shows the state header" (($r.Out -match "State:\s+REVIEW_DONE") -and ($r.Out -match "Roles:\s+Master=Codex, Reviewer=Codex, Implementer=Claude Code"))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "6`n16"
+$ccMoreOk = $true
+for ($i = 0; $i -lt $MenuMoreActions.Count; $i++) { if ($r.Out -notmatch ("(?m)^" + ($i + 1) + "\. " + [regex]::Escape($MenuMoreActions[$i].Label) + "\s+- ")) { $ccMoreOk = $false } }
+Check "More lists every other action of the old menu, then Back and Exit" ($ccMoreOk -and ($MenuMoreActions.Count -eq 14) -and ($r.Out -match "(?m)^15\. Back to the five") -and ($r.Out -match "(?m)^16\. Exit") -and ($r.Code -eq 0) -and ($r.Out -notmatch "Invalid selection")) $r.Out
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "6`n15`n7"
+Check "Back returns to the five and Exit then ends cleanly" (($r.Code -eq 0) -and (@([regex]::Matches($r.Out, '(?m)^6\. More\.\.\.')).Count -eq 2) -and ($r.Out -notmatch "Invalid selection"))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "6`n2"
+Check "More reaches status" (($r.Code -eq 0) -and ($r.Out -match "(?m)^State:\s{8}REVIEW_DONE"))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "6`n7"
+Check "More reaches adapters" (($r.Code -eq 0) -and ($r.Out -match "Adapter"))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "6`n14"
+Check "More reaches setup, which asks for flags when nobody can be asked" (($r.Code -eq 1) -and ($r.Out -match "setup: choose the players and the Master\."))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "4"
+Check "the card's stop is reachable from the menu (new in v3.19.0)" (($r.Code -eq 0) -and ($r.Out -match "stop: nothing to stop\."))
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "5"
+Check "the card's doctor runs from the menu" ($r.Out -match "Doctor result:")
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "1"
+Check "the card's work runs from the menu" (($r.Code -eq 0) -and ($r.Out -notmatch "Invalid selection") -and ($r.Out -match "(?i)next"))
+Remove-Item -LiteralPath (Join-Path $ccFx "HANDOFF_UI.json") -Force -ErrorAction SilentlyContinue
+$ccDirect = Invoke-Handoff -WorkDir $ccFx -Arguments @("roles", "-Window")
+$ccUiDirect = Get-Content -Raw -LiteralPath (Join-Path $ccFx "HANDOFF_UI.json") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $ccFx "HANDOFF_UI.json") -Force -ErrorAction SilentlyContinue
+$r = Invoke-HandoffInput -WorkDir $ccFx -Arguments @() -InputText "3"
+$ccUiMenu = Get-Content -Raw -LiteralPath (Join-Path $ccFx "HANDOFF_UI.json") -ErrorAction SilentlyContinue
+$ccDirectLines = @($ccDirect.Out -split "`r?`n" | Where-Object { $_.Trim() -ne "" })
+$ccMenuLines = @($r.Out -split "`r?`n")
+Check "menu item 3 runs the same code path as roles -Window" (($r.Code -eq 0) -and ($ccDirect.Code -eq 0) -and ($ccDirectLines.Count -gt 3) -and (@($ccDirectLines | Where-Object { $ccMenuLines -notcontains $_ }).Count -eq 0) -and ($ccUiMenu -eq $ccUiDirect) -and ($ccUiMenu -match '"rolesWindow":\s*true')) $r.Out
+# Every action of the old menu is still wired, through one switch.
+$ccMenuFn = @($ccAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($n.Name -eq "Invoke-MenuAction") }, $true))
+$ccMenuKeys = @()
+$ccMenuCalls = @()
+if ($ccMenuFn.Count -eq 1) {
+    $ccMenuSwitch = @($ccMenuFn[0].Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.SwitchStatementAst] }, $true))[0]
+    $ccMenuKeys = @($ccMenuSwitch.Clauses | ForEach-Object { [string]$_.Item1.Value })
+    $ccMenuCalls = @($ccMenuFn[0].Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+}
+$ccOldActions = @("Invoke-Work", "Invoke-Doctor", "Invoke-Start", "Invoke-Next", "Invoke-Status", "Invoke-CommitCheck", "Invoke-CommitApproved", "Invoke-Cycle", "Invoke-Loop", "Invoke-Adapters", "Invoke-ReleaseCheck", "Invoke-SequenceCheck", "Invoke-ReviewCheck", "Invoke-ReviewApply", "Invoke-MasterCheck", "Invoke-MasterApply", "Invoke-Setup")
+Check "every action of the old menu is still reachable, plus stop and roles -Window" ((@($ccOldActions | Where-Object { $ccMenuCalls -notcontains $_ }).Count -eq 0) -and ($ccMenuCalls -contains "Invoke-Stop") -and ($ccMenuCalls -contains "Invoke-Roles"))
+Check "every card entry and every More entry has its own menu action" (@((@($ccNames) + @($MenuMoreActions | ForEach-Object { $_.Key })) | Where-Object { $ccMenuKeys -notcontains $_ }).Count -eq 0)
+Check "the menu's roles action sets -Window and runs Invoke-Roles, as the command does" ($ccMenuFn.Count -eq 1 -and $ccMenuFn[0].Extent.Text -match '(?s)"roles"\s*\{\s*\$script:Window = \$true\s*Invoke-Roles\s*\}')
+
+# --- The launcher ---
+$ccCmdPath = Join-Path $RepoRoot "templates/HANDOFF.cmd"
+$ccCmdBytes = if (Test-Path -LiteralPath $ccCmdPath) { [System.IO.File]::ReadAllBytes($ccCmdPath) } else { [byte[]]@() }
+$ccCmdText = [System.Text.Encoding]::ASCII.GetString($ccCmdBytes)
+function Test-CcCrlfAscii { param([byte[]]$Bytes)
+    if ($Bytes.Count -eq 0) { return $false }
+    for ($i = 0; $i -lt $Bytes.Count; $i++) {
+        if ($Bytes[$i] -gt 127) { return $false }
+        if ($Bytes[$i] -eq 10 -and ($i -eq 0 -or $Bytes[$i - 1] -ne 13)) { return $false }
+        if ($Bytes[$i] -eq 13 -and ($i + 1 -ge $Bytes.Count -or $Bytes[$i + 1] -ne 10)) { return $false }
+    }
+    return $true
+}
+Check "templates/HANDOFF.cmd is ASCII with CRLF line endings" (Test-CcCrlfAscii -Bytes $ccCmdBytes)
+Check "the launcher names no absolute path" (($ccCmdText -notmatch '[A-Za-z]:[\\/]') -and ($ccCmdText -notmatch '\\\\[A-Za-z]') -and ($ccCmdText -notmatch '(?i)%(USERPROFILE|HOMEPATH|TEMP|APPDATA|LOCALAPPDATA)%') -and ($ccCmdText -match '(?m)^pushd "%~dp0" \|\| goto failed\r?$') -and (@([regex]::Matches($ccCmdText, '%~dp0')).Count -eq 2))
+$ccCmdCalls = @([regex]::Matches($ccCmdText, '(?m)^powershell\.exe -NoProfile -ExecutionPolicy Bypass -File "scripts\\handoff\.ps1" (.+?)\r?$') | ForEach-Object { $_.Groups[1].Value })
+Check "the launcher runs roles -Window, then setup -Window, then roles -Window, and nothing else" ((($ccCmdCalls -join "|") -eq "roles -Window|setup -Window|roles -Window") -and (@([regex]::Matches($ccCmdText, '(?mi)^\s*(powershell|pwsh|call|start)\b')).Count -eq 3))
+$ccCmdIfs = @([regex]::Matches($ccCmdText, '(?mi)^\s*if\b.*$') | ForEach-Object { $_.Value })
+$ccCmdCodes = @($ccCmdIfs | ForEach-Object { if ($_ -match '^if (not )?"%HANDOFF_EXIT%"=="(\d+)" goto \w+\s*$') { $Matches[2] } })
+Check "the launcher has no rules of its own: it only compares documented exit codes" (($ccCmdIfs.Count -gt 0) -and ($ccCmdCodes.Count -eq $ccCmdIfs.Count) -and (@($ccCmdCodes | Where-Object { @("0", "2", "14") -notcontains $_ }).Count -eq 0) -and ($ccCmdText -match '(?m)^pause\r?$'))
+$ccAttr = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot ".gitattributes")
+Check ".gitattributes pins *.cmd to CRLF and keeps *.sh on LF" (($ccAttr -match '(?m)^\*\.cmd\s+text\s+eol=crlf\s*$') -and ($ccAttr -match '(?m)^\*\.sh\s+text\s+eol=lf\s*$'))
+Check "the gitignore snippet and the repository ignore the launcher" (((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "templates/gitignore-snippet.txt")) -match '(?m)^/HANDOFF\.cmd\r?$') -and ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot ".gitignore")) -match '(?m)^/HANDOFF\.cmd\r?$'))
+Check "the launcher is a coordination exclusion, so the read-only boundary hashes it too" ((Get-Content -Raw -Path $HandoffScript) -match '(?s)\$LauncherFileName = "HANDOFF\.cmd"\s*\r?\n\$LocalHandoffFiles = \$LocalHandoffFiles \+ @\(\$LauncherFileName\)')
+
+# Run the launcher the way Explorer does, through cmd, with nobody at the keyboard.
+function Invoke-CcLauncher {
+    param([string]$Project, [int]$TimeoutSeconds = 90, [string]$RelativeFrom = "")
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot "System32\cmd.exe"
+    # -RelativeFrom: start it from that folder through a quoted relative path, the way a
+    # user types it in another folder's console. Without it: the absolute path.
+    $ccTarget = Join-Path $Project "HANDOFF.cmd"
+    if ($RelativeFrom) { $ccTarget = $ccTarget.Substring($RelativeFrom.TrimEnd('\').Length + 1) }
+    $psi.Arguments = '/d /s /c ""' + $ccTarget + '" < NUL"'
+    $psi.WorkingDirectory = $(if ($RelativeFrom) { $RelativeFrom } else { $FixtureRoot })
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $timedOut = -not $p.WaitForExit($TimeoutSeconds * 1000)
+    if ($timedOut) { $null = & taskkill.exe /PID $p.Id /T /F 2>&1; [void]$p.WaitForExit(5000) }
+    $text = ""
+    try { if ($outTask.Wait(5000)) { $text = $outTask.Result } } catch { }
+    try { if ($errTask.Wait(1000)) { $text += $errTask.Result } } catch { }
+    return @{ Code = $(if ($timedOut) { -1 } else { $p.ExitCode }); Out = $text; TimedOut = $timedOut }
+}
+function Get-CcTreeHashes { param([string]$Dir)
+    $h = @{}
+    foreach ($f in (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' })) {
+        $h[$f.FullName.Substring($Dir.Length).TrimStart('\', '/').Replace('\', '/')] = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash
+    }
+    return $h
+}
+
+# A fresh install places the launcher, and Git never sees it.
+$ccInst = Join-Path $FixtureRoot "cc-install-fresh"
+New-Item -ItemType Directory -Path $ccInst -Force | Out-Null
+& git -C $ccInst init -q 2>&1 | Out-Null
+$ccInstOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccInst -NoRolesWindow 2>&1 | Out-String
+$ccInstCmd = Join-Path $ccInst "HANDOFF.cmd"
+$ccInstBytes = if (Test-Path -LiteralPath $ccInstCmd) { [System.IO.File]::ReadAllBytes($ccInstCmd) } else { [byte[]]@() }
+Check "a fresh install places HANDOFF.cmd in the project root, ASCII and CRLF, as shipped" ((Test-CcCrlfAscii -Bytes $ccInstBytes) -and ([System.Linq.Enumerable]::SequenceEqual([byte[]]$ccInstBytes, [byte[]]$ccCmdBytes)))
+$ccInstText = [System.Text.Encoding]::ASCII.GetString($ccInstBytes)
+Check "the installed launcher names no absolute path" (($ccInstBytes.Count -gt 0) -and ($ccInstText -notmatch '[A-Za-z]:[\\/]') -and ($ccInstText -notmatch [regex]::Escape($ccInst)))
+$ccPorcelain = (& git -C $ccInst status --porcelain --untracked-files=all 2>$null | Out-String)
+Check "git status does not list the installed launcher" (($ccPorcelain -match "COMMANDS\.md") -and ($ccPorcelain -notmatch "HANDOFF\.cmd"))
+Check "a fresh install places COMMANDS.md as shipped" (Test-FileHashMatch -Left (Join-Path $ccInst "COMMANDS.md") -Right $ccDocPath)
+Check "the installer names the launcher in one line" (@(($ccInstOut -split "`r?`n") | Where-Object { $_ -match "HANDOFF\.cmd" }).Count -eq 1)
+Check "without -VsCodeTask nothing under .vscode is touched" (-not (Test-Path -LiteralPath (Join-Path $ccInst ".vscode")))
+
+# The launcher in a pending project takes the setup branch and ends; nothing waits.
+$r = Invoke-CcLauncher -Project $ccInst
+Check "the launcher in a pending project takes the exit-14 branch and ends without hanging" ((-not $r.TimedOut) -and ($r.Code -eq 1) -and ($r.Out -match "Setup required: this project has not chosen its players and its Master yet\.") -and ($r.Out -match "setup: choose the players and the Master\.") -and ($r.Out -match "HANDOFF\.cmd: stopped with exit code 1\.")) $r.Out
+# Configured, it opens the roles window (here: says it cannot, with windows off) and exits 0.
+Push-Location $ccInst
+try { $null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ccInst "scripts/handoff.ps1") setup -Players "Codex" -Yes 2>&1 | Out-String } finally { Pop-Location }
+$r = Invoke-CcLauncher -Project $ccInst
+Check "the launcher in a configured project exits 0 without a pause" ((-not $r.TimedOut) -and ($r.Code -eq 0) -and ($r.Out -match "roles: the indicator is on for this project") -and ($r.Out -notmatch "Setup required") -and ($r.Out -notmatch "HANDOFF\.cmd: stopped") -and ($r.Out -notmatch "Press any key")) $r.Out
+$ccPorcelain = (& git -C $ccInst status --porcelain --untracked-files=all 2>$null | Out-String)
+Check "after the launcher ran, git status still does not list it or what it wrote" ((Test-Path -LiteralPath $ccInstCmd) -and (Test-Path -LiteralPath (Join-Path $ccInst "HANDOFF_UI.json")) -and ($ccPorcelain -notmatch "HANDOFF\.cmd") -and ($ccPorcelain -notmatch "HANDOFF_UI"))
+
+# Every branch of the launcher, against a stand-in handoff.ps1 that returns chosen codes.
+$ccStub = Join-Path $FixtureRoot "cc-launcher-stub"
+New-Item -ItemType Directory -Path (Join-Path $ccStub "scripts") -Force | Out-Null
+[System.IO.File]::WriteAllBytes((Join-Path $ccStub "HANDOFF.cmd"), $ccCmdBytes)
+@'
+param([string]$Command, [switch]$Window)
+$log = Join-Path $PSScriptRoot "calls.txt"
+$n = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue).Count
+Add-Content -LiteralPath $log -Value ("$Command" + $(if ($Window) { " -Window" } else { "" }) + $(if ($args.Count -gt 0) { " " + ($args -join " ") } else { "" }))
+$codes = @($env:CC_STUB_CODES -split ',')
+Write-Host "stub: $Command"
+exit ([int]$codes[$n])
+'@ | Set-Content -LiteralPath (Join-Path $ccStub "scripts/handoff.ps1") -Encoding ascii
+$ccPrevStub = $env:CC_STUB_CODES
+try {
+    foreach ($ccCase in @(
+        @{ Codes = "0";        Calls = "roles -Window";                              Exit = 0;  Pause = $false; Name = "roles opens: done, no pause" },
+        @{ Codes = "14,0,0";   Calls = "roles -Window|setup -Window|roles -Window";  Exit = 0;  Pause = $false; Name = "setup required, saved: setup, then roles again" },
+        @{ Codes = "14,2";     Calls = "roles -Window|setup -Window";                Exit = 2;  Pause = $false; Name = "setup cancelled (exit 2): ends quietly" },
+        @{ Codes = "14,3";     Calls = "roles -Window|setup -Window";                Exit = 3;  Pause = $true;  Name = "setup failed: the message stays on screen" },
+        @{ Codes = "14,0,12";  Calls = "roles -Window|setup -Window|roles -Window";  Exit = 12; Pause = $true;  Name = "roles fails after setup: the message stays" },
+        @{ Codes = "12";       Calls = "roles -Window";                              Exit = 12; Pause = $true;  Name = "any other failure (12): no setup, the message stays" }
+    )) {
+        Remove-Item -LiteralPath (Join-Path $ccStub "scripts/calls.txt") -Force -ErrorAction SilentlyContinue
+        $env:CC_STUB_CODES = $ccCase.Codes
+        $r = Invoke-CcLauncher -Project $ccStub -TimeoutSeconds 60
+        $ccCalls = (@(Get-Content -LiteralPath (Join-Path $ccStub "scripts/calls.txt") -ErrorAction SilentlyContinue) | ForEach-Object { $_.Trim() }) -join "|"
+        $ccPaused = ($r.Out -match "Press any key") -and ($r.Out -match "HANDOFF\.cmd: stopped with exit code $($ccCase.Exit)\.")
+        Check "launcher branch: $($ccCase.Name)" ((-not $r.TimedOut) -and ($r.Code -eq $ccCase.Exit) -and ($ccCalls -eq $ccCase.Calls) -and ($ccPaused -eq $ccCase.Pause) -and ($ccCase.Pause -or ($r.Out -notmatch "Press any key"))) "code=$($r.Code) calls=$ccCalls out=$($r.Out)"
+    }
+    # Started from the parent folder through a quoted relative path: %~dp0 must be read
+    # before the change of folder, or cmd resolves the path twice and misses handoff.ps1.
+    Remove-Item -LiteralPath (Join-Path $ccStub "scripts/calls.txt") -Force -ErrorAction SilentlyContinue
+    $env:CC_STUB_CODES = "14,0,0"
+    $r = Invoke-CcLauncher -Project $ccStub -TimeoutSeconds 60 -RelativeFrom $FixtureRoot
+    $ccCalls = (@(Get-Content -LiteralPath (Join-Path $ccStub "scripts/calls.txt") -ErrorAction SilentlyContinue) | ForEach-Object { $_.Trim() }) -join "|"
+    Check "launcher started through a quoted relative path from another folder still finds handoff.ps1" ((-not $r.TimedOut) -and ($r.Code -eq 0) -and ($ccCalls -eq "roles -Window|setup -Window|roles -Window") -and ($r.Out -notmatch "Press any key")) "code=$($r.Code) calls=$ccCalls out=$($r.Out)"
+} finally {
+    if ($null -eq $ccPrevStub) { Remove-Item Env:\CC_STUB_CODES -ErrorAction SilentlyContinue } else { $env:CC_STUB_CODES = $ccPrevStub }
+}
+
+# -NoLauncher skips it.
+$ccNoL = Join-Path $FixtureRoot "cc-install-nolauncher"
+New-Item -ItemType Directory -Path $ccNoL -Force | Out-Null
+& git -C $ccNoL init -q 2>&1 | Out-Null
+$ccNoLOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccNoL -NoRolesWindow -NoLauncher 2>&1 | Out-String
+Check "-NoLauncher installs everything but the launcher" ((Test-Path -LiteralPath (Join-Path $ccNoL "scripts/handoff.ps1")) -and (Test-Path -LiteralPath (Join-Path $ccNoL "COMMANDS.md")) -and (-not (Test-Path -LiteralPath (Join-Path $ccNoL "HANDOFF.cmd"))) -and ($ccNoLOut -notmatch "HANDOFF\.cmd"))
+$ccNoLVs = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project (Join-Path $FixtureRoot "cc-install-nolauncher-vs") -NoRolesWindow -NoLauncher -VsCodeTask 2>&1 | Out-String
+Check "-VsCodeTask with -NoLauncher is refused before anything is installed" (($LASTEXITCODE -eq 1) -and ($ccNoLVs -match "Nothing was installed") -and (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot "cc-install-nolauncher-vs/scripts"))))
+
+# An upgrade of a project installed from the previous layout: the launcher and its ignore
+# line appear, COMMANDS.md arrives as a new protocol file, and nothing else changes.
+$ccUp = Join-Path $FixtureRoot "cc-upgrade"
+New-Item -ItemType Directory -Path $ccUp -Force | Out-Null
+& git -C $ccUp init -q 2>&1 | Out-Null
+& git -C $ccUp config user.email "test@example.com" 2>&1 | Out-Null
+& git -C $ccUp config user.name "Protocol Test" 2>&1 | Out-Null
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccUp -NoRolesWindow -NoLauncher -Players "Claude Code,Codex" -Master "Codex" 2>&1 | Out-String
+Remove-Item -LiteralPath (Join-Path $ccUp "COMMANDS.md") -Force
+$ccUpIgnore = Join-Path $ccUp ".gitignore"
+[System.IO.File]::WriteAllText($ccUpIgnore, (((Get-Content -Raw -LiteralPath $ccUpIgnore) -replace '(?m)^/HANDOFF\.cmd\r?\n', '')), (New-Object System.Text.UTF8Encoding($false)))
+Set-Content -LiteralPath (Join-Path $ccUp "app.txt") -Value "the project's own file" -Encoding utf8
+Initialize-FixtureGitBaseline -Dir $ccUp
+$ccUpIgnoreBefore = Get-Content -Raw -LiteralPath $ccUpIgnore
+$ccUpBefore = Get-CcTreeHashes -Dir $ccUp
+$ccUpOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccUp -Force -NoRolesWindow 2>&1 | Out-String
+$ccUpCode = $LASTEXITCODE
+$ccUpAfter = Get-CcTreeHashes -Dir $ccUp
+$ccUpAdded = @($ccUpAfter.Keys | Where-Object { -not $ccUpBefore.ContainsKey($_) } | Sort-Object)
+$ccUpChanged = @($ccUpBefore.Keys | Where-Object { (-not $ccUpAfter.ContainsKey($_)) -or ($ccUpAfter[$_] -ne $ccUpBefore[$_]) } | Sort-Object)
+$ccUpIgnoreAfter = Get-Content -Raw -LiteralPath $ccUpIgnore
+Check "an upgrade adds the launcher and COMMANDS.md, and no other file" (($ccUpCode -eq 0) -and (($ccUpAdded -join ",") -eq "COMMANDS.md,HANDOFF.cmd")) "added=$($ccUpAdded -join ',') out=$ccUpOut"
+Check "an upgrade changes no existing file but .gitignore" ((($ccUpChanged -join ",") -eq ".gitignore")) "changed=$($ccUpChanged -join ',')"
+Check "the upgrade appends the launcher's ignore line and keeps every existing line" ($ccUpIgnoreAfter.StartsWith($ccUpIgnoreBefore) -and ($ccUpIgnoreAfter.Substring($ccUpIgnoreBefore.Length) -match '(?m)^/HANDOFF\.cmd\r?$') -and (@([regex]::Matches($ccUpIgnoreAfter, '(?m)^/HANDOFF\.cmd\r?$')).Count -eq 1))
+$ccPorcelain = (& git -C $ccUp status --porcelain --untracked-files=all 2>$null | Out-String)
+Check "after the upgrade git status lists .gitignore and COMMANDS.md only" ((@(($ccPorcelain -split "`r?`n") | Where-Object { $_ -ne "" } | ForEach-Object { $_.Substring(3) } | Sort-Object) -join ",") -eq ".gitignore,COMMANDS.md") $ccPorcelain
+Push-Location $ccUp
+try { $ccUpWork = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ccUp "scripts/handoff.ps1") work 2>&1 | Out-String; $ccUpWorkCode = $LASTEXITCODE } finally { Pop-Location }
+Check "the upgraded project still runs work on its own binding" (($ccUpWorkCode -eq 0) -and ($ccUpWork -notmatch "Setup required"))
+
+# A present, un-ignored launcher never blocks cycle and never enters a commit plan. The
+# scope fixtures use a stand-in: what is tested is the file name, not its content.
+$ccStandIn = [System.Text.Encoding]::ASCII.GetBytes("@echo off`r`nrem stand-in launcher`r`n")
+$ccLocal = New-Fixture -Files @{ "AI_HANDOFF.md" = ((New-Handoff -State "REVIEW_DONE" -WaitingFor "User" -CurrentTask "launcher scope") -replace "## Changed Files\r?\n- None yet", "## Changed Files`n- app.txt"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $ccLocal
+[System.IO.File]::WriteAllBytes((Join-Path $ccLocal "HANDOFF.cmd"), $ccStandIn)
+Set-Content -LiteralPath (Join-Path $ccLocal "app.txt") -Value "change" -Encoding utf8
+Check "the scope fixture really leaves the launcher un-ignored" ((& git -C $ccLocal status --porcelain --untracked-files=all 2>$null | Out-String) -match "\?\? HANDOFF\.cmd")
+$r = Invoke-Handoff -WorkDir $ccLocal -Arguments @("commit-check")
+Check "an un-ignored launcher does not appear in the commit plan" (($r.Code -eq 0) -and ($r.Out -match "commit-check: ready for explicit authorization") -and ($r.Out -notmatch "HANDOFF\.cmd")) $r.Out
+$ccCycleFx = New-Fixture -Files @{ "AI_HANDOFF.md" = (New-Handoff -State "READY_FOR_IMPLEMENTATION" -WaitingFor "Implementer" -CurrentTask "launcher cycle"); ".ai/roles/ROLE_ASSIGNMENT.md" = $DefaultRoles } -InitGit
+Initialize-FixtureGitBaseline -Dir $ccCycleFx
+[System.IO.File]::WriteAllBytes((Join-Path $ccCycleFx "HANDOFF.cmd"), $ccStandIn)
+$r = Invoke-Handoff -WorkDir $ccCycleFx -Arguments @("doctor")
+Check "doctor counts an un-ignored launcher as a coordination file" ($r.Out -match "Git working tree clean after local coordination exclusions")
+$ccNpxBin = Join-Path $FixtureRoot "cc-fake-npx"
+New-Item -ItemType Directory -Path $ccNpxBin -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $ccNpxBin "npx.cmd") -Encoding ascii -Value @"
+@echo off
+setlocal EnableDelayedExpansion
+set "ALL=%CMDCMDLINE%"
+if not "!ALL:--version=!"=="!ALL!" (
+  echo claude-code-test
+  exit /b 0
+)
+echo FAKE_CLAUDE_LAUNCHER_STDOUT
+exit /b 0
+"@
+$ccPrevPath = $env:Path
+$env:Path = $ccNpxBin + [System.IO.Path]::PathSeparator + $env:Path
+try {
+    $r = Invoke-Handoff -WorkDir $ccCycleFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "an un-ignored launcher does not make cycle refuse to run" (($r.Out -notmatch "Working tree is not clean") -and ($r.Out -match "FAKE_CLAUDE_LAUNCHER_STDOUT")) $r.Out
+    Set-Content -LiteralPath (Join-Path $ccCycleFx "EXTRA.txt") -Value "x" -Encoding utf8
+    $r = Invoke-Handoff -WorkDir $ccCycleFx -Arguments @("cycle", "-Yes", "-TimeoutSeconds", "5")
+    Check "control: any other untracked file still makes cycle refuse, and the launcher is not listed" (($r.Code -eq 1) -and ($r.Out -match "Working tree is not clean") -and ($r.Out -match "EXTRA\.txt") -and ($r.Out -notmatch "HANDOFF\.cmd"))
+} finally {
+    $env:Path = $ccPrevPath
+}
+
+# The opt-in VS Code task: created when absent, never edits an existing file.
+$ccVs = Join-Path $FixtureRoot "cc-install-vscode"
+New-Item -ItemType Directory -Path $ccVs -Force | Out-Null
+& git -C $ccVs init -q 2>&1 | Out-Null
+$ccVsOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccVs -NoRolesWindow -VsCodeTask 2>&1 | Out-String
+$ccVsPath = Join-Path $ccVs ".vscode/tasks.json"
+$ccVsJson = $null
+try { $ccVsJson = Get-Content -Raw -Encoding UTF8 -LiteralPath $ccVsPath | ConvertFrom-Json -ErrorAction Stop } catch { $ccVsJson = $null }
+$ccVsTask = @(if ($null -ne $ccVsJson) { $ccVsJson.tasks })
+Check "-VsCodeTask creates valid JSON with one task that runs the launcher on folder open" (($null -ne $ccVsJson) -and ($ccVsJson.version -eq "2.0.0") -and ($ccVsTask.Count -eq 1) -and ($ccVsTask[0].label -eq "HANDOFF: open window") -and ($ccVsTask[0].command -eq "true") -and ($ccVsTask[0].windows.command -eq "cmd.exe") -and ((@($ccVsTask[0].windows.args) -join " ") -eq "/d /c if exist HANDOFF.cmd (call .\HANDOFF.cmd) else (exit /b 0)") -and ($ccVsTask[0].runOptions.runOn -eq "folderOpen") -and ($ccVsTask[0].presentation.reveal -eq "silent")) $ccVsOut
+Check "-VsCodeTask says the file may be committed because it does nothing where the launcher is missing, and that VS Code asks once" (($ccVsOut -match "may go in the install commit: where HANDOFF\.cmd is missing \(a fresh clone, macOS, Linux\) it does nothing") -and ($ccVsOut -match "VS Code asks once to allow automatic tasks"))
+Check "the VS Code task file is not ignored" ((& git -C $ccVs status --porcelain --untracked-files=all 2>$null | Out-String) -match "\.vscode/tasks\.json")
+$ccVsExist = Join-Path $FixtureRoot "cc-install-vscode-existing"
+New-Item -ItemType Directory -Path (Join-Path $ccVsExist ".vscode") -Force | Out-Null
+& git -C $ccVsExist init -q 2>&1 | Out-Null
+$ccVsOwn = [System.Text.Encoding]::UTF8.GetBytes("// the user's own tasks`r`n{ `"version`": `"2.0.0`", `"tasks`": [] }`r`n")
+[System.IO.File]::WriteAllBytes((Join-Path $ccVsExist ".vscode/tasks.json"), $ccVsOwn)
+$ccVsExistOut = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "install.ps1") -Project $ccVsExist -NoRolesWindow -VsCodeTask 2>&1 | Out-String
+Check "-VsCodeTask leaves an existing tasks.json byte-identical" (($ccVsExistOut -match "already exists and was not changed") -and [System.Linq.Enumerable]::SequenceEqual([byte[]][System.IO.File]::ReadAllBytes((Join-Path $ccVsExist ".vscode/tasks.json")), [byte[]]$ccVsOwn))
+$ccVsPrinted = if ($ccVsExistOut -match '(?s)(\{\s*"label": "HANDOFF: open window".*?"problemMatcher": \[\]\s*\})') { $Matches[1] } else { "" }
+$ccVsPrintedOk = $false
+try { $ccVsPrintedObj = $ccVsPrinted | ConvertFrom-Json -ErrorAction Stop; $ccVsPrintedOk = ($ccVsPrintedObj.runOptions.runOn -eq "folderOpen") } catch { $ccVsPrintedOk = $false }
+Check "-VsCodeTask prints the exact task to add by hand when the file exists" (($ccVsExistOut -match "already exists and was not changed") -and $ccVsPrintedOk) $ccVsExistOut
+Check "bootstrap.ps1 and scripts/install.ps1 pass -NoLauncher and -VsCodeTask through" (((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "bootstrap.ps1")) -match 'if \(\$NoLauncher\) \{ \$arguments \+= "-NoLauncher" \}') -and ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "bootstrap.ps1")) -match 'if \(\$VsCodeTask\) \{ \$arguments \+= "-VsCodeTask" \}') -and ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts/install.ps1")) -match 'if \(\$NoLauncher\) \{ \$arguments \+= "-NoLauncher" \}') -and ((Get-Content -Raw -LiteralPath (Join-Path $RepoRoot "scripts/install.ps1")) -match 'if \(\$VsCodeTask\) \{ \$arguments \+= "-VsCodeTask" \}'))
+$ccBoot = Join-Path $FixtureRoot "cc-bootstrap-nolauncher"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "bootstrap.ps1") -Project $ccBoot -PackageRoot $RepoRoot -NoLauncher 2>&1 | Out-String
+$ccBootDefault = Join-Path $FixtureRoot "cc-bootstrap-default"
+$null = & $PwshExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "bootstrap.ps1") -Project $ccBootDefault -PackageRoot $RepoRoot 2>&1 | Out-String
+Check "bootstrap.ps1 installs the launcher by default and -NoLauncher reaches the installer" ((Test-Path -LiteralPath (Join-Path $ccBootDefault "HANDOFF.cmd")) -and (Test-Path -LiteralPath (Join-Path $ccBoot "scripts/handoff.ps1")) -and (-not (Test-Path -LiteralPath (Join-Path $ccBoot "HANDOFF.cmd"))))
+
+# --- Part C: the picker's text fits, and the choices keep the standard style ---
+$ccPicker = New-SetupWindowScript -ResultPath (Join-Path $FixtureRoot "cc.json") -Project "plain" -Tools $suTools -Table $suTable -NoneDetected $false
+$ccSub = if ($ccPicker -match "(?m)^\`$sub\.Text = '([^']*)'") { $Matches[1] } else { "" }
+Check "the picker subtitle is short enough to fit (at most 60 characters) and still names setup" (($ccSub -ne "") -and ($ccSub.Length -le 60) -and ($ccSub -match "setup") -and ($ccPicker -notmatch "You can change this later with handoff\.ps1 set")) $ccSub
+Check "the picker's check boxes and radio buttons keep the standard style, whose disabled text stays readable" (($ccPicker -notmatch [regex]::Escape("`$box.FlatStyle")) -and ($ccPicker -notmatch [regex]::Escape("`$radio.FlatStyle")))
+$ccPickerPath = Join-Path $FixtureRoot ("cc-picker-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+[System.IO.File]::WriteAllText($ccPickerPath, $ccPicker, (New-Object System.Text.UTF8Encoding($true)))
+$ccPT = $null; $ccPE = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile($ccPickerPath, [ref]$ccPT, [ref]$ccPE)
+Check "the changed picker script still parses with zero errors" ($ccPE.Count -eq 0)
 
 # --- Summary ---
 Write-Host ""

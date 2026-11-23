@@ -44,8 +44,8 @@ After setup, review and commit the installed project-local files. Include
 `skills-lock.json` when the `skills` CLI created it:
 
 ```powershell
-git add .agents .ai .claude scripts .gitignore skills-lock.json
-git commit -m "Install codex-claude-handoff v3.18.0"
+git add .agents .ai .claude scripts .gitignore COMMANDS.md skills-lock.json
+git commit -m "Install codex-claude-handoff v3.19.0"
 ```
 
 ## Windows alternative: install the pinned release
@@ -54,7 +54,7 @@ Open PowerShell in the project folder and paste this one command. The installer
 uses the current folder automatically; do not enter or edit a project path:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.18.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.19.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 The default install is **opt-in**. It does not add root `AGENTS.md` or `CLAUDE.md`
@@ -88,8 +88,8 @@ which players and which Master; it never chooses for you.
 Commit the installed project-local files before starting real work:
 
 ```powershell
-git add .agents .ai .claude scripts .gitignore
-git commit -m "Install codex-claude-handoff v3.18.0"
+git add .agents .ai .claude scripts .gitignore COMMANDS.md
+git commit -m "Install codex-claude-handoff v3.19.0"
 ```
 
 Check the installation:
@@ -114,6 +114,15 @@ map a reasoning effort instead of a model name (`HANDOFF_CODEX_EFFORT_<PROFILE>`
 stays valid when models change. Future model
 changes then require one local mapping update instead of a Skill rewrite.
 `NEXT_TURN.md` names the model for each turn; when it changes, open a new window.
+
+## What to type
+
+`COMMANDS.md` in the project folder starts with the five commands for daily use:
+`work`, `start "<request>"`, `roles -Window`, `stop` and `doctor`. Every other command
+follows, one line each. On Windows, double-click `HANDOFF.cmd` in the project folder to
+open the roles window (it opens the setup picker first while setup is pending). It is
+gitignored; `install.ps1 -NoLauncher` skips it, and `install.ps1 -VsCodeTask` adds a VS Code
+task that runs it when the folder opens, if `.vscode/tasks.json` does not exist yet.
 
 ## Use it for one task
 
@@ -188,13 +197,13 @@ Users who prefer to inspect the package before running it can clone the tag and 
 the local installer:
 
 ```powershell
-git clone --branch v3.18.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
+git clone --branch v3.19.0 --single-branch https://github.com/siglernir-ai/codex-claude-handoff.git C:\Tools\codex-claude-handoff
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Tools\codex-claude-handoff\install.ps1 -Project C:\Projects\MY_PROJECT
 ```
 
 ## skills.sh / skills CLI
 
-v3.18.0 packages a self-contained public beta Skill. From a clean Git project, run:
+v3.19.0 packages a self-contained public beta Skill. From a clean Git project, run:
 
 ```powershell
 npx skills add siglernir-ai/codex-claude-handoff --skill codex-claude-handoff --copy

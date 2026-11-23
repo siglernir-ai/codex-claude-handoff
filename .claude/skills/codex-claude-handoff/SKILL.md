@@ -13,7 +13,7 @@ description: >-
 license: Apache-2.0
 metadata:
   status: public-beta
-  version: "3.18.0"
+  version: "3.19.0"
 ---
 
 # Codex-Claude Handoff

@@ -48,8 +48,8 @@ echo "No git commit, push, tag, release, deploy, database, or secret action was 
 echo ""
 echo "After review, the usual stable install commit is:"
 if [ -f "$TARGET_PATH/skills-lock.json" ]; then
-    echo "  git add .agents .ai .claude scripts .gitignore skills-lock.json"
+    echo "  git add .agents .ai .claude scripts .gitignore COMMANDS.md skills-lock.json"
 else
-    echo "  git add .agents .ai .claude scripts .gitignore"
+    echo "  git add .agents .ai .claude scripts .gitignore COMMANDS.md"
 fi
 echo '  git commit -m "Install codex-claude-handoff"'

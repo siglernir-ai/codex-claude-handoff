@@ -1,13 +1,15 @@
 param(
     [string]$Project = (Get-Location).Path,
-    [string]$Version = "v3.18.0",
+    [string]$Version = "v3.19.0",
     [switch]$Force,
     [switch]$AlwaysOn,
     [switch]$DisableAlwaysOn,
     [string]$PackageRoot,
     [string]$Players,
     [string]$Master,
-    [switch]$NoSetupWindow
+    [switch]$NoSetupWindow,
+    [switch]$NoLauncher,
+    [switch]$VsCodeTask
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +34,9 @@ function Invoke-PackageInstaller {
     if ($BootstrapBoundParameters.ContainsKey('Players')) { $arguments += @("-Players", $Players) }
     if ($BootstrapBoundParameters.ContainsKey('Master')) { $arguments += @("-Master", $Master) }
     if ($NoSetupWindow) { $arguments += "-NoSetupWindow" }
+    # v3.19.0: the launcher and the opt-in VS Code task.
+    if ($NoLauncher) { $arguments += "-NoLauncher" }
+    if ($VsCodeTask) { $arguments += "-VsCodeTask" }
 
     & powershell.exe @arguments
     if ($LASTEXITCODE -ne 0) {

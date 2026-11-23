@@ -169,6 +169,11 @@ run_handoff "$fx" master-apply
 echo "$RH_OUT" | grep -qiE "powershell|blocked|not (available|supported)"
 check "master-apply is honestly refused in Bash" $?
 
+# v3.19.0: the Bash usage points at the command card, in one line.
+run_handoff "$fx"
+[ "$RH_CODE" -eq 0 ] && [ "$(printf '%s\n' "$RH_OUT" | grep -c 'COMMANDS\.md')" -eq 1 ]
+check "the Bash usage names COMMANDS.md in one line" $? "$RH_OUT"
+
 # Refusal must not create a git commit or mutate the handoff file.
 # Fail closed: require a real hash tool and a non-empty hash, so two empty strings
 # (e.g. no hash tool present) can never count as an unchanged file.
@@ -190,6 +195,13 @@ git -C "$install_target" init -q
 install_out="$(bash "$SCRIPT_DIR/install.sh" "$install_target" 2>&1)"
 install_code=$?
 check "fresh Bash install succeeds" $install_code "$install_out"
+
+# v3.19.0: HANDOFF.cmd is the Windows launcher. install.sh copies the template tree, and the
+# launcher sits in it, so the generic copy must skip it by name. COMMANDS.md does install.
+[ -f "$REPO_ROOT/templates/HANDOFF.cmd" ] && [ ! -e "$install_target/HANDOFF.cmd" ]
+check "install.sh does not install the Windows launcher HANDOFF.cmd" $?
+cmp -s "$install_target/COMMANDS.md" "$REPO_ROOT/templates/COMMANDS.md"
+check "install.sh installs COMMANDS.md as shipped" $?
 
 cat > "$install_target/AI_HANDOFF.md" <<'EOF'
 # AI Handoff
@@ -276,6 +288,9 @@ else
 
     cmp -s "$install_target/scripts/handoff.ps1" "$REPO_ROOT/templates/scripts/handoff.ps1"
     check "--force refreshes stale managed scripts" $?
+
+    [ ! -e "$install_target/HANDOFF.cmd" ]
+    check "install.sh --force does not install the Windows launcher either" $?
 
     next_out="$(cd "$install_target" && bash scripts/handoff.sh next 2>&1)"
     next_code=$?

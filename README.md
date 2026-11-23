@@ -21,7 +21,7 @@ and budget limits; general question dialogue still advances through explicit tur
 
 > **New here? Read [START_HERE.md](START_HERE.md) first** - what this is, what it refuses to do, and why it blocks you.
 
-> **Current release: v3.18.0 public beta.** The project-local skill is opt-in by default. Selecting
+> **Current release: v3.19.0 public beta.** The project-local skill is opt-in by default. Selecting
 > `codex-claude-handoff` through `/skills` activates the bounded Codex -> Claude Code -> Codex
 > review workflow. Ordinary Codex requests remain ordinary unless the project owner
 > explicitly installs the optional always-on root instructions.
@@ -74,7 +74,7 @@ As a direct Windows alternative, open PowerShell in the project folder and run t
 pinned bootstrap command below. It uses the current folder automatically:
 
 ```powershell
-$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.18.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
+$setup = Join-Path $env:TEMP "codex-claude-handoff-setup.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/siglernir-ai/codex-claude-handoff/v3.19.0/bootstrap.ps1" -OutFile $setup; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
 Then verify the local install from the same PowerShell window:
@@ -106,6 +106,15 @@ The installers take the same choice for scripted installs: `install.ps1 -Players
 (also through `bootstrap.ps1`, and `-NoSetupWindow` to skip the picker) and
 `install.sh --players ... --master ...`. Upgrading an existing install changes nothing:
 a project without a `Setup:` line is configured and keeps its binding.
+
+**What to type (since v3.19.0).** Five commands cover daily use: `work`, `start "<request>"`,
+`roles -Window`, `stop` and `doctor`. They are the card at the top of `COMMANDS.md`, which
+the installer puts in the project folder with every other command on one line. Running
+`handoff.ps1` with no command shows the same five, then `More...`. On Windows the installer
+also places `HANDOFF.cmd` there (gitignored; skip it with `-NoLauncher`): double-click it to
+open the roles window, or the setup picker first while setup is pending.
+`install.ps1 -VsCodeTask` adds a VS Code task that runs it when the folder opens, only if
+`.vscode/tasks.json` does not exist yet.
 
 Activate the workflow for one task by entering `/skills`, selecting
 `codex-claude-handoff`, and then entering the request:

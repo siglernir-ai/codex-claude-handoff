@@ -164,6 +164,10 @@ should_install() {
         gitignore-snippet.txt|scripts/protocol-tests.ps1|scripts/protocol-tests.sh)
             return 1
             ;;
+        # v3.19.0: HANDOFF.cmd is the Windows launcher; install.ps1 installs it there.
+        HANDOFF.cmd)
+            return 1
+            ;;
         AGENTS.md|CLAUDE.md)
             $ALWAYS_ON
             return
